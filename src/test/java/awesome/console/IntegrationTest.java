@@ -330,6 +330,10 @@ public class IntegrationTest {
 		System.out.println(red("warning: LF will be replaced by CRLF in README.md."));
 		System.out.println("git update-index --cacheinfo 100644,5aaaff66f4b74af2f534be30b00020c93585f9d9,src/main/java/awesome/console/AwesomeLinkFilter.java --");
 		System.out.println("fatal: unable to access 'https://github.com/anthraxx/intellij-awesome-console.git/': schannel: failed to receive handshake, SSL/TLS connection failed");
+		System.out.println("rename packages/frontend/core/src/modules/pdf/renderer/{worker.ts => pdf.worker.ts}");
+		System.out.println("rename packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts");
+		System.out.println("rename packages/frontend/admin/src/modules/{config => about}/index.tsx ");
+		System.out.println("rename blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json");
 	}
 
 	private static void testWindowsCommandLineShell() {

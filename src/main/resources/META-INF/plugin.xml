@@ -15,6 +15,10 @@
  	<change-notes>
 		<![CDATA[
 		<p>
+			<b>0.1337.23</b><br/>
+			<ul>
+				<li>fix git rename hyperlink</li>
+			</ul>
 			<b>0.1337.22</b><br/>
 			<ul>
 				<li>merge pull request from anthraxx/intellij-awesome-console</li>

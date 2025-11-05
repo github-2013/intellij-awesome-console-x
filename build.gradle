@@ -1,68 +1,133 @@
+// 导入测试框架类型，用于配置 IntelliJ Platform 测试依赖
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
+// ========== 插件配置 ==========
 plugins {
+    // Java 插件：提供 Java 项目的基本构建能力（编译、测试、打包等）
     id "java"
+    
+    // IntelliJ Platform Gradle 插件：用于开发 IntelliJ IDEA 插件的核心插件
+    // 版本 2.2.1 是该插件的版本号，提供了构建、测试、验证和发布 IDEA 插件的功能
     id "org.jetbrains.intellij.platform" version "2.2.1"
 }
 
+// ========== 仓库配置 ==========
 repositories {
+    // Maven 中央仓库：用于下载通用的 Java 依赖（如 JUnit 等）
     mavenCentral()
 
+    // IntelliJ Platform 专用仓库配置
     intellijPlatform {
+        // 默认仓库：自动配置 JetBrains 的 Maven 仓库，用于下载 IntelliJ Platform SDK 和相关依赖
         defaultRepositories()
     }
 }
 
+// ========== 依赖配置 ==========
 dependencies {
+    // IntelliJ Platform 相关依赖
     intellijPlatform {
+        // IntelliJ IDEA Community Edition 2024.3 版本
+        // 这是插件开发的基础 SDK，决定了插件的 API 版本和兼容性
+        // 注意：2024.3 对应 Build Number 243
         intellijIdeaCommunity("2024.3")
 
+        // 捆绑的 Java 插件依赖
+        // 如果你的插件需要使用 IDEA 的 Java 支持功能（如代码分析、导航等），需要声明此依赖
         bundledPlugin "com.intellij.java"
 
+        // 插件验证器：用于在构建时验证插件与不同 IDEA 版本的兼容性
+        // 可以检测 API 使用问题、废弃 API 调用等
         pluginVerifier()
+        
+        // 代码插桩工具：用于处理 IntelliJ Platform 的特殊注解和字节码增强
+        // 例如 @NotNull、@Nullable 等注解的运行时检查
         instrumentationTools()
 
+        // 测试框架：提供 IntelliJ Platform 的测试基础设施
+        // Platform.INSTANCE 表示使用平台级别的测试框架
         testFramework TestFrameworkType.Platform.INSTANCE
     }
+    
+    // JUnit 5 测试 API：用于编写测试用例
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.3")
+    
+    // JUnit 4 兼容性：仅在编译时需要，用于支持旧的 JUnit 4 测试
     testCompileOnly("junit:junit:4.13.2")
+    
+    // JUnit Vintage 引擎：运行时依赖，用于在 JUnit 5 平台上运行 JUnit 4 测试
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
+    
+    // JUnit Platform 启动器：运行时依赖，用于启动测试执行
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
+// ========== IntelliJ Platform 插件配置 ==========
 intellijPlatform {
     pluginConfiguration {
+        // 插件 ID：从 gradle.properties 文件中读取，用于唯一标识插件
+        // 格式通常为：com.company.pluginname
         id = providers.gradleProperty("pluginId")
+        
+        // 插件名称：从 gradle.properties 文件中读取，显示在插件市场和 IDEA 中
         name = providers.gradleProperty("pluginTitle")
+        
+        // 插件版本号：从 gradle.properties 文件中读取，用于版本管理和更新检测
         version = providers.gradleProperty("pluginVersion")
+        
+        // 供应商信息：插件开发者或组织的信息
         vendor {
-            name = "xingjiexu"
-            email = "553926121@qq.com"
-            url = "https://github.com/github-2013/intellij-awesome-console-x"
+            name = "xingjiexu"                                              // 开发者名称
+            email = "553926121@qq.com"                                      // 联系邮箱
+            url = "https://github.com/github-2013/intellij-awesome-console-x"  // 项目主页
         }
+        
+        // IDEA 版本兼容性配置
         ideaVersion {
+            // sinceBuild：插件支持的最低 IDEA 版本
+            // '243' 对应 IntelliJ IDEA 2024.3
+            // 低于此版本的 IDEA 将无法安装此插件
             sinceBuild = '243'
-//            untilBuild = '243.*'
         }
     }
+    
+    // 代码插桩配置：禁用编译器插桩以避免 Packages 目录问题
+    // 注意：禁用插桩可能会影响某些 IntelliJ Platform 注解的运行时行为
+    instrumentCode = false
 }
 
+// ========== Java 工具链配置 ==========
 java {
     toolchain {
+        // 指定 Java 语言版本为 21
+        // 这确保了项目使用 Java 21 的语法特性和 API
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
+// ========== Java 编译配置 ==========
 tasks.withType(JavaCompile).configureEach {
+    // 设置源代码文件的字符编码为 UTF-8
+    // 避免在不同操作系统上出现乱码问题
+    options.encoding = 'UTF-8'
+    
+    // 指定 Java 编译器版本为 21
+    // 确保使用 Java 21 编译器来编译源代码
     javaCompiler = javaToolchains.compilerFor {
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
+// ========== 测试任务配置 ==========
 test {
+    // 使用 JUnit Platform 来运行测试
+    // 这是 JUnit 5 的测试执行引擎
     useJUnitPlatform()
-//    javaLauncher = javaToolchains.launcherFor {
-//        languageVersion = JavaLanguageVersion.of(21)
-//    }
+    
+    // 指定测试运行时使用的 Java 启动器版本为 21
+    // 确保测试在 Java 21 环境下运行
+    javaLauncher = javaToolchains.launcherFor {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
 }
 

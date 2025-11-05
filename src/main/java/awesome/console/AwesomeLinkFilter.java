@@ -466,9 +466,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		if (!foundFiles.isEmpty()) {
 			return foundFiles;
 		}
-		final String widerMetchingPath = dropOneLevelFromRoot(generalizedMatchPath);
-		if (widerMetchingPath != null) {
-			return findBestMatchingFiles(widerMetchingPath, matchingFiles);
+		final String widerMatchingPath = dropOneLevelFromRoot(generalizedMatchPath);
+		if (widerMatchingPath != null) {
+			return findBestMatchingFiles(widerMatchingPath, matchingFiles);
 		}
 		return null;
 	}
