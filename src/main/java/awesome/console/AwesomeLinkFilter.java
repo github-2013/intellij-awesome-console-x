@@ -300,17 +300,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 			final String file = getFileFromUrl(url);
 
-			if (null != file && !FileUtils.quickExists(file)) {
-				continue;
-			}
-			results.add(
-					new Result(
-							startPoint + match.start,
-							startPoint + match.end,
-							new OpenUrlHyperlinkInfo(url))
-			);
+		if (null != file && !FileUtils.quickExists(file)) {
+			continue;
 		}
-		return results;
+		TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+		TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		results.add(
+				new Result(
+						startPoint + match.start,
+						startPoint + match.end,
+						new OpenUrlHyperlinkInfo(url),
+						hyperlinkAttributes, followedHyperlinkAttributes)
+		);
+	}
+	return results;
 	}
 
 	public String getFileFromUrl(@NotNull final String url) {
@@ -386,12 +389,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				String filePath = file.getAbsolutePath();
 				// If a file is a symlink, it should be highlighted regardless of whether its target file exists
 				final boolean exists = FileUtils.quickExists(filePath);
-				if (exists) {
-					final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
-							project, filePath, match.linkedRow, match.linkedCol
-					);
-					results.add(new Result(startPoint + match.start, startPoint + match.end, linkInfo));
-					continue;
+			if (exists) {
+				final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
+						project, filePath, match.linkedRow, match.linkedCol
+				);
+				TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+				TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+				results.add(new Result(
+						startPoint + match.start, startPoint + match.end,
+						linkInfo, hyperlinkAttributes, followedHyperlinkAttributes
+				));
+				continue;
 				} else if (isExternal) {
 					if (!isUnixAbsolutePath(matchPath)) {
 						continue;
@@ -434,15 +442,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				matchingFiles = bestMatchingFiles;
 			}
 
-			final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
-					project, matchingFiles, match.linkedRow, match.linkedCol
-			);
+		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
+				project, matchingFiles, match.linkedRow, match.linkedCol
+		);
 
-			results.add(new Result(
-					startPoint + match.start,
-					startPoint + match.end,
-					linkInfo)
-			);
+		TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+		TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		results.add(new Result(
+				startPoint + match.start,
+				startPoint + match.end,
+				linkInfo, hyperlinkAttributes, followedHyperlinkAttributes)
+		);
 		}
 
 		return results;

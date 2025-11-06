@@ -352,6 +352,165 @@ JUnit、TestNG 等测试框架的堆栈跟踪会被识别。
 
 ---
 
+## 环境配置
+
+### macOS 推荐的 JDK 选择
+
+对于 macOS 系统，我们强烈推荐使用 **Amazon Corretto 21** 作为项目的 Java 开发环境。
+
+#### 🎯 推荐理由
+
+| 特性 | Amazon Corretto 21 | 其他JDK |
+|------|-------------------|---------|
+| **稳定性** | ⭐⭐⭐⭐⭐ | ⭐⭐⭐⭐ |
+| **性能** | ⭐⭐⭐⭐ | ⭐⭐⭐ |
+| **免费商用** | ✅ 完全免费 | 部分收费 |
+| **长期支持** | 免费安全更新 | 有限支持 |
+| **兼容性** | 100% OpenJDK兼容 | 可能存在差异 |
+
+#### 📦 安装方法
+
+**方法一：使用 Homebrew（推荐）**
+```bash
+# 安装 Amazon Corretto 21
+brew install --cask corretto21
+
+# 验证安装
+java -version
+javac -version
+```
+
+**方法二：手动下载安装**
+```bash
+# 访问官方下载页面
+# https://docs.aws.amazon.com/corretto/latest/corretto-21-ug/downloads.html
+
+# 下载 macOS 版本的 JDK 安装包并安装
+```
+
+#### ⚙️ 环境配置
+
+安装完成后，需要配置环境变量：
+
+1. **设置 JAVA_HOME**（添加到 `~/.zshrc` 或 `~/.bash_profile`）：
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+2. **重新加载配置**：
+```bash
+source ~/.zshrc
+```
+
+3. **验证配置**：
+```bash
+# 检查 Java 版本
+java -version
+
+# 检查 JAVA_HOME
+echo $JAVA_HOME
+
+# 验证 Gradle 使用的 JVM
+./gradlew --version
+```
+
+#### 🔧 Gradle 配置
+
+为确保项目使用正确的 JDK 版本，在 [`gradle.properties`](/Users/xuxingjie/Projects/intellij-awesome-console-x/gradle.properties) 中添加：
+```properties
+# Java configuration
+org.gradle.java.home=/Library/Java/JavaVirtualMachines/amazon-corretto-21.jdk/Contents/Home
+```
+
+#### 🚀 验证构建
+
+配置完成后，验证项目构建：
+```bash
+# 停止现有的 Gradle daemon
+./gradlew --stop
+
+# 重新构建项目
+./gradlew clean build
+```
+
+#### 🔄 备选方案
+
+如果无法安装 Amazon Corretto，以下也是不错的选择：
+
+- **Adoptium Temurin 21**：`brew install --cask temurin21`
+- **Oracle OpenJDK 21**：从 Oracle 官网下载
+
+#### 💡 为什么选择 Amazon Corretto？
+
+1. **企业级稳定性**：经过大规模生产环境验证
+2. **长期免费支持**：提供免费的安全更新和技术支持
+3. **性能优化**：针对云环境和高性能场景优化
+4. **完全兼容**：与 OpenJDK 100% 兼容，无缝切换
+5. **社区活跃**：AWS 持续投入和维护
+6. **跨平台一致**：在不同操作系统上表现一致
+
+---
+
+## 常见问题与解决方案
+
+### 1. "Unsupported class file major version 69" 错误
+
+**问题描述**: 
+在构建或运行项目时出现 "Unsupported class file major version 69" 错误。
+
+**错误原因**: 
+这个错误是因为 Gradle 使用的 JVM 版本与项目设置的 JDK 版本不匹配导致的。本项目设置的 JDK 是 21，但 Gradle 实际使用的是 JDK 25。
+
+- Class file major version 69 对应 JDK 25
+- Class file major version 65 对应 JDK 21
+
+**解决方案**:
+
+1. **设置 JAVA_HOME 环境变量**（推荐）:
+   ```bash
+   # 在 ~/.zshrc 或 ~/.bash_profile 中添加：
+   export JAVA_HOME=/Users/xuxingjie/Library/Java/JavaVirtualMachines/semeru-21.0.8/Contents/Home
+   export PATH=$JAVA_HOME/bin:$PATH
+   
+   # 重新加载配置
+   source ~/.zshrc
+   ```
+
+2. **配置全局 gradle.properties**:
+   ```bash
+   # 创建或编辑 ~/.gradle/gradle.properties
+   echo "org.gradle.java.home=/Users/xuxingjie/Library/Java/JavaVirtualMachines/semeru-21.0.8/Contents/Home" > ~/.gradle/gradle.properties
+   ```
+
+3. **项目级别配置**:
+   在项目的 `gradle.properties` 文件中添加：
+   ```properties
+   org.gradle.java.home=/Users/xuxingjie/Library/Java/JavaVirtualMachines/semeru-21.0.8/Contents/Home
+   ```
+
+4. **临时解决方案**:
+   ```bash
+   # 每次运行时设置 JAVA_HOME
+   JAVA_HOME=/Users/xuxingjie/Library/Java/JavaVirtualMachines/semeru-21.0.8/Contents/Home ./gradlew build
+   ```
+
+**验证方法**:
+```bash
+# 验证 Gradle 使用的 JVM 版本
+./gradlew --version
+
+# 应该显示：
+# JVM: 21.0.8 (Eclipse OpenJ9 openj9-0.53.0)
+```
+
+**注意事项**:
+- 修改配置后需要停止 Gradle daemon: `./gradlew --stop`
+- 确保系统中已安装 JDK 21
+- 可以使用 `/usr/libexec/java_home -V` 查看系统中所有已安装的 JDK 版本
+
+---
+
 ## 开发注意事项
 
 ### 1. 正则表达式性能

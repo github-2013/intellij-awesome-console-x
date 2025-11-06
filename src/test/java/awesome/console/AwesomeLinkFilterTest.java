@@ -17,14 +17,26 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.jetbrains.annotations.NotNull;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Assertions;
 
 
 public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 
+	// 静态初始化块：在类加载时就设置系统属性，确保在测试框架初始化之前生效
+	static {
+		// 设置系统属性以解决临时目录路径过长的问题
+		System.setProperty("java.io.tmpdir", "/tmp");
+		System.setProperty("idea.test.cyclic.buffer.size", "1048576");
+		// 设置更短的测试名称前缀
+		System.setProperty("idea.test.temp.dir.prefix", "test");
+	}
+
 	private AwesomeLinkFilter filter;
 
 	@Override
+	@BeforeEach
 	public void setUp() throws Exception {
 		super.setUp();
 		filter = new AwesomeLinkFilter(getProject());
@@ -35,16 +47,19 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("Just a file: test.txt", "test.txt");
 	}
 
+
 	@Test
 	public void testFileContainingSpecialCharsWithoutDirectory() {
 		assertPathDetection("Another file: _test.txt", "_test.txt");
 		assertPathDetection("Another file: test-me.txt", "test-me.txt");
 	}
 
+
 	@Test
 	public void testSimpleFileWithLineNumberAndColumn() {
 		assertPathDetection("With line: file1.java:5:5", "file1.java:5:5", 5, 5);
 	}
+
 
 	@Test
 	public void testFileInHomeDirectory() {
@@ -61,35 +76,42 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertUrlNoMatches(desc, "~~~~");
 	}
 
+
 	@Test
 	public void testFileContainingDotsWithoutDirectory() {
 		assertPathDetection("Just a file: t.es.t.txt", "t.es.t.txt");
 	}
+
 
 	@Test
 	public void testFileInRelativeDirectoryUnixStyle() {
 		assertPathDetection("File in a dir (unix style): subdir/test.txt pewpew", "subdir/test.txt");
 	}
 
+
 	@Test
 	public void testFileInRelativeDirectoryWindowsStyle() {
 		assertPathDetection("File in a dir (Windows style): subdir\\test.txt pewpew", "subdir\\test.txt");
 	}
+
 
 	@Test
 	public void testFileInAbsoluteDirectoryWindowsStyleWithDriveLetter() {
 		assertPathDetection("File in a absolute dir (Windows style): D:\\subdir\\test.txt pewpew", "D:\\subdir\\test.txt");
 	}
 
+
 	@Test
 	public void testFileInAbsoluteDirectoryMixedStyleWithDriveLetter() {
-		assertPathDetection("Mixed slashes: D:\\test\\me/test.txt - happens stometimes", "D:\\test\\me/test.txt");
+		assertPathDetection("Mixed slashes: D:\\test\\me/test.txt - happens sometimes", "D:\\test\\me/test.txt");
 	}
+
 
 	@Test
 	public void testFileInRelativeDirectoryWithLineNumber() {
 		assertPathDetection("With line: src/test.js:55", "src/test.js:55", 55);
 	}
+
 
 	@Test
 	public void testFileInRelativeDirectoryWithWindowsTypeScriptStyleLineAndColumnNumbers() {
@@ -97,11 +119,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("From stack trace: src\\api\\service.ts(29,50)", "src\\api\\service.ts(29,50)", 29, 50);
 	}
 
+
 	@Test
 	public void testFileInAbsoluteDirectoryWithWindowsTypeScriptStyleLineAndColumnNumbers() {
 		// Windows, exception from TypeScript compiler
 		assertPathDetection("From stack trace: D:\\src\\api\\service.ts(29,50)", "D:\\src\\api\\service.ts(29,50)", 29, 50);
 	}
+
 
 	@Test
 	public void testFileInAbsoluteDirectoryWithWindowsTypeScriptStyleLineAndColumnNumbersAndMixedSlashes() {
@@ -109,10 +133,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("From stack trace: D:\\src\\api/service.ts(29,50)", "D:\\src\\api/service.ts(29,50)", 29, 50);
 	}
 
+
 	@Test
 	public void testFileWithJavaExtensionInAbsoluteDirectoryAndLineNumbersWindowsStyle() {
 		assertPathDetection("Windows: d:\\my\\file.java:150", "d:\\my\\file.java:150", 150);
 	}
+
 
 
 	@Test
@@ -120,11 +146,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("/home/me/project/run.java:[245,15]", "/home/me/project/run.java:[245,15]", 245, 15);
 	}
 
+
 	@Test
 	public void testFileWithJavaScriptExtensionInAbsoluteDirectoryWithLineNumbers() {
 		// JS exception
 		assertPathDetection("bla-bla /home/me/project/run.js:27 something", "/home/me/project/run.js:27", 27);
 	}
+
 
 	@Test
 	public void testFileWithJavaStyleExceptionClassAndLineNumbers() {
@@ -132,10 +160,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("bla-bla at (AwesomeLinkFilter.java:150) something", "AwesomeLinkFilter.java:150", 150);
 	}
 
+
 	@Test
 	public void testFileWithRelativeDirectoryPythonExtensionAndLineNumberPlusColumn() {
 		assertPathDetection("bla-bla at ./foobar/AwesomeConsole.py:1337:42 something", "./foobar/AwesomeConsole.py:1337:42", 1337, 42);
 	}
+
 
 	@Test
 	public void testFileWithoutExtensionInRelativeDirectory() {
@@ -144,45 +174,54 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("No extension: testfile", "testfile");
 	}
 
+
 	@Test
 	public void test_unicode_path_filename() {
 		assertPathDetection("unicode 中.txt yay", "中.txt");
 	}
+
 
 	@Test
 	public void testURLHTTP() {
 		assertURLDetection("omfg something: http://xkcd.com/ yay", "http://xkcd.com/");
 	}
 
+
 	@Test
 	public void testURLHTTPWithIP() {
 		assertURLDetection("omfg something: http://8.8.8.8/ yay", "http://8.8.8.8/");
 	}
+
 
 	@Test
 	public void testURLHTTPS() {
 		assertURLDetection("omfg something: https://xkcd.com/ yay", "https://xkcd.com/");
 	}
 
+
 	@Test
 	public void testURLHTTPWithoutPath() {
 		assertURLDetection("omfg something: http://xkcd.com yay", "http://xkcd.com");
 	}
+
 
 	@Test
 	public void testURLFTPWithPort() {
 		assertURLDetection("omfg something: ftp://8.8.8.8:2424 yay", "ftp://8.8.8.8:2424");
 	}
 
+
 	@Test
 	public void testURLGIT() {
 		assertURLDetection("omfg something: git://8.8.8.8:2424 yay", "git://8.8.8.8:2424");
 	}
 
+
 	@Test
 	public void testURLFILEWithoutSchemeUnixStyle() {
 		assertPathDetection("omfg something: /root/something yay", "/root/something");
 	}
+
 
 	@Test
 	public void testURLFILEWithoutSchemeWindowsStyle() {
@@ -190,11 +229,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertURLDetection("omfg something: C:\\root\\something.java yay", "C:\\root\\something.java");
 	}
 
+
 	@Test
 	public void testURLFILEWithoutSchemeWindowsStyleWithMixedSlashes() {
 		assertPathDetection("omfg something: C:\\root/something.java yay", "C:\\root/something.java");
 		assertURLDetection("omfg something: C:\\root/something.java yay", "C:\\root/something.java");
 	}
+
 
 	@Test
 	public void testURLFILE() {
@@ -211,10 +252,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+
 	@Test
 	public void testURLFTPWithUsernameAndPath() {
 		assertURLDetection("omfg something: ftp://user:password@xkcd.com:1337/some/path yay", "ftp://user:password@xkcd.com:1337/some/path");
 	}
+
 
 	@Test
 	public void testURLInsideBrackets() {
@@ -222,15 +265,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertURLDetection("something (C:\\root\\something.java) blabla", "C:\\root\\something.java");
 	}
 
+
 	@Test
 	public void testWindowsDirectoryBackwardSlashes() {
 		assertPathDetection("C:/Windows/Temp/test.tsx:5:3", "C:/Windows/Temp/test.tsx:5:3", 5, 3);
 	}
 
+
 	@Test
 	public void testOverlyLongRowAndColumnNumbers() {
 		assertPathDetection("test.tsx:123123123123123:12312312312312321", "test.tsx:123123123123123:12312312312312321", 0, 0);
 	}
+
 
 	@Test
 	public void testTSCErrorMessages() {
@@ -238,15 +284,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertURLDetection("C:/project/node_modules/typescript/lib/lib.webworker.d.ts:1930:6:", "C:/project/node_modules/typescript/lib/lib.webworker.d.ts:1930:6:");
 	}
 
+
 	@Test
 	public void testPythonTracebackWithQuotes() {
 		assertPathDetection("File \"/Applications/plugins/python-ce/helpers/pycharm/teamcity/diff_tools.py\", line 38", "\"/Applications/plugins/python-ce/helpers/pycharm/teamcity/diff_tools.py\", line 38", 38);
 	}
 
+
 	@Test
 	public void testAngularJSAtModule() {
 		assertPathDetection("src/app/@app/app.module.ts:42:5", "src/app/@app/app.module.ts:42:5", 42, 5);
 	}
+
 
 	@Test
 	public void testCsharpStacktrace() {
@@ -256,6 +305,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				4
 		);
 	}
+
 
 	@Test
 	public void testJavaStacktrace() {
@@ -272,16 +322,19 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+
 	@Test
 	public void testGradleStacktrace() {
 		assertPathDetection("Gradle build task failed with an exception: Build file 'build.gradle' line: 14", "'build.gradle' line: 14", 14);
 	}
+
 
 	@Test
 	public void testPathColonAtTheEnd() {
 		assertPathDetection("colon at the end: resources/file1.java:5:1:", "resources/file1.java:5:1", 5, 1);
 		assertSimplePathDetection("colon at the end: %s:", TEST_DIR_WINDOWS + "\\file1.java:5:4", 5, 4);
 	}
+
 
 	@Test
 	public void testLineNumberAndColumnWithVariableWhitespace() {
@@ -297,10 +350,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+
 	@Test
 	public void testIllegalLineNumberAndColumn() {
 		assertPathDetection("Vue2 build: static/css/app.b8050232.css (259 KiB)", "static/css/app.b8050232.css");
 	}
+
 
 	@Test
 	public void testPathWithDots() {
@@ -314,6 +369,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("File ./src/test/resources/subdir/../file1.java", "./src/test/resources/subdir/../file1.java");
 	}
 
+
 	@Test
 	public void testUncPath() {
 		assertPathDetection("UNC path: \\\\localhost\\c$", "\\\\localhost\\c$");
@@ -321,6 +377,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("UNC path: \\\\123.123.123.123\\share\\folder\\myfile.txt", "\\\\123.123.123.123\\share\\folder\\myfile.txt");
 		assertPathDetection("UNC path: file://///localhost/c$", "file://///localhost/c$");
 	}
+
 
 	@Test
 	public void testPathWithQuotes() {
@@ -339,6 +396,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("Path: \"src/test/resources/subdir /file1.java\" ", "src/test/resources/subdir", "/file1.java");
 	}
 
+
 	@Test
 	public void testPathWithUnclosedQuotes() {
 		assertPathDetection("Path: \"src/test/resources/中文 空格.txt", "src/test/resources/中文", "空格.txt");
@@ -352,6 +410,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"\"src/test/resources/中文 空格.txt\""
 		);
 	}
+
 
 	@Test
 	public void testPathSeparatedByCommaOrSemicolon() {
@@ -377,6 +436,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			);
 		}
 	}
+
 
 	@Test
 	public void testPathSurroundedBy() {
@@ -415,6 +475,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		}
 	}
 
+
 	@Test
 	public void testTypeScriptCompiler() {
 		assertPathDetection("error TS18003: No inputs were found in config file 'tsconfig.json'.", "tsconfig.json");
@@ -428,6 +489,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertUrlNoMatches("", "              ~~~~");
 		assertPathDetection("\n\nFound 1 error in file1.ts:5", "file1.ts:5", 5);
 	}
+
 
 	@Test
 	public void testPathBoundary() {
@@ -447,6 +509,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertSimplePathDetection("--> %s", file + ":19:3", 19, 3);
 	}
 
+
 	@Test
 	public void testIllegalChar() {
 		assertPathDetection("Illegal char: \u0001file1.java", "file1.java");
@@ -454,6 +517,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("Illegal char: \u0021file1.java", "!file1.java");
 		assertPathDetection("Illegal char: \u007ffile1.java", "file1.java");
 	}
+
 
 	@Test
 	public void testWindowsDriveRoot() {
@@ -467,6 +531,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		// `C:` without a slash is an invalid Windows drive
 		assertPathDetection(desc + "C:", "C");
 	}
+
 
 	@Test
 	public void testJarURL() {
@@ -496,6 +561,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertSimplePathDetection(desc, "!/org/gradle/cli/CommandLineOption.class");
 	}
 
+
 	@Test
 	public void testGit() {
 		System.out.println("Git console log: ");
@@ -513,6 +579,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 //		assertPathDetection("rename packages/frontend/admin/src/modules/{config => about}/index.tsx ");
 //		assertPathDetection("rename blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json");
 	}
+
 
 	@Test
 	public void testWindowsCommandLineShell() {
@@ -536,12 +603,50 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		// assertPathDetection("PS C:\\Program Files (x86)\\Windows NT> echo hello", "C:\\Program Files (x86)\\Windows NT");
 	}
 
-	@Test
+
+@Test
 	public void testJavaClass() {
 		assertSimplePathDetection("regular class name [%s]", "awesome.console.IntegrationTest:40", 40);
 		assertSimplePathDetection("scala class name [%s]", "awesome.console.IntegrationTest$:4", 4);
 
 		assertSimplePathDetection("class file: ", "build/classes/java/main/awesome/console/AwesomeLinkFilter.class:85:50", 85, 50);
+	}
+
+
+	@Test
+	public void testRustModulePathWithFile() {
+		// Rust module path with file path and line/column numbers
+		assertPathDetection(
+			"error in game_components::tools::selection: crates/2_game_logic/game_components/src/tools/selection/mod.rs:137:5",
+			"crates/2_game_logic/game_components/src/tools/selection/mod.rs:137:5",
+			137, 5
+		);
+		
+		// Rust module path with only file path and line number
+		assertPathDetection(
+			"at game_components::tools::selection: crates/2_game_logic/game_components/src/tools/selection/mod.rs:137",
+			"crates/2_game_logic/game_components/src/tools/selection/mod.rs:137",
+			137
+		);
+		
+		// Rust module path without line numbers
+		assertPathDetection(
+			"module game_components::tools::selection found in crates/2_game_logic/game_components/src/tools/selection/mod.rs",
+			"crates/2_game_logic/game_components/src/tools/selection/mod.rs"
+		);
+		
+		// Different Rust module patterns
+		assertPathDetection(
+			"panic at my_crate::utils::helper: src/utils/helper.rs:42:10",
+			"src/utils/helper.rs:42:10",
+			42, 10
+		);
+		
+		assertPathDetection(
+			"thread 'main' panicked at serde_json::from_str: /home/user/.cargo/registry/src/github.com-1ecc6299db9ec823/serde_json-1.0.132/src/de.rs:1234:56",
+			"/home/user/.cargo/registry/src/github.com-1ecc6299db9ec823/serde_json-1.0.132/src/de.rs:1234:56",
+			1234, 56
+		);
 	}
 
 	private void assertFilePathDetection(@NotNull final String line, @NotNull final String... expected) {
@@ -568,7 +673,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		for (final String line : lines) {
 			System.out.println(desc + line);
 			List<String> results = filter.detectPaths(line).stream().map(it -> it.match).collect(Collectors.toList());
-			assertSameElements(results, Collections.emptyList());
+		assertSameElements(results, Collections.emptyList());
 		}
 	}
 
@@ -576,7 +681,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		for (final String line : lines) {
 			System.out.println(desc + line);
 			List<String> results = filter.detectURLs(line).stream().map(it -> it.match).collect(Collectors.toList());
-			assertSameElements(results, Collections.emptyList());
+		assertSameElements(results, Collections.emptyList());
 		}
 	}
 
@@ -586,7 +691,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		// Test only detecting file paths - no file existence check
 		List<FileLinkMatch> results = filter.detectPaths(line);
 
-		assertFalse("No matches in line \"" + line + "\"", results.isEmpty());
+		Assertions.assertFalse(results.isEmpty(), "No matches in line \"" + line + "\"");
 
 		Set<String> expectedSet = Stream.of(expected).collect(Collectors.toSet());
 		assertContainsElements(results.stream().map(it -> it.match).collect(Collectors.toList()), expectedSet);
@@ -602,11 +707,11 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		FileLinkMatch info = assertPathDetection(line, expected).get(0);
 
 		if (expectedRow >= 0) {
-			assertEquals("Expected to capture row number", expectedRow, info.linkedRow);
+			Assertions.assertEquals(expectedRow, info.linkedRow, "Expected to capture row number");
 		}
 
 		if (expectedCol >= 0) {
-			assertEquals("Expected to capture column number", expectedCol, info.linkedCol);
+			Assertions.assertEquals(expectedCol, info.linkedCol, "Expected to capture column number");
 		}
 	}
 
@@ -617,8 +722,8 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		// Test only detecting file paths - no file existence check
 		List<URLLinkMatch> results = filter.detectURLs(line);
 
-		assertEquals("No matches in line \"" + line + "\"", 1, results.size());
+		Assertions.assertEquals(1, results.size(), "No matches in line \"" + line + "\"");
 		URLLinkMatch info = results.get(0);
-		assertEquals(String.format("Expected filter to detect \"%s\" link in \"%s\"", expected, line), expected, info.match);
+		Assertions.assertEquals(expected, info.match, String.format("Expected filter to detect \"%s\" link in \"%s\"", expected, line));
 	}
 }

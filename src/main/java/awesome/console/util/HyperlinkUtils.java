@@ -96,4 +96,22 @@ public class HyperlinkUtils {
             return null;
         }
     }
+
+    @Nullable
+    public static TextAttributes createHyperlinkAttributes() {
+        try {
+            return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    @Nullable
+    public static TextAttributes createFollowedHyperlinkAttributes() {
+        try {
+            return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES);
+        } catch (Throwable e) {
+            return null;
+        }
+    }
 }

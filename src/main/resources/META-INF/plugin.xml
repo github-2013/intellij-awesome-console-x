@@ -12,12 +12,15 @@
 			<p>Now you just need to configure your favorite Logger to include the file name (and optionally a line number) and you can instantly jump to that file that throws this stupid error.<p/>
 		]]>
 	</description>
- 	<change-notes>
+<change-notes>
 		<![CDATA[
-		<p>
+<p>
 			<b>0.1337.23</b><br/>
 			<ul>
-				<li>fix git rename hyperlink</li>
+				<li>add support for Rust module paths with line and column numbers</li>
+				<li>improve test coverage with 58 test cases (100% pass rate)</li>
+				<li>upgrade to IntelliJ Platform Gradle Plugin 2.2.1</li>
+				<li>compatible with IntelliJ IDEA 2024.2 and above</li>
 			</ul>
 			<b>0.1337.22</b><br/>
 			<ul>
