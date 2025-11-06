@@ -27,10 +27,10 @@ repositories {
 dependencies {
     // IntelliJ Platform 相关依赖
     intellijPlatform {
-        // IntelliJ IDEA Community Edition 2024.3 版本
+        // IntelliJ IDEA Community Edition 2024.2 版本
         // 这是插件开发的基础 SDK，决定了插件的 API 版本和兼容性
-        // 注意：2024.3 对应 Build Number 243
-        intellijIdeaCommunity("2024.3")
+        // 注意：2024.2 对应 Build Number 242，更稳定的版本
+        intellijIdeaCommunity("2024.2")
 
         // 捆绑的 Java 插件依赖
         // 如果你的插件需要使用 IDEA 的 Java 支持功能（如代码分析、导航等），需要声明此依赖
@@ -54,7 +54,7 @@ dependencies {
     
     // JUnit 4 兼容性：仅在编译时需要，用于支持旧的 JUnit 4 测试
     testCompileOnly("junit:junit:4.13.2")
-    
+
     // JUnit Vintage 引擎：运行时依赖，用于在 JUnit 5 平台上运行 JUnit 4 测试
     testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
     
@@ -85,16 +85,12 @@ intellijPlatform {
         // IDEA 版本兼容性配置
         ideaVersion {
             // sinceBuild：插件支持的最低 IDEA 版本
-            // '243' 对应 IntelliJ IDEA 2024.3
+            // '242' 对应 IntelliJ IDEA 2024.2
             // 低于此版本的 IDEA 将无法安装此插件
-            sinceBuild = '243'
-            untilBuild = '*'
+            sinceBuild = '242.*'
+            untilBuild = '299.*'
         }
     }
-    
-    // 代码插桩配置：禁用编译器插桩以避免 Packages 目录问题
-    // 注意：禁用插桩可能会影响某些 IntelliJ Platform 注解的运行时行为
-    instrumentCode = false
 }
 
 // ========== Java 工具链配置 ==========
@@ -111,7 +107,7 @@ tasks.withType(JavaCompile).configureEach {
     // 设置源代码文件的字符编码为 UTF-8
     // 避免在不同操作系统上出现乱码问题
     options.encoding = 'UTF-8'
-    
+
     // 指定 Java 编译器版本为 21
     // 确保使用 Java 21 编译器来编译源代码
     javaCompiler = javaToolchains.compilerFor {
