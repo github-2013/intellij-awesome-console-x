@@ -647,6 +647,27 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			"/home/user/.cargo/registry/src/github.com-1ecc6299db9ec823/serde_json-1.0.132/src/de.rs:1234:56",
 			1234, 56
 		);
+		
+		// Test specific WARN format from the image
+		assertPathDetection(
+			"WARN game_components::tools::selection: crates/2_game_logic/game_components/src/tools/selection/mod.rs:137: Co",
+			"crates/2_game_logic/game_components/src/tools/selection/mod.rs:137",
+			137
+		);
+		
+		// Test WARN format with complete line:column pattern
+		assertPathDetection(
+			"WARN game_components::tools::selection: crates/2_game_logic/game_components/src/tools/selection/mod.rs:137:15",
+			"crates/2_game_logic/game_components/src/tools/selection/mod.rs:137:15",
+			137, 15
+		);
+		
+		// Test other common Rust warning patterns
+		assertPathDetection(
+			"WARNING my_crate::module: src/file.rs:42:10",
+			"src/file.rs:42:10",
+			42, 10
+		);
 	}
 
 	private void assertFilePathDetection(@NotNull final String line, @NotNull final String... expected) {
