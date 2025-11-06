@@ -6,3 +6,4 @@
 .idea
 .intellijPlatform
 src/test/resources
+.DS_Store
