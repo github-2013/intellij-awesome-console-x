@@ -650,6 +650,57 @@ echo $JAVA_HOME
 
 ---
 
+## 调试与日志
+
+### 查看平台插件日志的方法
+
+插件的日志会输出到 IntelliJ 平台的日志系统中，可以通过以下方式查看：
+
+##### 方法一：通过 IDE 菜单查看
+
+1. 打开 `Help` → `Show Log in Explorer` (Windows/Linux) 或 `Help` → `Show Log in Finder` (macOS)
+2. 这会打开日志文件所在的目录
+3. 主要的日志文件是 `idea.log`
+
+##### 方法二：通过 IDE 内置日志查看器
+
+1. 打开 `Help` → `Diagnostic Tools` → `Debug Log Settings`
+2. 这里可以配置日志级别和查看实时日志
+
+##### 方法三：直接查看日志文件
+
+日志文件通常位于：
+- **Windows**: `%USERPROFILE%\AppData\Local\JetBrains\<Product><Version>\log\idea.log`
+- **macOS**: `~/Library/Logs/JetBrains/<Product><Version>/idea.log`
+- **Linux**: `~/.cache/JetBrains/<Product><Version>/log/idea.log`
+
+#### 插件特定的日志信息
+
+当启用调试模式后，插件会记录以下信息：
+- 文件缓存初始化状态
+- 文件缓存重新加载信息
+- 错误和异常信息
+- 性能相关的调试信息
+- 正则表达式匹配结果
+- 文件查找过程
+
+#### 日志级别说明
+
+- **ERROR**: 错误信息（默认启用）
+- **INFO**: 一般信息（调试模式启用）
+- **DEBUG**: 详细调试信息（调试模式启用）
+
+#### 搜索特定日志
+
+在日志文件中，可以搜索以下关键词来快速定位插件相关的日志：
+- `Awesome Console X`
+- `AwesomeLinkFilter`
+- `awesome.console`
+- `fileCache`
+- `fileBaseCache`
+
+---
+
 ## 总结
 
 Awesome Console X 是一个功能强大且高度可配置的 IntelliJ 插件，通过智能识别和高亮控制台中的文件路径和 URL，极大地提升了开发效率。
