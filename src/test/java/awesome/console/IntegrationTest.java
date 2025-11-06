@@ -72,6 +72,7 @@ public class IntegrationTest {
 		System.out.printf("colon at the end: %s\\file1.java:5:4:\n", TEST_DIR_WINDOWS);
 		System.out.println("unicode 中.txt:5 yay");
 		System.out.println("C:/project/node_modules/typescript/lib/lib.webworker.d.ts:1930:6:");
+		System.out.println("C:/repos/WebApp/src/components/mapping-tree-item.tsx:52:39");
 
 		testFileInHomeDirectory();
 
