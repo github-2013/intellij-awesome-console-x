@@ -17,21 +17,49 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 
+/**
+ * 超链接工具类，用于构建和管理控制台中的文件超链接
+ */
 @SuppressWarnings("unused")
 public class HyperlinkUtils {
 
+    /** 配置实例 */
     private static final AwesomeConsoleStorage config = AwesomeConsoleStorage.getInstance();
 
+    /**
+     * 构建文件超链接信息（默认定位到第0行）
+     * 
+     * @param project 项目对象
+     * @param filePath 文件路径
+     * @return 超链接信息对象
+     */
     @NotNull
     public static HyperlinkInfo buildFileHyperlinkInfo(@NotNull Project project, @NotNull String filePath) {
         return buildFileHyperlinkInfo(project, filePath, 0);
     }
 
+    /**
+     * 构建文件超链接信息（指定行号）
+     * 
+     * @param project 项目对象
+     * @param filePath 文件路径
+     * @param row 行号
+     * @return 超链接信息对象
+     */
     @NotNull
     public static HyperlinkInfo buildFileHyperlinkInfo(@NotNull Project project, @NotNull String filePath, int row) {
         return buildFileHyperlinkInfo(project, filePath, row, 0);
     }
 
+    /**
+     * 构建文件超链接信息（指定行号和列号）
+     * 
+     * @param project 项目对象
+     * @param filePath 文件路径
+     * @param row 行号
+     * @param col 列号
+     * @return 超链接信息对象
+     */
     @NotNull
     public static HyperlinkInfo buildFileHyperlinkInfo(@NotNull Project project, @NotNull String filePath, int row, int col) {
         try {
@@ -49,6 +77,15 @@ public class HyperlinkUtils {
         return new SingleFileFileHyperlinkInfo(project, filePath, row, col, () -> config.resolveSymlink);
     }
 
+    /**
+     * 构建多文件超链接信息（使用配置中的修复选项）
+     * 
+     * @param project 项目对象
+     * @param files 文件列表
+     * @param row 行号
+     * @param col 列号
+     * @return 超链接信息对象
+     */
     @NotNull
     public static HyperlinkInfo buildMultipleFilesHyperlinkInfo(
             @NotNull Project project, @NotNull List<VirtualFile> files,
@@ -57,6 +94,16 @@ public class HyperlinkUtils {
         return buildMultipleFilesHyperlinkInfo(project, files, row, col, config.fixChooseTargetFile);
     }
 
+    /**
+     * 构建多文件超链接信息（指定是否使用修复）
+     * 
+     * @param project 项目对象
+     * @param files 文件列表
+     * @param row 行号
+     * @param col 列号
+     * @param useFix 是否使用修复选择目标文件的功能
+     * @return 超链接信息对象
+     */
     @NotNull
     public static HyperlinkInfo buildMultipleFilesHyperlinkInfo(
             @NotNull Project project, @NotNull List<VirtualFile> files,
@@ -72,6 +119,16 @@ public class HyperlinkUtils {
         );
     }
 
+    /**
+     * 构建多文件超链接信息（自定义点击动作）
+     * 
+     * @param project 项目对象
+     * @param files 文件列表
+     * @param row 行号
+     * @param useFix 是否使用修复选择目标文件的功能
+     * @param action 自定义超链接点击处理器
+     * @return 超链接信息对象
+     */
     @NotNull
     public static HyperlinkInfo buildMultipleFilesHyperlinkInfo(
             @NotNull Project project, @NotNull List<VirtualFile> files,
@@ -87,6 +144,11 @@ public class HyperlinkUtils {
         return linkInfo;
     }
 
+    /**
+     * 创建忽略样式的文本属性
+     * 
+     * @return 文本属性对象，如果创建失败则返回null
+     */
     public static TextAttributes createIgnoreStyle() {
         try {
             TextAttributes attr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.INACTIVE_HYPERLINK_ATTRIBUTES).clone();
@@ -97,6 +159,11 @@ public class HyperlinkUtils {
         }
     }
 
+    /**
+     * 创建超链接样式的文本属性
+     * 
+     * @return 文本属性对象，如果创建失败则返回null
+     */
     @Nullable
     public static TextAttributes createHyperlinkAttributes() {
         try {
@@ -106,6 +173,11 @@ public class HyperlinkUtils {
         }
     }
 
+    /**
+     * 创建已访问超链接样式的文本属性
+     * 
+     * @return 文本属性对象，如果创建失败则返回null
+     */
     @Nullable
     public static TextAttributes createFollowedHyperlinkAttributes() {
         try {
