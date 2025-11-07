@@ -14,13 +14,38 @@
 	</description>
 <change-notes>
 		<![CDATA[
-<p>
+        <p>
 			<b>0.1337.23</b><br/>
 			<ul>
-				<li>add support for Rust module paths with line and column numbers</li>
-				<li>improve test coverage with 58 test cases (100% pass rate)</li>
-				<li>upgrade to IntelliJ Platform Gradle Plugin 2.2.1</li>
-				<li>compatible with IntelliJ IDEA 2024.2 and above</li>
+				<li><strong>🔧 Core Features Enhancement:</strong></li>
+				<li>• Add support for Rust module paths with line and column numbers</li>
+				<li>• Improve test coverage with 58 test cases (100% pass rate)</li>
+				<li>• Upgrade to IntelliJ Platform Gradle Plugin 2.2.1</li>
+				<li>• Compatible with IntelliJ IDEA 2024.2 and above</li>
+				<li>• Upgrade to Java 21 with Amazon Corretto support</li>
+				<li><strong>🎯 Configuration System:</strong></li>
+				<li>• Debug mode toggle for development and troubleshooting</li>
+				<li>• Configurable line length limit (default: 1024 characters)</li>
+				<li>• Chunk-based processing for long lines</li>
+				<li>• Multi-type matching: URLs, file paths, Java classes</li>
+				<li>• Result limit configuration (default: 100 matches per hyperlink)</li>
+				<li>• Custom file pattern regex support with required groups</li>
+				<li>• Ignore pattern regex to exclude specific matches</li>
+				<li>• "Choose Target File" popup compatibility fix</li>
+				<li>• Non-text file types configuration</li>
+				<li>• Symlink resolution support</li>
+				<li><strong>🚀 Performance Optimizations:</strong></li>
+				<li>• ConcurrentHashMap-based file caching mechanism</li>
+				<li>• Thread-safe operations with ReentrantReadWriteLock</li>
+				<li>• VFS and DumbMode event listeners for cache updates</li>
+				<li>• ThreadLocal Matcher instance caching</li>
+				<li>• Parallel stream processing for improved performance</li>
+				<li><strong>🛠️ Architecture Improvements:</strong></li>
+				<li>• Enhanced AwesomeLinkFilter with advanced regex patterns</li>
+				<li>• Improved AwesomeConsoleConfig with validation</li>
+				<li>• Persistent configuration storage in awesomeconsole.xml</li>
+				<li>• Comprehensive utility classes for file operations</li>
+				<li>• Project-level file iteration and caching</li>
 			</ul>
 			<b>0.1337.22</b><br/>
 			<ul>

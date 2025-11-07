@@ -87,7 +87,7 @@ intellijPlatform {
             // sinceBuild：插件支持的最低 IDEA 版本
             // '242' 对应 IntelliJ IDEA 2024.2
             // 低于此版本的 IDEA 将无法安装此插件
-            sinceBuild = '242.*'
+            sinceBuild = '242'
             untilBuild = '299.*'
         }
     }
