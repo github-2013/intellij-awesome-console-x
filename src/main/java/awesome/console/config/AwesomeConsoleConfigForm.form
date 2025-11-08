@@ -236,7 +236,7 @@
               <grid row="13" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
-              <text value="Preserve ANSI color"/>
+              <text value="Preserve ANSI color."/>
               <toolTipText value="Preserve ANSI color codes and formatting in console output."/>
             </properties>
           </component>
