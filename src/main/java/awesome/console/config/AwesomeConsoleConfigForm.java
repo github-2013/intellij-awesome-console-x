@@ -371,7 +371,8 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         resolveSymlinkCheckBox.setText("Resolve Symlinks (compatible with IDEA Resolve Symlinks plugin).");
         panel1.add(resolveSymlinkCheckBox, new GridConstraints(12, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
         preserveAnsiColorsCheckBox.setText("Preserve ANSI color");
-        panel1.add(preserveAnsiColorsCheckBox, new GridConstraints(13, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        preserveAnsiColorsCheckBox.setToolTipText("Preserve ANSI color codes and formatting in console output.");
+        panel1.add(preserveAnsiColorsCheckBox, new GridConstraints(13, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
     }
 
     /**

@@ -64,6 +64,13 @@ dependencies {
 
 // ========== IntelliJ Platform 插件配置 ==========
 intellijPlatform {
+    // 禁用 buildSearchableOptions 任务
+    // 这可以解决 GUI Designer 相关的构建问题，如重复方法定义等
+    buildSearchableOptions = false
+
+    // 禁用表单字节码增强
+    instrumentCode = false
+    
     pluginConfiguration {
         // 插件 ID：从 gradle.properties 文件中读取，用于唯一标识插件
         // 格式通常为：com.company.pluginname
