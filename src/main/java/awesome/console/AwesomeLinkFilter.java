@@ -100,6 +100,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/** 字母字符正则表达式 */
 	public static final String REGEX_LETTER = "[A-Za-z]";
 
+	/** ANSI转义序列匹配模式 */
+	private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile(
+			"\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])"
+	);
+
 	/**
 	 * Note: The path in the {@code file:} URI has a leading slash which is added by the {@code slashify} method.
 	 *
@@ -353,6 +358,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 */
 	private String decodeDwc(@NotNull final String s) {
 		return s.replace(DWC, "");
+	}
+
+	/**
+	 * 预处理输入行，根据配置决定是否移除ANSI转义序列
+	 * 
+	 * @param line 原始输入行
+	 * @return 处理后的行
+	 */
+	private String preprocessLine(@NotNull final String line) {
+		if (!config.preserveAnsiColors) {
+			// 移除ANSI转义序列
+			return ANSI_ESCAPE_PATTERN.matcher(line).replaceAll("");
+		}
+		return line;
 	}
 
 	/**
@@ -918,7 +937,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * @return 文件路径匹配结果列表
 	 */
 	@NotNull
-	public List<FileLinkMatch> detectPaths(@NotNull final String line) {
+	public List<FileLinkMatch> detectPaths(@NotNull String line) {
+		// 预处理：根据配置决定是否移除ANSI转义序列
+		line = preprocessLine(line);
+		
 		final Matcher fileMatcherConfig = this.fileMatcherConfig.get();
 		final Matcher fileMatcher = config.useFilePattern && null != fileMatcherConfig ? fileMatcherConfig : this.fileMatcher.get();
 		fileMatcher.reset(line);
@@ -994,7 +1016,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * @return URL链接匹配结果列表
 	 */
 	@NotNull
-	public List<URLLinkMatch> detectURLs(@NotNull final String line) {
+	public List<URLLinkMatch> detectURLs(@NotNull String line) {
+		// 预处理：根据配置决定是否移除ANSI转义序列
+		line = preprocessLine(line);
+		
 		final Matcher urlMatcher = this.urlMatcher.get();
 		urlMatcher.reset(line);
 		final List<URLLinkMatch> results = new LinkedList<>();

@@ -815,6 +815,110 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	@Test
+	public void testShellPromptWithAnsiColors() {
+		System.out.println("Shell prompt with ANSI color codes and backgrounds (oh-my-posh style):");
+		
+		// Note: In real terminal output, ANSI escape sequences are typically stripped by the terminal
+		// or IDE console before text is processed. These tests simulate the cleaned output.
+		// These tests focus on paths that appear in modern shell prompts (oh-my-posh, starship, etc.)
+		
+		// Test simple directory name in prompt (like oh-my-posh)
+		assertPathDetection(
+			"jan > oh-my-posh main hello world!",
+			"oh-my-posh"
+		);
+		
+		// Test with path containing directory separators
+		assertPathDetection(
+			"user ~/projects/my-app main $ ls",
+			"~/projects/my-app"
+		);
+		
+		// Test with absolute Unix path in standard bash prompt (without user@host to avoid URL pattern)
+		assertPathDetection(
+			"/home/user/projects/my-app $ ls",
+			"/home/user/projects/my-app"
+		);
+		
+		// Test with Windows PowerShell path
+		assertPathDetection(
+			"PS C:\\Users\\jan\\projects>",
+			"C:\\Users\\jan\\projects"
+		);
+		
+		// Test with file path after prompt
+		assertPathDetection(
+			"~/projects $ cat src/main.java:42",
+			"~/projects",
+			"src/main.java:42"
+		);
+		
+		// Test with file path with line and column
+		assertPathDetection(
+			"~/project $ vim src/test.py:15:10",
+			"~/project",
+			"src/test.py:15:10"
+		);
+		
+		// Test with spaces between prompt elements
+		assertPathDetection(
+			"jan ~/work/project main $ ls",
+			"~/work/project"
+		);
+		
+		// Test with absolute path
+		assertPathDetection(
+			"user /home/user/projects/awesome-console main $ ls",
+			"/home/user/projects/awesome-console"
+		);
+		
+		// Test with error log path
+		assertPathDetection(
+			"user /var/log/app $ tail error.log:100",
+			"/var/log/app",
+			"error.log:100"
+		);
+		
+		// Test with directory and command
+		assertPathDetection(
+			"jan oh-my-posh main $ hello world! in zsh at 13:50:27",
+			"oh-my-posh"
+		);
+		
+		// Test with Git branch in parentheses
+		assertPathDetection(
+			"~/projects/my-app (main)$ ls",
+			"~/projects/my-app"
+		);
+		
+		// Test with Git branch in brackets
+		assertPathDetection(
+			"~/projects/my-app [main]$ ls",
+			"~/projects/my-app"
+		);
+		
+		// Test Windows path with branch info
+		assertPathDetection(
+			"C:\\Work\\infra\\energy-cloud (main)>",
+			"C:\\Work\\infra\\energy-cloud"
+		);
+		
+		// Test with multiple paths in one line
+		assertPathDetection(
+			"~/src/project $ cp file1.txt file2.txt",
+			"~/src/project",
+			"file1.txt",
+			"file2.txt"
+		);
+		
+		// Test with relative path in prompt
+		assertPathDetection(
+			"./build/output $ ls",
+			"./build/output"
+		);
+	}
+
 	private void assertFilePathDetection(@NotNull final String line, @NotNull final String... expected) {
 		for (final String protocol : getFileProtocols(line)) {
 			final String[] expected2 = Stream.of(expected).map(s -> parseTemplate(s, protocol)).toArray(String[]::new);
@@ -891,5 +995,189 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		Assertions.assertEquals(1, results.size(), "No matches in line \"" + line + "\"");
 		URLLinkMatch info = results.get(0);
 		Assertions.assertEquals(expected, info.match, String.format("Expected filter to detect \"%s\" link in \"%s\"", expected, line));
+	}
+
+	@Test
+	public void testAnsiColorPreservationDisabled() {
+		System.out.println("ANSI color preservation disabled (default):");
+		
+		// 确保默认禁用ANSI颜色保留
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalValue = storage.preserveAnsiColors;
+		storage.preserveAnsiColors = false;
+		
+		try {
+			// 测试带ANSI转义序列的路径 - 应该被移除后识别
+			// ANSI转义序列格式: \u001b[颜色代码m
+			assertPathDetection(
+				"Error in \u001b[31msrc/main.java\u001b[0m:10",
+				"src/main.java:10"
+			);
+			
+			// 测试带RGB真彩色的路径
+			assertPathDetection(
+				"\u001b[38;2;255;0;0m/home/user/project/file.txt\u001b[0m:25:10",
+				"/home/user/project/file.txt:25:10"
+			);
+			
+			// 测试带256色模式的路径
+			assertPathDetection(
+				"\u001b[38;5;196mC:\\\\Windows\\\\Temp\\\\test.java\u001b[0m:5",
+				"C:\\\\Windows\\\\Temp\\\\test.java:5"
+			);
+			
+			// 测试带粗体和下划线的路径
+			assertPathDetection(
+				"\u001b[1m\u001b[4m./build/output/result.txt\u001b[0m",
+				"./build/output/result.txt"
+			);
+			
+			// 测试Shell提示符中的ANSI序列（避免user@host格式以免被识别为URL）
+			assertPathDetection(
+				"\u001b[34m~/projects/my-app\u001b[0m $ ls",
+				"~/projects/my-app"
+			);
+			
+			// 测试oh-my-posh风格的提示符
+			assertPathDetection(
+				"\u001b[48;2;41;184;219m\u001b[38;2;255;255;255m jan \u001b[0m\u001b[48;2;255;199;6m\u001b[38;2;41;184;219m\u001b[0m\u001b[48;2;255;199;6m\u001b[38;2;0;0;0m oh-my-posh \u001b[0m",
+				"oh-my-posh"
+			);
+			
+			// 测试带ANSI序列的相对路径
+			assertPathDetection(
+				"\u001b[36m./src/test/resources/file1.java\u001b[0m:42:10",
+				"./src/test/resources/file1.java:42:10"
+			);
+		} finally {
+			// 恢复原始值
+			storage.preserveAnsiColors = originalValue;
+		}
+	}
+	
+	@Test
+	public void testAnsiColorPreservationEnabled() {
+		System.out.println("ANSI color preservation enabled:");
+		
+		// 启用ANSI颜色保留
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalValue = storage.preserveAnsiColors;
+		storage.preserveAnsiColors = true;
+		
+		try {
+			// 当启用ANSI颜色保留时，ANSI转义序列不会被移除
+			// 这意味着路径识别会更困难，因为ANSI序列会打断路径
+			// 但这是用户的选择 - 他们想保留颜色格式
+			
+			// 测试不带ANSI序列的路径仍然能正常识别
+			assertPathDetection(
+				"Error in src/main.java:10",
+				"src/main.java:10"
+			);
+			
+			assertPathDetection(
+				"/home/user/project/file.txt:25:10",
+				"/home/user/project/file.txt:25:10"
+			);
+			
+			assertPathDetection(
+				"C:\\\\Windows\\\\Temp\\\\test.java:5",
+				"C:\\\\Windows\\\\Temp\\\\test.java:5"
+			);
+			
+			// 测试Shell提示符（不带ANSI序列）
+			assertPathDetection(
+				"user ~/projects/my-app $ ls",
+				"~/projects/my-app"
+			);
+			
+			assertPathDetection(
+				"jan oh-my-posh main $ hello world!",
+				"oh-my-posh"
+			);
+			
+			// 注意：当preserveAnsiColors=true时，带ANSI序列的路径可能无法识别
+			// 因为ANSI转义序列会被当作路径的一部分，导致匹配失败
+			// 这是预期行为 - 用户选择保留ANSI颜色就需要接受这个权衡
+			
+		} finally {
+			// 恢复原始值
+			storage.preserveAnsiColors = originalValue;
+		}
+	}
+	
+	@Test
+	public void testAnsiColorVariousFormats() {
+		System.out.println("Test various ANSI color formats with preservation disabled:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalValue = storage.preserveAnsiColors;
+		storage.preserveAnsiColors = false;
+		
+		try {
+			// 测试基本颜色代码 (30-37: 前景色, 40-47: 背景色)
+			assertPathDetection(
+				"\u001b[31mError:\u001b[0m file.txt:10",
+				"file.txt:10"
+			);
+			
+			// 测试亮色代码 (90-97: 亮前景色, 100-107: 亮背景色)
+			assertPathDetection(
+				"\u001b[91mWarning in\u001b[0m src/test.java:20",
+				"src/test.java:20"
+			);
+			
+			// 测试组合样式 (粗体+颜色)
+			assertPathDetection(
+				"\u001b[1;31mFatal error:\u001b[0m /var/log/app.log:100",
+				"/var/log/app.log:100"
+			);
+			
+			// 测试背景色
+			assertPathDetection(
+				"\u001b[41;37mERROR\u001b[0m in build.gradle:15",
+				"build.gradle:15"
+			);
+			
+			// 测试多个ANSI序列
+			assertPathDetection(
+				"\u001b[32m✓\u001b[0m Test passed: \u001b[36mtest/unit/MyTest.java\u001b[0m:42",
+				"test/unit/MyTest.java:42"
+			);
+			
+			// 测试Powerline风格的提示符（使用特殊字符和颜色）
+			assertPathDetection(
+				"\u001b[48;5;24m\u001b[38;5;15m ~/work/project \u001b[0m\u001b[38;5;24m\u001b[0m",
+				"~/work/project"
+			);
+			
+			// 测试终端提示符场景（避免user@host格式）
+			assertPathDetection(
+				"\u001b[38;2;0;0;255m/home/user/dev\u001b[0m $ cat main.cpp:50",
+				"/home/user/dev",
+				"main.cpp:50"
+			);
+			
+			// 测试Windows PowerShell风格
+			assertPathDetection(
+				"\u001b[32mPS\u001b[0m \u001b[33mC:\\\\Users\\\\dev\\\\project\u001b[0m>",
+				"C:\\\\Users\\\\dev\\\\project"
+			);
+			
+			// 测试Git输出中的ANSI颜色
+			assertPathDetection(
+				"\u001b[32mmodified:\u001b[0m   \u001b[31msrc/main/java/App.java\u001b[0m",
+				"src/main/java/App.java"
+			);
+			
+			// 测试编译器错误输出
+			assertPathDetection(
+				"\u001b[1m\u001b[31merror:\u001b[0m \u001b[1mpath/to/file.cpp:140:50:\u001b[0m redeclaration",
+				"path/to/file.cpp:140:50"
+			);
+			
+		} finally {
+			storage.preserveAnsiColors = originalValue;
+		}
 	}
 }

@@ -24,6 +24,11 @@
 				<li>Test coverage for various terminal prompt formats (parentheses, brackets)</li>
 				<li>Validate path extraction from git branch indicators</li>
 				<li>Support Unix-style (~/) and Windows-style paths in terminal prompts</li>
+				<li>Add ANSI color preservation feature with configurable toggle in settings</li>
+				<li>Support modern shell prompts (oh-my-posh, starship) with ANSI escape sequences</li>
+				<li>Intelligent ANSI escape sequence preprocessing for path detection</li>
+				<li>Test coverage for various ANSI color formats (RGB, 256-color, basic colors)</li>
+				<li>Backward compatible: ANSI filtering disabled by default</li>
 			</ul>
 			<b>0.1337.23</b><br/>
 			<ul>

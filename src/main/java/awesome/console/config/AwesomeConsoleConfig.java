@@ -77,6 +77,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.initFileTypes(storage.useFileTypes, storage.getFileTypes());
 
 		form.resolveSymlinkCheckBox.setSelected(storage.resolveSymlink);
+		form.preserveAnsiColorsCheckBox.setSelected(storage.preserveAnsiColors);
 	}
 
 	/**
@@ -221,6 +222,7 @@ public class AwesomeConsoleConfig implements Configurable {
 				|| form.fileTypesCheckBox.isSelected() != storage.useFileTypes
 				|| !form.fileTypesTextField.getText().trim().equals(storage.getFileTypes())
 				|| form.resolveSymlinkCheckBox.isSelected() != storage.resolveSymlink
+				|| form.preserveAnsiColorsCheckBox.isSelected() != storage.preserveAnsiColors
 				;
 	}
 
@@ -292,6 +294,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.fileTypesTextField.setText(storage.getFileTypes());
 
 		storage.resolveSymlink = form.resolveSymlinkCheckBox.isSelected();
+		storage.preserveAnsiColors = form.preserveAnsiColorsCheckBox.isSelected();
 	}
 
 	/**
