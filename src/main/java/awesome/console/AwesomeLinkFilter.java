@@ -79,7 +79,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 					"[:,]\\s*line",
 					"'\\s*line:",
 					":(?:\\s*\\[)?",
-					"\\((?=\\s*\\d+\\s*[:,]\\s*\\d+\\s*\\))"
+					"\\((?=\\s*\\d+\\s*(?:[:,]\\s*\\d+)?\\s*\\))"
 			),
 			// row
 			"\\s*(?<row>\\d+)",
@@ -159,7 +159,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			"((?!%s)(?:%s))+(?<!%s)",
 			// stop with
 			RegexUtils.join(
-					"\\(\\d+,\\d+\\)",
+					"\\(\\d+(?:,\\d+)?\\)",
 					"\\(\\S+\\.(java|kts?):\\d+\\)",
 					"[,;]\\w+[/\\\\:]",
 					// drive or protocol

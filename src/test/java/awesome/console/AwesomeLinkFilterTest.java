@@ -670,6 +670,151 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	@Test
+	public void testStyledPathWithBranch() {
+		System.out.println("Styled terminal path with branch info:");
+		
+		// Test path from terminal prompt with branch info (like in the image)
+		assertPathDetection(
+			"~/Work/infra/energy-cloud ⚡ bugfix/mq-forward ±",
+			"~/Work/infra/energy-cloud"
+		);
+		
+		// Test similar patterns with different special characters
+		assertPathDetection(
+			"~/Work/infra/energy-cloud ⚡ main ±",
+			"~/Work/infra/energy-cloud"
+		);
+		
+		// Test with absolute path
+		assertPathDetection(
+			"/home/user/Work/infra/energy-cloud ⚡ bugfix/mq-forward ±",
+			"/home/user/Work/infra/energy-cloud"
+		);
+		
+		// Test Windows style path with branch info
+		assertPathDetection(
+			"C:\\Work\\infra\\energy-cloud ⚡ bugfix/mq-forward ±",
+			"C:\\Work\\infra\\energy-cloud"
+		);
+		
+		// Test path with other common terminal prompt symbols
+		assertPathDetection(
+			"~/Work/infra/energy-cloud (bugfix/mq-forward)",
+			"~/Work/infra/energy-cloud"
+		);
+		
+		// Test path with git status symbols
+		assertPathDetection(
+			"~/Work/infra/energy-cloud [bugfix/mq-forward *]",
+			"~/Work/infra/energy-cloud"
+		);
+	}
+
+	@Test
+	public void testCppCompilerError() {
+		System.out.println("C++ compiler error format:");
+		
+		// Test typical C++ compiler error format with line and column
+		assertPathDetection(
+			"path/to/project/MyClass.hpp:140:50: error: redeclaration of 'bool MyClass::foobar'",
+			"path/to/project/MyClass.hpp:140:50",
+			140, 50
+		);
+		
+		// Test with absolute path
+		assertPathDetection(
+			"/home/user/project/MyClass.hpp:140:50: error: redeclaration of 'bool MyClass::foobar'",
+			"/home/user/project/MyClass.hpp:140:50",
+			140, 50
+		);
+		
+		// Test Windows style path
+		assertPathDetection(
+			"C:\\project\\MyClass.hpp:140:50: error: redeclaration of 'bool MyClass::foobar'",
+			"C:\\project\\MyClass.hpp:140:50",
+			140, 50
+		);
+		
+		// Test with only line number
+		assertPathDetection(
+			"path/to/project/MyClass.cpp:140: error: expected ';' before '}'",
+			"path/to/project/MyClass.cpp:140",
+			140
+		);
+		
+		// Test GCC/Clang warning format
+		assertPathDetection(
+			"src/main.cpp:25:10: warning: unused variable 'x' [-Wunused-variable]",
+			"src/main.cpp:25:10",
+			25, 10
+		);
+		
+		// Test MSVC error format
+		assertPathDetection(
+			"C:\\Users\\dev\\project\\main.cpp(42): error C2065: 'undeclared': undeclared identifier",
+			"C:\\Users\\dev\\project\\main.cpp(42)",
+			42
+		);
+	}
+
+	@Test
+	public void testPathWithCurlyBracesParameters() {
+		System.out.println("Path with curly braces parameters (API path templates):");
+		
+		// Test API path template with path parameters
+		assertPathDetection(
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml",
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml"
+		);
+		
+		// Test with line number
+		assertPathDetection(
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml:10",
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml:10",
+			10
+		);
+		
+		// Test with line and column numbers
+		assertPathDetection(
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml:10:5",
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml:10:5",
+			10, 5
+		);
+		
+		// Test with absolute path
+		assertPathDetection(
+			"/home/user/project/internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml",
+			"/home/user/project/internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml"
+		);
+		
+		// Test Windows style absolute path
+		assertPathDetection(
+			"C:\\project\\internal_api\\paths\\endpoint1_{pathParameter1}_{pathParameter2}_create.yaml",
+			"C:\\project\\internal_api\\paths\\endpoint1_{pathParameter1}_{pathParameter2}_create.yaml"
+		);
+		
+		// Test with error message context
+		assertPathDetection(
+			"Error in file internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml:25: Invalid syntax",
+			"internal_api/paths/endpoint1_{pathParameter1}_{pathParameter2}_create.yaml:25",
+			25
+		);
+		
+		// Test similar patterns with different parameter names
+		assertPathDetection(
+			"api/v1/users_{userId}_posts_{postId}_get.yaml:15:20",
+			"api/v1/users_{userId}_posts_{postId}_get.yaml:15:20",
+			15, 20
+		);
+		
+		// Test with single parameter
+		assertPathDetection(
+			"api/endpoints/resource_{id}_update.yaml",
+			"api/endpoints/resource_{id}_update.yaml"
+		);
+	}
+
 	private void assertFilePathDetection(@NotNull final String line, @NotNull final String... expected) {
 		for (final String protocol : getFileProtocols(line)) {
 			final String[] expected2 = Stream.of(expected).map(s -> parseTemplate(s, protocol)).toArray(String[]::new);
