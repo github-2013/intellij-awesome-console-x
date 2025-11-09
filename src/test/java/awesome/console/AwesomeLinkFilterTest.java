@@ -21,10 +21,17 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Assertions;
 
-
+/**
+ * AwesomeLinkFilter 测试类
+ * 测试文件路径和URL链接的检测功能，包括各种格式的文件路径、行号、列号等
+ * 涵盖Unix/Windows路径、相对/绝对路径、JAR文件、URL、特殊字符、ANSI颜色代码等场景
+ */
 public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 
-	// 静态初始化块：在类加载时就设置系统属性，确保在测试框架初始化之前生效
+	/**
+	 * 静态初始化块：在类加载时就设置系统属性，确保在测试框架初始化之前生效
+	 * 主要用于解决临时目录路径过长的问题
+	 */
 	static {
 		// 设置系统属性以解决临时目录路径过长的问题
 		System.setProperty("java.io.tmpdir", "/tmp");
@@ -33,8 +40,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		System.setProperty("idea.test.temp.dir.prefix", "test");
 	}
 
+	/** 被测试的过滤器实例 */
 	private AwesomeLinkFilter filter;
 
+	/**
+	 * 测试初始化方法
+	 * 在每个测试方法执行前创建新的过滤器实例
+	 */
 	@Override
 	@BeforeEach
 	public void setUp() throws Exception {
@@ -42,12 +54,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		filter = new AwesomeLinkFilter(getProject());
 	}
 
+	/**
+	 * 测试不带目录的简单文件名
+	 */
 	@Test
 	public void testFileWithoutDirectory() {
 		assertPathDetection("Just a file: test.txt", "test.txt");
 	}
 
 
+	/**
+	 * 测试包含特殊字符的文件名（下划线、连字符）
+	 */
 	@Test
 	public void testFileContainingSpecialCharsWithoutDirectory() {
 		assertPathDetection("Another file: _test.txt", "_test.txt");
@@ -55,12 +73,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试带行号和列号的简单文件
+	 */
 	@Test
 	public void testSimpleFileWithLineNumberAndColumn() {
 		assertPathDetection("With line: file1.java:5:5", "file1.java:5:5", 5, 5);
 	}
 
 
+	/**
+	 * 测试用户主目录中的文件（~开头的路径）
+	 */
 	@Test
 	public void testFileInHomeDirectory() {
 		final String[] files = new String[]{"~", "~/.gradle", "~\\.gradle"};
@@ -77,42 +101,64 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试文件名中包含多个点的情况
+	 */
 	@Test
 	public void testFileContainingDotsWithoutDirectory() {
 		assertPathDetection("Just a file: t.es.t.txt", "t.es.t.txt");
 	}
 
 
+	/**
+	 * 测试Unix风格的相对路径（正斜杠）
+	 */
 	@Test
 	public void testFileInRelativeDirectoryUnixStyle() {
 		assertPathDetection("File in a dir (unix style): subdir/test.txt pewpew", "subdir/test.txt");
 	}
 
 
+	/**
+	 * 测试Windows风格的相对路径（反斜杠）
+	 */
 	@Test
 	public void testFileInRelativeDirectoryWindowsStyle() {
 		assertPathDetection("File in a dir (Windows style): subdir\\test.txt pewpew", "subdir\\test.txt");
 	}
 
 
+	/**
+	 * 测试Windows风格的绝对路径（带驱动器盘符）
+	 */
 	@Test
 	public void testFileInAbsoluteDirectoryWindowsStyleWithDriveLetter() {
 		assertPathDetection("File in a absolute dir (Windows style): D:\\subdir\\test.txt pewpew", "D:\\subdir\\test.txt");
 	}
 
 
+	/**
+	 * 测试混合斜杠的Windows路径（反斜杠和正斜杠混用）
+	 */
 	@Test
 	public void testFileInAbsoluteDirectoryMixedStyleWithDriveLetter() {
 		assertPathDetection("Mixed slashes: D:\\test\\me/test.txt - happens sometimes", "D:\\test\\me/test.txt");
 	}
 
 
+	/**
+	 * 测试带行号的相对路径文件
+	 */
 	@Test
 	public void testFileInRelativeDirectoryWithLineNumber() {
 		assertPathDetection("With line: src/test.js:55", "src/test.js:55", 55);
 	}
 
 
+	/**
+	 * 测试TypeScript编译器风格的行列号格式（Windows）
+	 * 格式：file.ts(row,col)
+	 */
 	@Test
 	public void testFileInRelativeDirectoryWithWindowsTypeScriptStyleLineAndColumnNumbers() {
 		// Windows, exception from TypeScript compiler
@@ -120,6 +166,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试TypeScript编译器风格的绝对路径（Windows）
+	 */
 	@Test
 	public void testFileInAbsoluteDirectoryWithWindowsTypeScriptStyleLineAndColumnNumbers() {
 		// Windows, exception from TypeScript compiler
@@ -127,6 +176,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试TypeScript编译器风格的混合斜杠路径（Windows）
+	 */
 	@Test
 	public void testFileInAbsoluteDirectoryWithWindowsTypeScriptStyleLineAndColumnNumbersAndMixedSlashes() {
 		// Windows, exception from TypeScript compiler
@@ -134,6 +186,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Java文件的Windows绝对路径带行号
+	 */
 	@Test
 	public void testFileWithJavaExtensionInAbsoluteDirectoryAndLineNumbersWindowsStyle() {
 		assertPathDetection("Windows: d:\\my\\file.java:150", "d:\\my\\file.java:150", 150);
@@ -141,12 +196,19 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 
 
 
+	/**
+	 * 测试Maven风格的行列号格式
+	 * 格式：file.java:[row,col]
+	 */
 	@Test
 	public void testFileWithJavaExtensionInAbsoluteDirectoryWithLineAndColumnNumbersInMaven() {
 		assertPathDetection("/home/me/project/run.java:[245,15]", "/home/me/project/run.java:[245,15]", 245, 15);
 	}
 
 
+	/**
+	 * 测试JavaScript异常堆栈中的文件路径
+	 */
 	@Test
 	public void testFileWithJavaScriptExtensionInAbsoluteDirectoryWithLineNumbers() {
 		// JS exception
@@ -154,6 +216,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Java异常堆栈跟踪格式
+	 * 格式：at (ClassName.java:line)
+	 */
 	@Test
 	public void testFileWithJavaStyleExceptionClassAndLineNumbers() {
 		// Java exception stack trace
@@ -161,12 +227,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Python文件路径格式（带行号和列号）
+	 */
 	@Test
 	public void testFileWithRelativeDirectoryPythonExtensionAndLineNumberPlusColumn() {
 		assertPathDetection("bla-bla at ./foobar/AwesomeConsole.py:1337:42 something", "./foobar/AwesomeConsole.py:1337:42", 1337, 42);
 	}
 
 
+	/**
+	 * 测试不带扩展名的文件
+	 */
 	@Test
 	public void testFileWithoutExtensionInRelativeDirectory() {
 		// detect files without extension
@@ -175,54 +247,81 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Unicode字符的文件名（中文）
+	 */
 	@Test
 	public void test_unicode_path_filename() {
 		assertPathDetection("unicode 中.txt yay", "中.txt");
 	}
 
 
+	/**
+	 * 测试HTTP协议的URL
+	 */
 	@Test
 	public void testURLHTTP() {
 		assertURLDetection("omfg something: http://xkcd.com/ yay", "http://xkcd.com/");
 	}
 
 
+	/**
+	 * 测试HTTP协议的IP地址URL
+	 */
 	@Test
 	public void testURLHTTPWithIP() {
 		assertURLDetection("omfg something: http://8.8.8.8/ yay", "http://8.8.8.8/");
 	}
 
 
+	/**
+	 * 测试HTTPS协议的URL
+	 */
 	@Test
 	public void testURLHTTPS() {
 		assertURLDetection("omfg something: https://xkcd.com/ yay", "https://xkcd.com/");
 	}
 
 
+	/**
+	 * 测试不带路径的HTTP URL
+	 */
 	@Test
 	public void testURLHTTPWithoutPath() {
 		assertURLDetection("omfg something: http://xkcd.com yay", "http://xkcd.com");
 	}
 
 
+	/**
+	 * 测试带端口号的FTP URL
+	 */
 	@Test
 	public void testURLFTPWithPort() {
 		assertURLDetection("omfg something: ftp://8.8.8.8:2424 yay", "ftp://8.8.8.8:2424");
 	}
 
 
+	/**
+	 * 测试GIT协议的URL
+	 */
 	@Test
 	public void testURLGIT() {
 		assertURLDetection("omfg something: git://8.8.8.8:2424 yay", "git://8.8.8.8:2424");
 	}
 
 
+	/**
+	 * 测试不带协议的Unix风格文件路径
+	 */
 	@Test
 	public void testURLFILEWithoutSchemeUnixStyle() {
 		assertPathDetection("omfg something: /root/something yay", "/root/something");
 	}
 
 
+	/**
+	 * 测试不带协议的Windows风格文件路径
+	 */
 	@Test
 	public void testURLFILEWithoutSchemeWindowsStyle() {
 		assertPathDetection("omfg something: C:\\root\\something.java yay", "C:\\root\\something.java");
@@ -230,6 +329,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试不带协议的Windows混合斜杠路径
+	 */
 	@Test
 	public void testURLFILEWithoutSchemeWindowsStyleWithMixedSlashes() {
 		assertPathDetection("omfg something: C:\\root/something.java yay", "C:\\root/something.java");
@@ -237,6 +339,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试file://协议的URL
+	 */
 	@Test
 	public void testURLFILE() {
 		assertURLDetection("omfg something: file:///home/root yay", "file:///home/root");
@@ -253,12 +358,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试带用户名密码的FTP URL
+	 */
 	@Test
 	public void testURLFTPWithUsernameAndPath() {
 		assertURLDetection("omfg something: ftp://user:password@xkcd.com:1337/some/path yay", "ftp://user:password@xkcd.com:1337/some/path");
 	}
 
 
+	/**
+	 * 测试括号内的URL
+	 */
 	@Test
 	public void testURLInsideBrackets() {
 		assertPathDetection("something (C:\\root\\something.java) blabla", "C:\\root\\something.java");
@@ -266,18 +377,27 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Windows正斜杠路径
+	 */
 	@Test
 	public void testWindowsDirectoryBackwardSlashes() {
 		assertPathDetection("C:/Windows/Temp/test.tsx:5:3", "C:/Windows/Temp/test.tsx:5:3", 5, 3);
 	}
 
 
+	/**
+	 * 测试过长的行列号（应该被忽略）
+	 */
 	@Test
 	public void testOverlyLongRowAndColumnNumbers() {
 		assertPathDetection("test.tsx:123123123123123:12312312312312321", "test.tsx:123123123123123:12312312312312321", 0, 0);
 	}
 
 
+	/**
+	 * 测试TypeScript编译器错误消息格式
+	 */
 	@Test
 	public void testTSCErrorMessages() {
 		assertPathDetection("C:/project/node_modules/typescript/lib/lib.webworker.d.ts:1930:6:", "C:/project/node_modules/typescript/lib/lib.webworker.d.ts:1930:6", 1930, 6);
@@ -285,18 +405,27 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Python Traceback中带引号的文件路径
+	 */
 	@Test
 	public void testPythonTracebackWithQuotes() {
 		assertPathDetection("File \"/Applications/plugins/python-ce/helpers/pycharm/teamcity/diff_tools.py\", line 38", "\"/Applications/plugins/python-ce/helpers/pycharm/teamcity/diff_tools.py\", line 38", 38);
 	}
 
 
+	/**
+	 * 测试AngularJS中@符号的模块路径
+	 */
 	@Test
 	public void testAngularJSAtModule() {
 		assertPathDetection("src/app/@app/app.module.ts:42:5", "src/app/@app/app.module.ts:42:5", 42, 5);
 	}
 
 
+	/**
+	 * 测试C#堆栈跟踪格式
+	 */
 	@Test
 	public void testCsharpStacktrace() {
 		assertPathDetection(
@@ -307,6 +436,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Java堆栈跟踪格式
+	 */
 	@Test
 	public void testJavaStacktrace() {
 		assertPathDetection("at Build_gradle.<init>(build.gradle.kts:9)", "build.gradle.kts:9", 9);
@@ -323,12 +455,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Gradle堆栈跟踪格式
+	 */
 	@Test
 	public void testGradleStacktrace() {
 		assertPathDetection("Gradle build task failed with an exception: Build file 'build.gradle' line: 14", "'build.gradle' line: 14", 14);
 	}
 
 
+	/**
+	 * 测试路径末尾的冒号
+	 */
 	@Test
 	public void testPathColonAtTheEnd() {
 		assertPathDetection("colon at the end: resources/file1.java:5:1:", "resources/file1.java:5:1", 5, 1);
@@ -336,6 +474,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试行列号之间有可变空格的情况
+	 */
 	@Test
 	public void testLineNumberAndColumnWithVariableWhitespace() {
 		assertPathDetection("With line: file1.java: 5  :   5 ", "file1.java: 5  :   5", 5, 5);
@@ -351,12 +492,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试非法的行列号（应该被忽略）
+	 */
 	@Test
 	public void testIllegalLineNumberAndColumn() {
 		assertPathDetection("Vue2 build: static/css/app.b8050232.css (259 KiB)", "static/css/app.b8050232.css");
 	}
 
 
+	/**
+	 * 测试包含点号的路径（.、..、.gitignore等）
+	 */
 	@Test
 	public void testPathWithDots() {
 		assertPathDetection("Path: . ", ".");
@@ -370,6 +517,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试UNC路径（Windows网络路径）
+	 */
 	@Test
 	public void testUncPath() {
 		assertPathDetection("UNC path: \\\\localhost\\c$", "\\\\localhost\\c$");
@@ -379,6 +529,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试带引号的路径（处理包含空格的路径）
+	 */
 	@Test
 	public void testPathWithQuotes() {
 		assertPathDetection("Path: src/test/resources/中文 空格.txt ", "空格.txt");
@@ -397,6 +550,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试未闭合引号的路径
+	 */
 	@Test
 	public void testPathWithUnclosedQuotes() {
 		assertPathDetection("Path: \"src/test/resources/中文 空格.txt", "src/test/resources/中文", "空格.txt");
@@ -412,6 +568,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试逗号或分号分隔的多个路径
+	 */
 	@Test
 	public void testPathSeparatedByCommaOrSemicolon() {
 		final String[] paths = new String[]{
@@ -438,6 +597,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试被括号、方括号、引号包围的路径
+	 */
 	@Test
 	public void testPathSurroundedBy() {
 		final String[] files = new String[]{
@@ -476,6 +638,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试TypeScript编译器输出格式
+	 */
 	@Test
 	public void testTypeScriptCompiler() {
 		assertPathDetection("error TS18003: No inputs were found in config file 'tsconfig.json'.", "tsconfig.json");
@@ -491,6 +656,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试路径边界情况（以点结尾等）
+	 */
 	@Test
 	public void testPathBoundary() {
 		assertPathDetection(".", ".");
@@ -510,6 +678,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试非法字符（控制字符）
+	 */
 	@Test
 	public void testIllegalChar() {
 		assertPathDetection("Illegal char: \u0001file1.java", "file1.java");
@@ -519,6 +690,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Windows驱动器根目录
+	 */
 	@Test
 	public void testWindowsDriveRoot() {
 		final String desc = "Windows drive root: ";
@@ -533,6 +707,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试JAR文件URL格式
+	 */
 	@Test
 	public void testJarURL() {
 		String desc = "File in JDK source: ";
@@ -562,6 +739,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Git控制台输出
+	 */
 	@Test
 	public void testGit() {
 		System.out.println("Git console log: ");
@@ -581,6 +761,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Windows命令行Shell（CMD和PowerShell）
+	 */
 	@Test
 	public void testWindowsCommandLineShell() {
 		// TODO support paths with spaces in the current working directory of Windows CMD and PowerShell
@@ -604,7 +787,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
-@Test
+	/**
+	 * 测试Java类名格式（包括Scala类名）
+	 */
+	@Test
 	public void testJavaClass() {
 		assertSimplePathDetection("regular class name [%s]", "awesome.console.IntegrationTest:40", 40);
 		assertSimplePathDetection("scala class name [%s]", "awesome.console.IntegrationTest$:4", 4);
@@ -613,6 +799,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 测试Rust模块路径格式
+	 */
 	@Test
 	public void testRustModulePathWithFile() {
 		// Rust module path with file path and line/column numbers
@@ -670,6 +859,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	/**
+	 * 测试带分支信息的终端提示符路径
+	 */
 	@Test
 	public void testStyledPathWithBranch() {
 		System.out.println("Styled terminal path with branch info:");
@@ -711,6 +903,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	/**
+	 * 测试C++编译器错误格式
+	 */
 	@Test
 	public void testCppCompilerError() {
 		System.out.println("C++ compiler error format:");
@@ -758,6 +953,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	/**
+	 * 测试带花括号参数的路径（API路径模板）
+	 */
 	@Test
 	public void testPathWithCurlyBracesParameters() {
 		System.out.println("Path with curly braces parameters (API path templates):");
@@ -815,6 +1013,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	/**
+	 * 测试带ANSI颜色代码的Shell提示符（oh-my-posh风格）
+	 */
 	@Test
 	public void testShellPromptWithAnsiColors() {
 		System.out.println("Shell prompt with ANSI color codes and backgrounds (oh-my-posh style):");
@@ -919,6 +1120,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 	}
 
+	/**
+	 * 辅助方法：测试file:协议的文件路径检测
+	 * 
+	 * @param line 待测试的文本行
+	 * @param expected 期望检测到的路径数组
+	 */
 	private void assertFilePathDetection(@NotNull final String line, @NotNull final String... expected) {
 		for (final String protocol : getFileProtocols(line)) {
 			final String[] expected2 = Stream.of(expected).map(s -> parseTemplate(s, protocol)).toArray(String[]::new);
@@ -926,19 +1133,31 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		}
 	}
 
+	/**
+	 * 辅助方法：简单路径检测（不带行列号）
+	 */
 	private void assertSimplePathDetection(@NotNull final String desc, @NotNull final String expected) {
 		assertSimplePathDetection(desc, expected, -1, -1);
 	}
 
+	/**
+	 * 辅助方法：简单路径检测（带行号）
+	 */
 	private void assertSimplePathDetection(@NotNull final String desc, @NotNull final String expected, final int expectedRow) {
 		assertSimplePathDetection(desc, expected, expectedRow, -1);
 	}
 
+	/**
+	 * 辅助方法：简单路径检测（带行号和列号）
+	 */
 	private void assertSimplePathDetection(@NotNull final String desc, @NotNull final String expected, final int expectedRow, final int expectedCol) {
 		final String line = desc.contains("%s") ? desc.replace("%s", expected) : desc + expected;
 		assertPathDetection(line, expected, expectedRow, expectedCol);
 	}
 
+	/**
+	 * 辅助方法：断言路径检测无匹配
+	 */
 	private void assertPathNoMatches(@NotNull final String desc, @NotNull final String... lines) {
 		for (final String line : lines) {
 			System.out.println(desc + line);
@@ -947,6 +1166,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		}
 	}
 
+	/**
+	 * 辅助方法：断言URL检测无匹配
+	 */
 	private void assertUrlNoMatches(@NotNull final String desc, @NotNull final String... lines) {
 		for (final String line : lines) {
 			System.out.println(desc + line);
@@ -955,6 +1177,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		}
 	}
 
+	/**
+	 * 辅助方法：断言路径检测结果
+	 * 
+	 * @param line 待测试的文本行
+	 * @param expected 期望检测到的路径数组
+	 * @return 匹配的FileLinkMatch列表
+	 */
 	private List<FileLinkMatch> assertPathDetection(@NotNull final String line, @NotNull final String... expected) {
 		System.out.println(line);
 
@@ -969,10 +1198,16 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		return results.stream().filter(i -> expectedSet.contains(i.match)).collect(Collectors.toList());
 	}
 
+	/**
+	 * 辅助方法：断言路径检测结果（带行号）
+	 */
 	private void assertPathDetection(@NotNull final String line, @NotNull final String expected, final int expectedRow) {
 		assertPathDetection(line, expected, expectedRow, -1);
 	}
 
+	/**
+	 * 辅助方法：断言路径检测结果（带行号和列号）
+	 */
 	private void assertPathDetection(@NotNull final String line, @NotNull final String expected, final int expectedRow, final int expectedCol) {
 		FileLinkMatch info = assertPathDetection(line, expected).get(0);
 
@@ -986,6 +1221,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
+	/**
+	 * 辅助方法：断言URL检测结果
+	 */
 	private void assertURLDetection(final String line, final String expected) {
 		System.out.println(line);
 
@@ -997,6 +1235,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		Assertions.assertEquals(expected, info.match, String.format("Expected filter to detect \"%s\" link in \"%s\"", expected, line));
 	}
 
+	/**
+	 * 测试ANSI颜色保留功能禁用时的路径检测
+	 * 当禁用ANSI颜色保留时，ANSI转义序列应该被移除后再进行路径识别
+	 */
 	@Test
 	public void testAnsiColorPreservationDisabled() {
 		System.out.println("ANSI color preservation disabled (default):");
@@ -1055,6 +1297,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		}
 	}
 	
+	/**
+	 * 测试ANSI颜色保留功能启用时的路径检测
+	 * 当启用ANSI颜色保留时，ANSI转义序列不会被移除
+	 */
 	@Test
 	public void testAnsiColorPreservationEnabled() {
 		System.out.println("ANSI color preservation enabled:");
@@ -1106,6 +1352,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		}
 	}
 	
+	/**
+	 * 测试各种ANSI颜色格式
+	 * 包括基本颜色、亮色、RGB真彩色、256色模式等
+	 */
 	@Test
 	public void testAnsiColorVariousFormats() {
 		System.out.println("Test various ANSI color formats with preservation disabled:");
