@@ -18,7 +18,8 @@ import org.jetbrains.annotations.Nullable;
 
 
 /**
- * 超链接工具类，用于构建和管理控制台中的文件超链接
+ * 超链接工具类
+ * 提供创建和管理文件超链接的功能，支持单文件和多文件超链接
  */
 @SuppressWarnings("unused")
 public class HyperlinkUtils {
@@ -63,7 +64,7 @@ public class HyperlinkUtils {
     @NotNull
     public static HyperlinkInfo buildFileHyperlinkInfo(@NotNull Project project, @NotNull String filePath, int row, int col) {
         try {
-            // Fix the problem of IDE and external programs opening some non-text files at the same time
+            // 修复IDE和外部程序同时打开某些非文本文件的问题
             final String ext = PathUtil.getFileExtension(filePath);
             if (null != ext && config.useFileTypes && config.fileTypeSet.contains(ext.toLowerCase())) {
                 VirtualFile virtualFile = FileUtils.findFileByPath(filePath);
@@ -78,7 +79,7 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 构建多文件超链接信息（使用配置中的修复选项）
+     * 构建多文件超链接信息（使用配置的修复选项）
      * 
      * @param project 项目对象
      * @param files 文件列表
@@ -101,7 +102,7 @@ public class HyperlinkUtils {
      * @param files 文件列表
      * @param row 行号
      * @param col 列号
-     * @param useFix 是否使用修复选择目标文件的功能
+     * @param useFix 是否使用修复
      * @return 超链接信息对象
      */
     @NotNull
@@ -109,7 +110,7 @@ public class HyperlinkUtils {
             @NotNull Project project, @NotNull List<VirtualFile> files,
             int row, int col, boolean useFix
     ) {
-        // ref: https://github.com/JetBrains/intellij-community/blob/212.5080/platform/platform-impl/src/com/intellij/ide/util/GotoLineNumberDialog.java#L53-L55
+        // 参考: https://github.com/JetBrains/intellij-community/blob/212.5080/platform/platform-impl/src/com/intellij/ide/util/GotoLineNumberDialog.java#L53-L55
         final int row2 = row > 0 ? row - 1 : 0;
         final int col2 = col > 0 ? col - 1 : 0;
         return buildMultipleFilesHyperlinkInfo(
@@ -120,13 +121,13 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 构建多文件超链接信息（自定义点击动作）
+     * 构建多文件超链接信息（自定义动作处理器）
      * 
      * @param project 项目对象
      * @param files 文件列表
      * @param row 行号
-     * @param useFix 是否使用修复选择目标文件的功能
-     * @param action 自定义超链接点击处理器
+     * @param useFix 是否使用修复
+     * @param action 自定义超链接动作处理器
      * @return 超链接信息对象
      */
     @NotNull
@@ -147,7 +148,7 @@ public class HyperlinkUtils {
     /**
      * 创建忽略样式的文本属性
      * 
-     * @return 文本属性对象，如果创建失败则返回null
+     * @return 文本属性对象，失败时返回null
      */
     public static TextAttributes createIgnoreStyle() {
         try {
@@ -162,7 +163,7 @@ public class HyperlinkUtils {
     /**
      * 创建超链接样式的文本属性
      * 
-     * @return 文本属性对象，如果创建失败则返回null
+     * @return 文本属性对象，失败时返回null
      */
     @Nullable
     public static TextAttributes createHyperlinkAttributes() {
@@ -176,7 +177,7 @@ public class HyperlinkUtils {
     /**
      * 创建已访问超链接样式的文本属性
      * 
-     * @return 文本属性对象，如果创建失败则返回null
+     * @return 文本属性对象，失败时返回null
      */
     @Nullable
     public static TextAttributes createFollowedHyperlinkAttributes() {

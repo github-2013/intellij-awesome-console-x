@@ -17,8 +17,6 @@ import org.jetbrains.annotations.Nullable;
  * 修复内置MultipleFilesHyperlinkInfo的问题，将`popup.showInFocusCenter()`改为`popup.showCenteredInCurrentWindow(project)`
  * <p>
  * ref: https://github.com/JetBrains/intellij-community/blob/212.5080/platform/lang-impl/src/com/intellij/execution/filters/impl/MultipleFilesHyperlinkInfo.java#L116
- *
- * @author anyesu
  */
 public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase implements FileHyperlinkInfo {
 
@@ -28,7 +26,7 @@ public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase impleme
     /**
      * 构造函数
      * 
-     * @param hyperlinkInfoBase 要包装的超链接信息对象
+     * @param hyperlinkInfoBase 被包装的超链接信息对象
      */
     public MultipleFilesHyperlinkInfoWrapper(@NotNull HyperlinkInfoBase hyperlinkInfoBase) {
         this.hyperlinkInfoBase = hyperlinkInfoBase;
@@ -36,7 +34,6 @@ public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase impleme
 
     /**
      * 导航到超链接目标
-     * 如果没有指定位置，则将弹窗显示在项目窗口中心
      * 
      * @param project 项目对象
      * @param hyperlinkLocationPoint 超链接位置点
@@ -44,18 +41,17 @@ public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase impleme
     @Override
     public void navigate(@NotNull Project project, @Nullable RelativePoint hyperlinkLocationPoint) {
         if (null == hyperlinkLocationPoint) {
-            // Because we don’t know the actual width of the `popup`, we can only temporarily set the
-            // coordinates of the upper left corner of the `popup` to the center of the project window.
+            // 由于我们不知道popup的实际宽度，所以只能暂时将popup左上角的坐标设置为项目窗口的中心
             hyperlinkLocationPoint = getProjectCenter(project);
         }
         hyperlinkInfoBase.navigate(project, hyperlinkLocationPoint);
     }
 
     /**
-     * 获取项目窗口的中心位置
+     * 获取项目窗口的中心点
      * 
      * @param project 项目对象
-     * @return 项目窗口中心的相对位置，如果获取失败则返回null
+     * @return 项目窗口中心点的相对位置，失败时返回null
      */
     private RelativePoint getProjectCenter(@NotNull Project project) {
         try {
@@ -76,7 +72,7 @@ public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase impleme
     /**
      * 获取文件描述符
      * 
-     * @return 文件描述符，如果不支持则返回null
+     * @return 文件描述符对象，如果被包装对象不是FileHyperlinkInfo类型则返回null
      */
     @Nullable
     @Override

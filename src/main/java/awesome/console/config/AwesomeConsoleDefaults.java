@@ -82,4 +82,7 @@ public interface AwesomeConsoleDefaults {
 
     /** 默认是否解析符号链接 */
     boolean DEFAULT_RESOLVE_SYMLINK = false;
+
+    /** 默认是否保留ANSI颜色 */
+    boolean DEFAULT_PRESERVE_ANSI_COLORS = false;
 }

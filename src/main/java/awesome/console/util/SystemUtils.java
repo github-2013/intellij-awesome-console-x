@@ -1,9 +1,8 @@
 package awesome.console.util;
 
 /**
- * 系统工具类，提供操作系统相关的工具方法
- * 
- * @author anyesu
+ * 系统工具类
+ * 提供系统相关信息的获取功能
  */
 public class SystemUtils {
 
@@ -17,7 +16,7 @@ public class SystemUtils {
     }
 
     /**
-     * 获取用户主目录路径
+     * 获取用户主目录
      * 
      * @return 用户主目录路径
      */

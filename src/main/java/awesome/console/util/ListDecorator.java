@@ -7,11 +7,10 @@ import java.util.ListIterator;
 
 /**
  * List装饰器基类
- * 使用装饰器模式将所有List操作委托给内部的list对象
+ * 提供了List接口的默认实现，将所有操作委托给内部的list对象
  * 子类可以通过重写getList()方法来改变行为
  * 
- * @param <E> 列表元素类型
- * @author anyesu
+ * @param <E> 元素类型
  */
 @SuppressWarnings({"unused", "NullableProblems", "SuspiciousToArrayCall"})
 public class ListDecorator<E> implements List<E> {
@@ -20,7 +19,7 @@ public class ListDecorator<E> implements List<E> {
     protected List<E> list;
 
     /**
-     * 默认构造函数
+     * 无参构造函数
      */
     protected ListDecorator() {
     }
@@ -28,7 +27,7 @@ public class ListDecorator<E> implements List<E> {
     /**
      * 构造函数
      * 
-     * @param list 要装饰的列表
+     * @param list 被装饰的列表对象
      */
     protected ListDecorator(List<E> list) {
         this.list = list;
@@ -38,7 +37,7 @@ public class ListDecorator<E> implements List<E> {
      * 获取实际的列表对象
      * 子类可以重写此方法来改变行为
      * 
-     * @return 实际的列表对象
+     * @return 列表对象
      */
     protected List<E> getList() {
         return list;

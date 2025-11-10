@@ -3,7 +3,7 @@
   <grid id="27dc6" binding="mainPanel" layout-manager="GridLayoutManager" row-count="2" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
     <margin top="0" left="0" bottom="0" right="0"/>
     <constraints>
-      <xy x="20" y="20" width="735" height="519"/>
+      <xy x="20" y="20" width="735" height="552"/>
     </constraints>
     <properties/>
     <border type="none"/>
@@ -13,11 +13,10 @@
           <grid row="0" column="0" row-span="1" col-span="2" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
         </constraints>
         <properties>
-          <font style="1"/>
           <text value="Awesome Console X"/>
         </properties>
       </component>
-      <grid id="1a8bc" layout-manager="GridLayoutManager" row-count="14" column-count="4" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
+      <grid id="1a8bc" layout-manager="GridLayoutManager" row-count="15" column-count="4" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
         <margin top="0" left="0" bottom="0" right="0"/>
         <constraints>
           <grid row="1" column="0" row-span="1" col-span="2" vsize-policy="3" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
@@ -43,7 +42,7 @@
           </component>
           <vspacer id="c4d64">
             <constraints>
-              <grid row="13" column="0" row-span="1" col-span="2" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
+              <grid row="14" column="0" row-span="1" col-span="2" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
             </constraints>
           </vspacer>
           <component id="b5933" class="javax.swing.JLabel">
@@ -230,6 +229,15 @@
             </constraints>
             <properties>
               <text value="Resolve Symlinks (compatible with IDEA Resolve Symlinks plugin)."/>
+            </properties>
+          </component>
+          <component id="4c77b" class="javax.swing.JCheckBox" binding="preserveAnsiColorsCheckBox" custom-create="true" default-binding="true">
+            <constraints>
+              <grid row="13" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties>
+              <text value="Preserve ANSI color."/>
+              <toolTipText value="Preserve ANSI color codes and formatting in console output."/>
             </properties>
           </component>
         </children>

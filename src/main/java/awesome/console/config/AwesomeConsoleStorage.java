@@ -96,6 +96,9 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 忽略模式正则表达式文本 */
     private volatile String ignorePatternText = DEFAULT_IGNORE_PATTERN_TEXT;
 
+    /** 是否保留ANSI颜色 */
+    public volatile boolean preserveAnsiColors = DEFAULT_PRESERVE_ANSI_COLORS;
+
     /** 文件类型列表（逗号分隔） */
     private volatile String fileTypes;
 

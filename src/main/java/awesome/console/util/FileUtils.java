@@ -19,9 +19,8 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 文件工具类，提供文件路径处理、JAR文件处理、符号链接解析等功能
- * 
- * @author anyesu
+ * 文件工具类
+ * 提供文件路径处理、JAR文件处理、符号链接解析等功能
  */
 public class FileUtils {
 
@@ -32,10 +31,10 @@ public class FileUtils {
     public static final String JAR_SEPARATOR = "!/";
 
     /**
-     * 规范化路径中的斜杠，将反斜杠统一转换为正斜杠
+     * 标准化路径中的斜杠，将反斜杠转换为正斜杠
      * 
      * @param path 原始路径
-     * @return 规范化后的路径
+     * @return 标准化后的路径
      */
     public static String normalizeSlashes(@NotNull final String path) {
         return path.replace('\\', '/');
@@ -54,7 +53,7 @@ public class FileUtils {
 
     /**
      * 分割JAR文件路径
-     * 例如："jar:file:///path/to/jar.jar!/resource.xml" 会被转换为 ["/path/to/jar.jar", "resource.xml"]
+     * 例如: "jar:file:///path/to/jar.jar!/resource.xml" 会被转换为 ["/path/to/jar.jar", "resource.xml"]
      * <p>
      * ref: https://github.com/JetBrains/intellij-community/blob/212.5080/plugins/ide-features-trainer/src/training/project/FileUtils.kt#L119-L127
      * ref: https://github.com/JetBrains/intellij-community/blob/212.5080/platform/util/src/com/intellij/util/io/URLUtil.java#L138
@@ -90,14 +89,14 @@ public class FileUtils {
      * 判断是否为Unix风格的绝对路径
      * 
      * @param path 待检查的路径
-     * @return 如果以/或\开头则返回true
+     * @return 如果路径以/或\开头则返回true
      */
     public static boolean isUnixAbsolutePath(@NotNull String path) {
         return path.startsWith("/") || path.startsWith("\\");
     }
 
     /**
-     * 判断是否为Windows风格的绝对路径
+     * 判断是否为Windows风格的绝对路径（如C:\path）
      * 
      * @param path 待检查的路径
      * @return 如果匹配Windows驱动器模式则返回true
@@ -110,7 +109,7 @@ public class FileUtils {
      * 判断是否为UNC路径（Windows网络路径）
      * 
      * @param path 待检查的路径
-     * @return 如果是UNC路径则返回true
+     * @return 如果是Windows系统且路径以//或\\开头则返回true
      */
     public static boolean isUncPath(@NotNull String path) {
         return SystemUtils.isWindows() &&
@@ -203,13 +202,12 @@ public class FileUtils {
      * 
      * @param filePath 文件路径
      * @param resolveSymlink 是否解析符号链接
-     * @return 解析后的真实路径，如果解析失败或不需要解析则返回原路径
+     * @return 如果resolveSymlink为true则返回真实路径，否则返回原路径
      */
     public static String resolveSymlink(@NotNull final String filePath, final boolean resolveSymlink) {
         if (resolveSymlink) {
             try {
-                // to avoid DisposalException: Editor is already disposed
-                // caused by `IDEA Resolve Symlinks` plugin
+                // 避免由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
                 return Paths.get(filePath).toRealPath().toString();
             } catch (Throwable ignored) {
             }
@@ -222,7 +220,7 @@ public class FileUtils {
      * 
      * @param files VirtualFile列表
      * @param resolveSymlink 是否解析符号链接
-     * @return 解析后的VirtualFile列表，如果解析失败或不需要解析则返回原列表
+     * @return 如果resolveSymlink为true则返回解析后的VirtualFile列表，否则返回原列表
      */
     public static List<VirtualFile> resolveSymlinks(@NotNull List<VirtualFile> files, final boolean resolveSymlink) {
         if (resolveSymlink) {

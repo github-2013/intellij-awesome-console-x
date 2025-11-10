@@ -15,37 +15,48 @@
 <change-notes>
 		<![CDATA[
         <p>
+			<b>0.1337.24</b><br/>
+			<ul>
+				<li>Fix MSVC C++ compiler error format detection (e.g., file.cpp(42))</li>
+				<li>Support parentheses format with only line number (not just line:column)</li>
+				<li>Add comprehensive test cases for styled terminal paths with branch information</li>
+				<li>Support detection of paths with special symbols (⚡, ±, *, etc.)</li>
+				<li>Test coverage for various terminal prompt formats (parentheses, brackets)</li>
+				<li>Validate path extraction from git branch indicators</li>
+				<li>Support Unix-style (~/) and Windows-style paths in terminal prompts</li>
+				<li>Add ANSI color preservation feature with configurable toggle in settings</li>
+				<li>Support modern shell prompts (oh-my-posh, starship) with ANSI escape sequences</li>
+				<li>Intelligent ANSI escape sequence preprocessing for path detection</li>
+				<li>Test coverage for various ANSI color formats (RGB, 256-color, basic colors)</li>
+				<li>Backward compatible: ANSI filtering disabled by default</li>
+			</ul>
 			<b>0.1337.23</b><br/>
 			<ul>
-				<li><strong>🔧 Core Features Enhancement:</strong></li>
-				<li>• Add support for Rust module paths with line and column numbers</li>
-				<li>• Improve test coverage with 58 test cases (100% pass rate)</li>
-				<li>• Upgrade to IntelliJ Platform Gradle Plugin 2.2.1</li>
-				<li>• Compatible with IntelliJ IDEA 2024.2 and above</li>
-				<li>• Upgrade to Java 21 with Amazon Corretto support</li>
-				<li><strong>🎯 Configuration System:</strong></li>
-				<li>• Debug mode toggle for development and troubleshooting</li>
-				<li>• Configurable line length limit (default: 1024 characters)</li>
-				<li>• Chunk-based processing for long lines</li>
-				<li>• Multi-type matching: URLs, file paths, Java classes</li>
-				<li>• Result limit configuration (default: 100 matches per hyperlink)</li>
-				<li>• Custom file pattern regex support with required groups</li>
-				<li>• Ignore pattern regex to exclude specific matches</li>
-				<li>• "Choose Target File" popup compatibility fix</li>
-				<li>• Non-text file types configuration</li>
-				<li>• Symlink resolution support</li>
-				<li><strong>🚀 Performance Optimizations:</strong></li>
-				<li>• ConcurrentHashMap-based file caching mechanism</li>
-				<li>• Thread-safe operations with ReentrantReadWriteLock</li>
-				<li>• VFS and DumbMode event listeners for cache updates</li>
-				<li>• ThreadLocal Matcher instance caching</li>
-				<li>• Parallel stream processing for improved performance</li>
-				<li><strong>🛠️ Architecture Improvements:</strong></li>
-				<li>• Enhanced AwesomeLinkFilter with advanced regex patterns</li>
-				<li>• Improved AwesomeConsoleConfig with validation</li>
-				<li>• Persistent configuration storage in awesomeconsole.xml</li>
-				<li>• Comprehensive utility classes for file operations</li>
-				<li>• Project-level file iteration and caching</li>
+				<li>Add support for Rust module paths with line and column numbers</li>
+				<li>Improve test coverage with 58 test cases (100% pass rate)</li>
+				<li>Upgrade to IntelliJ Platform Gradle Plugin 2.2.1</li>
+				<li>Compatible with IntelliJ IDEA 2024.2 and above</li>
+				<li>Upgrade to Java 21 with Amazon Corretto support</li>
+				<li>Debug mode toggle for development and troubleshooting</li>
+				<li>Configurable line length limit (default: 1024 characters)</li>
+				<li>Chunk-based processing for long lines</li>
+				<li>Multi-type matching: URLs, file paths, Java classes</li>
+				<li>Result limit configuration (default: 100 matches per hyperlink)</li>
+				<li>Custom file pattern regex support with required groups</li>
+				<li>Ignore pattern regex to exclude specific matches</li>
+				<li>"Choose Target File" popup compatibility fix</li>
+				<li>Non-text file types configuration</li>
+				<li>Symlink resolution support</li>
+				<li>ConcurrentHashMap-based file caching mechanism</li>
+				<li>Thread-safe operations with ReentrantReadWriteLock</li>
+				<li>VFS and DumbMode event listeners for cache updates</li>
+				<li>ThreadLocal Matcher instance caching</li>
+				<li>Parallel stream processing for improved performance</li>
+				<li>Enhanced AwesomeLinkFilter with advanced regex patterns</li>
+				<li>Improved AwesomeConsoleConfig with validation</li>
+				<li>Persistent configuration storage in awesomeconsole.xml</li>
+				<li>Comprehensive utility classes for file operations</li>
+				<li>Project-level file iteration and caching</li>
 			</ul>
 			<b>0.1337.22</b><br/>
 			<ul>
@@ -145,11 +156,9 @@
 			<b>0.1337.4</b><br/>
 			<ul>
 				<li>Added config to Settings -> Other Settings:</li>
-					<ul>
-						<li>Limit the matching of very long lines by a specific length. This may increase performance.</li>
-						<li>Continue matching after the limit chunk by chunk, so links after the limit may also be found. This affects performance.</li>
-						<li>Match URLs (file, ftp, http(s)). Unchecking may increase performance.</li>
-					</ul>
+				<li>Limit the matching of very long lines by a specific length. This may increase performance.</li>
+				<li>Continue matching after the limit chunk by chunk, so links after the limit may also be found. This affects performance.</li>
+				<li>Match URLs (file, ftp, http(s)). Unchecking may increase performance.</li>
 			</ul>
 			<b>0.1337.3</b><br/>
 			<ul>
