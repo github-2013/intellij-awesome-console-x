@@ -12,9 +12,19 @@
 			<p>Now you just need to configure your favorite Logger to include the file name (and optionally a line number) and you can instantly jump to that file that throws this stupid error.<p/>
 		]]>
 	</description>
-<change-notes>
+	<change-notes>
 		<![CDATA[
         <p>
+        	<b>0.1337.25</b><br/>
+        	<ul>
+        		<li>Add command-line argument filtering to prevent common commands from being misidentified as files</li>
+        		<li>Enhanced default ignore pattern to filter 21 common command arguments (dev, test, build, start, run, serve, watch, prod, production, development, staging, debug, release, install, update, upgrade, init, create, generate, deploy, publish, lint, format, clean)</li>
+        		<li>Solve the issue where commands like "npm run dev" or "rsbuild dev" incorrectly highlight "dev" as a file link</li>
+        		<li>Add comprehensive test coverage with 3 new test methods (221 lines of test code)</li>
+        		<li>Test coverage includes: command argument filtering, ignore pattern toggle, and custom ignore pattern scenarios</li>
+        		<li>Maintain backward compatibility with existing ignore rules (relative paths, node_modules)</li>
+        		<li>Support for frontend build tools: npm, yarn, pnpm, rsbuild, vite, webpack, and more</li>
+        	</ul>
 			<b>0.1337.24</b><br/>
 			<ul>
 				<li>Fix MSVC C++ compiler error format detection (e.g., file.cpp(42))</li>

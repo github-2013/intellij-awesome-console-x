@@ -20,7 +20,6 @@ import org.jetbrains.annotations.NotNull;
  * 实现了 PersistentStateComponent 接口以支持配置的保存和加载
  * 
  * @see <a href="https://plugins.jetbrains.com/docs/intellij/persisting-state-of-components.html">Persisting State of Components</a>
- * @author awesome-console
  */
 @State(
         name = "Awesome Console Config",

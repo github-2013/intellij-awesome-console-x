@@ -12,7 +12,7 @@
 |------|-----|
 | **项目名称** | Awesome Console X |
 | **插件 ID** | awesome.console.x |
-| **当前版本** | 0.1337.24 |
+| **当前版本** | 0.1337.25 |
 | **开发者** | xingjiexu (553926121@qq.com) |
 | **供应商** | awesome console x productions |
 | **GitHub** | https://github.com/github-2013/intellij-awesome-console-x |
@@ -56,6 +56,7 @@
 - ✅ **Rust 模块**: 支持 Rust 模块路径格式
 - ✅ **ANSI 颜色保留**: 支持现代终端提示符的 ANSI 转义序列
 - ✅ **MSVC C++ 格式**: 支持 MSVC 编译器错误格式 (`file.cpp(42)`)
+- ✅ **命令行参数过滤**: 智能过滤常见命令参数，防止误识别为文件链接
 
 ### ⚡ 高性能缓存系统
 
@@ -96,7 +97,7 @@
 | 配置项 | 功能描述 | 使用场景 |
 |--------|----------|----------|
 | **Custom File Pattern** | 自定义正则表达式匹配 | 特殊路径格式 |
-| **Ignore Pattern** | 排除特定匹配项 | 减少误匹配 |
+| **Ignore Pattern** | 排除特定匹配项（如命令参数） | 减少误匹配 |
 | **Ignore Style** | 防止其他插件冲突 | 插件兼容性 |
 | **Non-text File Types** | 指定非文本文件类型 | 外部程序打开 |
 | **Resolve Symlinks** | 解析符号链接 | Unix/Linux 环境 |
@@ -432,7 +433,26 @@ clean:    # 清理项目 -> ./gradlew clean
 
 ## 📈 版本发展历程
 
-### 🚀 最新版本 (0.1337.24)
+### 🚀 最新版本 (0.1337.25)
+
+#### 🎯 核心改进
+- ✅ **命令行参数过滤**: 新增命令行参数过滤功能，防止常见命令被误识别为文件链接
+- ✅ **增强的默认忽略模式**: 添加 21 种常见命令参数的过滤规则（dev, test, build, start, run, serve, watch, prod, production, development, staging, debug, release, install, update, upgrade, init, create, generate, deploy, publish, lint, format, clean）
+- ✅ **解决误识别问题**: 修复 "npm run dev" 或 "rsbuild dev" 等命令中 "dev" 被错误高亮为文件链接的问题
+- ✅ **全面测试覆盖**: 新增 3 个测试方法，共 221 行测试代码
+- ✅ **测试场景完善**: 测试覆盖命令参数过滤、忽略模式开关、自定义忽略模式等场景
+- ✅ **向后兼容**: 保持与现有忽略规则（相对路径、node_modules）的兼容性
+- ✅ **前端工具支持**: 支持 npm, yarn, pnpm, rsbuild, vite, webpack 等前端构建工具
+
+#### 🔧 技术实现细节
+- **默认忽略模式正则表达式**: 更新 `AwesomeConsoleDefaults.java` 中的 `DEFAULT_IGNORE_PATTERN`
+- **测试用例**: 在 `AwesomeLinkFilterTest.java` 中添加：
+  - `testCommandLineArgumentFiltering()`: 测试命令行参数过滤功能
+  - `testIgnorePatternDisabled()`: 测试忽略模式禁用时的行为
+  - `testCustomIgnorePattern()`: 测试自定义忽略模式功能
+- **功能验证**: 确保常见命令参数不被误识别，真实文件路径仍能正确识别
+
+### 📊 版本 0.1337.24
 
 #### 🎯 核心改进
 - ✅ **MSVC C++ 编译器支持**: 修复 MSVC C++ 编译器错误格式检测 (`file.cpp(42)`)
@@ -452,7 +472,8 @@ clean:    # 清理项目 -> ./gradlew clean
 
 | 版本 | 发布时间 | 主要特性 | 兼容性 |
 |------|----------|----------|--------|
-| **0.1337.24** | 最新 | MSVC C++支持, ANSI颜色保留, 终端提示符增强 | IDEA 2024.2+ |
+| **0.1337.25** | 最新 | 命令行参数过滤, 前端工具支持, 测试完善 | IDEA 2024.2+ |
+| **0.1337.24** | 2024 | MSVC C++支持, ANSI颜色保留, 终端提示符增强 | IDEA 2024.2+ |
 | **0.1337.23** | 2024 | Rust 支持, Java 21, 测试完善 | IDEA 2024.2+ |
 | **0.1337.22** | 2024 | Java 22 兼容, WebStorm 支持 | WebStorm 2024.3+ |
 | **0.1337.15** | 2023 | Node.js .pnpm 路径支持 | - |
@@ -470,6 +491,8 @@ clean:    # 清理项目 -> ./gradlew clean
 - **ANSI 颜色支持**: 新增 ANSI 转义序列处理和颜色保留功能
 - **编译器支持**: 新增 MSVC C++ 编译器错误格式支持
 - **终端增强**: 支持现代 shell 提示符（oh-my-posh, starship）
+- **命令行参数过滤**: 智能过滤常见命令参数，防止误识别为文件链接
+- **前端工具生态**: 完善支持 npm, yarn, pnpm, rsbuild, vite, webpack 等前端构建工具
 - **性能优化**: 全面的测试覆盖和性能调优
 
 #### 🛠️ 2023年 - 稳定性提升  

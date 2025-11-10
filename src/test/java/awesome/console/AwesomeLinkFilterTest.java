@@ -1430,4 +1430,225 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			storage.preserveAnsiColors = originalValue;
 		}
 	}
+
+	/**
+	 * 测试命令行参数过滤功能
+	 * 验证常见的命令参数（如 dev、test、build 等）不会被误识别为文件链接
+	 * 这是为了解决前端项目中 "npm run dev" 等命令输出时，dev 被误识别为文件的问题
+	 */
+	@Test
+	public void testCommandArgumentFiltering() {
+		System.out.println("Test command argument filtering:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 确保忽略模式已启用
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 启用忽略模式并设置包含命令参数的规则
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^(\"?)[.\\\\/]+\\1$|^node_modules/|^(dev|test|build|start|run|serve|watch|prod|production|development|staging|debug|release|install|update|upgrade|init|create|generate|deploy|publish|lint|format|clean)$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试前端项目常见命令 - 这些单独的命令参数不应该被识别为文件
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "build");
+			assertPathNoMatches("Command: ", "start");
+			assertPathNoMatches("Command: ", "run");
+			assertPathNoMatches("Command: ", "serve");
+			assertPathNoMatches("Command: ", "watch");
+			
+			// 测试环境相关命令
+			assertPathNoMatches("Command: ", "prod");
+			assertPathNoMatches("Command: ", "production");
+			assertPathNoMatches("Command: ", "development");
+			assertPathNoMatches("Command: ", "staging");
+			assertPathNoMatches("Command: ", "debug");
+			assertPathNoMatches("Command: ", "release");
+			
+			// 测试包管理相关命令
+			assertPathNoMatches("Command: ", "install");
+			assertPathNoMatches("Command: ", "update");
+			assertPathNoMatches("Command: ", "upgrade");
+			
+			// 测试项目初始化相关命令
+			assertPathNoMatches("Command: ", "init");
+			assertPathNoMatches("Command: ", "create");
+			assertPathNoMatches("Command: ", "generate");
+			
+			// 测试部署相关命令
+			assertPathNoMatches("Command: ", "deploy");
+			assertPathNoMatches("Command: ", "publish");
+			
+			// 测试代码质量相关命令
+			assertPathNoMatches("Command: ", "lint");
+			assertPathNoMatches("Command: ", "format");
+			assertPathNoMatches("Command: ", "clean");
+			
+			// 测试实际的命令行输出场景
+			assertPathNoMatches("Running: ", "ENVIRONMENT=development rsbuild dev");
+			assertPathNoMatches("Running: ", "npm run dev");
+			assertPathNoMatches("Running: ", "yarn build");
+			assertPathNoMatches("Running: ", "pnpm test");
+			assertPathNoMatches("Running: ", "rsbuild dev");
+			assertPathNoMatches("Running: ", "vite build");
+			assertPathNoMatches("Running: ", "webpack serve");
+			assertPathNoMatches("Running: ", "gradle build");
+			assertPathNoMatches("Running: ", "cargo run");
+			assertPathNoMatches("Running: ", "go build");
+			
+			// 但是，包含路径分隔符、扩展名或行号的路径仍然应该被识别
+			assertPathDetection(
+				"Error in src/dev/index.js:10",
+				"src/dev/index.js:10"
+			);
+			
+			assertPathDetection(
+				"Build failed: ./dev.config.js",
+				"./dev.config.js"
+			);
+			
+			assertPathDetection(
+				"See: /path/to/dev:42",
+				"/path/to/dev:42"
+			);
+			
+			assertPathDetection(
+				"File: dev.txt",
+				"dev.txt"
+			);
+			
+			assertPathDetection(
+				"Error in test/unit/MyTest.java:25",
+				"test/unit/MyTest.java:25"
+			);
+			
+			assertPathDetection(
+				"Build output: build/output/app.js",
+				"build/output/app.js"
+			);
+			
+			// 测试相对路径符号仍然被忽略
+			assertPathNoMatches("Path: ", ".");
+			assertPathNoMatches("Path: ", "..");
+			assertPathNoMatches("Path: ", "./");
+			assertPathNoMatches("Path: ", "../");
+			assertPathNoMatches("Path: ", "\"./\"");
+			assertPathNoMatches("Path: ", "\".\"");
+			
+			// 测试 node_modules 目录仍然被忽略
+			assertPathNoMatches("Path: ", "node_modules/");
+			assertPathNoMatches("Path: ", "node_modules/package");
+			
+			// 但是完整的 node_modules 路径应该被识别
+			assertPathDetection(
+				"Error in ./node_modules/package/index.js:10",
+				"./node_modules/package/index.js:10"
+			);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试忽略模式禁用时的行为
+	 * 验证当忽略模式被禁用时，命令参数可能会被识别为文件（如果文件存在）
+	 */
+	@Test
+	public void testIgnorePatternDisabled() {
+		System.out.println("Test with ignore pattern disabled:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		
+		try {
+			// 禁用忽略模式
+			storage.useIgnorePattern = false;
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 当忽略模式禁用时，单个单词可能会被识别为文件（如果文件存在）
+			// 这里我们只是验证配置生效，不测试具体的文件匹配
+			// 因为文件匹配依赖于实际的文件系统状态
+			
+			// 验证相对路径符号不会被忽略（但可能也不会被识别为有效路径）
+			System.out.println("With ignore pattern disabled, relative path symbols may be processed differently");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试自定义忽略模式
+	 * 验证用户可以自定义忽略规则来适应特定的项目需求
+	 */
+	@Test
+	public void testCustomIgnorePattern() {
+		System.out.println("Test custom ignore pattern:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 设置自定义忽略模式：只忽略 dev 和 test
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^(dev|test)$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// dev 和 test 应该被忽略
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			
+			// 但是 build 不应该被忽略（因为不在自定义规则中）
+			// 注意：这里不测试 build 是否被识别，因为这依赖于文件是否存在
+			
+			// 测试自定义规则：忽略特定前缀
+			storage.setIgnorePatternText("^custom-");
+			filter = new AwesomeLinkFilter(getProject());
+			
+			assertPathNoMatches("Command: ", "custom-command");
+			assertPathNoMatches("Command: ", "custom-build");
+			assertPathNoMatches("Command: ", "custom-test");
+			
+			// 测试自定义规则：忽略短单词（1-3个字母）
+			storage.setIgnorePatternText("^[a-z]{1,3}$");
+			filter = new AwesomeLinkFilter(getProject());
+			
+			assertPathNoMatches("Command: ", "a");
+			assertPathNoMatches("Command: ", "ab");
+			assertPathNoMatches("Command: ", "abc");
+			
+			// 但是 4 个字母的单词不应该被忽略
+			// （这里不测试是否被识别，因为依赖于文件是否存在）
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
 }

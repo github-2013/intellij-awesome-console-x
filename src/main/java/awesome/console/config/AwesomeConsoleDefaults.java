@@ -59,8 +59,8 @@ public interface AwesomeConsoleDefaults {
     /** 默认是否使用忽略模式 */
     boolean DEFAULT_USE_IGNORE_PATTERN = true;
 
-    /** 默认忽略模式正则表达式文本（忽略相对路径符号和node_modules目录） */
-    String DEFAULT_IGNORE_PATTERN_TEXT = "^(\"?)[.\\\\/]+\\1$|^node_modules/";
+    /** 默认忽略模式正则表达式文本（忽略相对路径符号、node_modules目录和常见命令参数） */
+    String DEFAULT_IGNORE_PATTERN_TEXT = "^(\"?)[.\\\\/]+\\1$|^node_modules/|^(dev|test|build|start|run|serve|watch|prod|production|development|staging|debug|release|install|update|upgrade|init|create|generate|deploy|publish|lint|format|clean)$";
 
     /** 默认忽略模式正则表达式 */
     Pattern DEFAULT_IGNORE_PATTERN = Pattern.compile(
