@@ -6,8 +6,7 @@ import java.util.regex.Pattern;
 /**
  * Awesome Console 默认配置接口
  * 定义了插件的所有默认配置常量，包括调试模式、行长度限制、搜索选项、正则表达式等
- * 
- * @author anyesu
+ *
  */
 public interface AwesomeConsoleDefaults {
 
@@ -60,7 +59,7 @@ public interface AwesomeConsoleDefaults {
     boolean DEFAULT_USE_IGNORE_PATTERN = true;
 
     /** 默认忽略模式正则表达式文本（忽略相对路径符号、node_modules目录和常见命令参数） */
-    String DEFAULT_IGNORE_PATTERN_TEXT = "^(\"?)[.\\\\/]+\\1$|^node_modules/|^(dev|test|build|start|run|serve|watch|prod|production|development|staging|debug|release|install|update|upgrade|init|create|generate|deploy|publish|lint|format|clean)$";
+    String DEFAULT_IGNORE_PATTERN_TEXT = "^\"(\\.{1,2}[\\\\/]*)\"$|^(\\.{3,}[\\\\/]*|[\\\\/]+\\.{0,2})$|^node_modules/|^(?i)(dev|test|testing|build|building|start|starting|run|running|serve|serving|watch|watching|prod|production|development|staging|debug|release|install|installing|update|updating|upgrade|upgrading|init|create|creating|generat(e|ing)|deploy|deploying|publish|publishing|lint|linting|format|formatting|clean|cleaning|compil(e|ing)|bundl(e|ing)|pack|packing|transpil(e|ing)|minify|minifying)(\\.\\.\\.|[,:;!?].*|\\s.*|(?![a-zA-Z0-9_]))$";
 
     /** 默认忽略模式正则表达式 */
     Pattern DEFAULT_IGNORE_PATTERN = Pattern.compile(

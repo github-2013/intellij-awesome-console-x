@@ -1222,6 +1222,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 */
 	@NotNull
 	public List<FileLinkMatch> detectPaths(@NotNull String line) {
+		// 准备过滤器，初始化自定义匹配器和忽略匹配器
+		prepareFilter();
+		
 		// 预处理：根据配置决定是否移除ANSI转义序列
 		line = preprocessLine(line);
 		
@@ -1290,7 +1293,12 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 					row, col
 			));
 		}
-		return results;
+		
+		// 应用忽略模式过滤，同时检查是否是省略号的一部分
+		final String finalLine = line;
+		return results.stream()
+				.filter(fileLinkMatch -> !shouldIgnore(fileLinkMatch.match) && !isPartOfEllipsis(finalLine, fileLinkMatch))
+				.collect(Collectors.toList());
 	}
 
 	/**
@@ -1358,5 +1366,40 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		final Matcher ignoreMatcher = this.ignoreMatcher.get();
 		// 如果启用了忽略模式且匹配器存在且匹配成功，则返回 true
 		return config.useIgnorePattern && null != ignoreMatcher && ignoreMatcher.reset(match).find();
+	}
+
+	/**
+	 * 检查匹配项是否是省略号的一部分
+	 * 如果匹配的是 ".." 且前面有字母+点号的模式，则认为是省略号的一部分
+	 */
+	private boolean isPartOfEllipsis(@NotNull final String line, @NotNull final FileLinkMatch fileLinkMatch) {
+		// 只检查点号匹配
+		if (!fileLinkMatch.match.matches("^\\.+$")) {
+			return false;
+		}
+		
+		// 获取匹配的起始位置
+		int startPos = fileLinkMatch.start;
+		
+		// 检查前面是否有字母+点号的模式（如 "Building." + ".."）
+		if (startPos >= 2) {
+			// 检查前面两个字符：倒数第二个是字母，倒数第一个是点号
+			char prevChar1 = line.charAt(startPos - 1);  // 紧前面的字符
+			char prevChar2 = line.charAt(startPos - 2);  // 再前面的字符
+			
+			if (prevChar1 == '.' && Character.isLetter(prevChar2) && fileLinkMatch.match.length() >= 2) {
+				return true;
+			}
+		}
+		
+		// 也检查直接前面是字母的情况
+		if (startPos > 0) {
+			char prevChar = line.charAt(startPos - 1);
+			if (Character.isLetter(prevChar) && fileLinkMatch.match.length() >= 2) {
+				return true;
+			}
+		}
+		
+		return false;
 	}
 }
