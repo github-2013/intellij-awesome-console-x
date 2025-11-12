@@ -1,9 +1,6 @@
 package awesome.console.util;
 
-import java.util.Collection;
-import java.util.Iterator;
-import java.util.List;
-import java.util.ListIterator;
+import java.util.*;
 
 /**
  * List装饰器基类
@@ -85,7 +82,7 @@ public class ListDecorator<E> implements List<E> {
 
     @Override
     public boolean containsAll(Collection<?> c) {
-        return this.getList().containsAll(c);
+        return new HashSet<>(this.getList()).containsAll(c);
     }
 
     @Override

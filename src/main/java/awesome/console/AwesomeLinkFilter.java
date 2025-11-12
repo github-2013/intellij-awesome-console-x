@@ -54,7 +54,7 @@ import java.util.stream.Collectors;
  * Awesome Link Filter 核心过滤器类
  * 负责在控制台输出中识别并高亮显示文件路径和URL链接
  * 支持在dumb模式下运行（当索引在后台更新时）
- * 
+ *
  * 主要功能：
  * 1. 使用正则表达式匹配文件路径和URL
  * 2. 维护项目文件缓存以提高匹配性能
@@ -109,6 +109,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
 	 * 文件名中允许的字符正则表达式
 	 * 定义公共静态final常量，匹配文件名中允许的字符（排除空白字符、控制字符和文件系统保留字符）
+	 * 注意：包含花括号{}以支持Git rename格式（如 {old => new}）
 	 *
 	 *  */
 	public static final String REGEX_CHAR = "[^\\s\\x00-\\x1F\"*/:<>?\\\\|\\x7F]";
@@ -1054,24 +1055,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 					if (null == file || !isInContent(file, event instanceof VFileDeleteEvent)) {
 						continue;
 					}
-					if (event instanceof VFileCopyEvent) {
-						newFiles.add(((VFileCopyEvent) event).findCreatedFile());
-					} else if (event instanceof VFileCreateEvent) {
-						newFiles.add(file);
-					} else if (event instanceof VFileDeleteEvent) {
-						deleteFile = true;
-					} else if (event instanceof VFileMoveEvent) {
-						// No processing is required since the file name has not changed and
-						// the path to the virtual file will be updated automatically
-					} else if (event instanceof VFilePropertyChangeEvent) {
-						final VFilePropertyChangeEvent pce = (VFilePropertyChangeEvent) event;
-						// Rename file
-						if (VirtualFile.PROP_NAME.equals(pce.getPropertyName())
-								&& !Objects.equals(pce.getNewValue(), pce.getOldValue())) {
-							deleteFile = true;
-							newFiles.add(file);
-						}
-					}
+                    switch (event) {
+                        case VFileCopyEvent vFileCopyEvent -> newFiles.add(vFileCopyEvent.findCreatedFile());
+                        case VFileCreateEvent vFileCreateEvent -> newFiles.add(file);
+                        case VFileDeleteEvent vFileDeleteEvent -> deleteFile = true;
+                        case VFileMoveEvent vFileMoveEvent -> {
+                            // No processing is required since the file name has not changed and
+                            // the path to the virtual file will be updated automatically
+                        }
+                        case VFilePropertyChangeEvent pce -> {
+                            // Rename file
+                            if (VirtualFile.PROP_NAME.equals(pce.getPropertyName())
+                                    && !Objects.equals(pce.getNewValue(), pce.getOldValue())) {
+                                deleteFile = true;
+                                newFiles.add(file);
+                            }
+                        }
+                        default -> {
+                        }
+                    }
 				}
 
 				if (newFiles.isEmpty() && !deleteFile) {

@@ -24,6 +24,9 @@
         		<li>Added 5 new test methods with 143 lines of test code for comprehensive validation</li>
         		<li>Improved detection accuracy: prevents "Building...", "word.", "(\)" from being misidentified as files</li>
         		<li>Better handling of punctuation in console output while maintaining valid path detection</li>
+        		<li>Added support for Git rename format with directory path changes in curly braces (e.g., {old/path => new/path}/file.ts)</li>
+        		<li>Enhanced REGEX_CHAR to properly handle curly braces in Git rename operations</li>
+        		<li>Enabled previously commented test cases for complex Git rename scenarios with directory restructuring</li>
         	</ul>
         	<b>0.1337.25</b><br/>
         	<ul>
