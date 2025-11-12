@@ -3,8 +3,6 @@ package awesome.console.match;
 /**
  * URL链接匹配结果类
  * 用于存储在控制台输出中检测到的URL链接信息
- * 
- * @author awesome-console
  */
 public class URLLinkMatch {
 	/** 匹配到的URL字符串 */

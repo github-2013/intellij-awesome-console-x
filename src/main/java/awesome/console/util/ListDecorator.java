@@ -12,7 +12,7 @@ import java.util.ListIterator;
  * 
  * @param <E> 元素类型
  */
-@SuppressWarnings({"unused", "NullableProblems", "SuspiciousToArrayCall"})
+@SuppressWarnings({"unused", "NullableProblems"})
 public class ListDecorator<E> implements List<E> {
 
     /** 被装饰的列表对象 */

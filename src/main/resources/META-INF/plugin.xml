@@ -15,6 +15,16 @@
 	<change-notes>
 		<![CDATA[
         <p>
+        	<b>0.1337.26</b><br/>
+        	<ul>
+        		<li>Enhanced link filtering with new regex patterns for dots, backslashes, and letters-only matches</li>
+        		<li>Refactored ignore logic: renamed isPartOfEllipsis to shouldIgnoreMatch with expanded functionality</li>
+        		<li>Added intelligent filtering for sentence-ending dots, ellipsis, and backslashes</li>
+        		<li>Simplified default ignore pattern to: ^node_modules/|^(?i)(test|testing|start|starting)$</li>
+        		<li>Added 5 new test methods with 143 lines of test code for comprehensive validation</li>
+        		<li>Improved detection accuracy: prevents "Building...", "word.", "(\)" from being misidentified as files</li>
+        		<li>Better handling of punctuation in console output while maintaining valid path detection</li>
+        	</ul>
         	<b>0.1337.25</b><br/>
         	<ul>
         		<li>Add command-line argument filtering to prevent common commands from being misidentified as files</li>

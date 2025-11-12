@@ -3,8 +3,6 @@ package awesome.console.match;
 /**
  * 文件链接匹配结果类
  * 用于存储在控制台输出中检测到的文件路径链接信息，包括文件路径、行号、列号等
- * 
- * @author awesome-console
  */
 public class FileLinkMatch {
 	/** 完整的链接匹配字符串（包含行号、列号等附加信息） */
