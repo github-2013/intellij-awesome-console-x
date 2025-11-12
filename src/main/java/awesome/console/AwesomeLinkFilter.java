@@ -248,10 +248,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			"(?<link>[(']?(?<protocol>((jar:)?([a-zA-Z]+):)([/\\\\~]))(?<path>([-.!~*\\\\()\\w;/?:@&=+$,%#]" + DWC + "?)+))",
 			Pattern.UNICODE_CHARACTER_CLASS);
 
-	/** Java 堆栈跟踪元素匹配模式 */
+	/** 堆栈跟踪元素匹配模式 */
 	// 定义公共静态final模式，匹配 Java 堆栈跟踪中的一行（如 "at com.example.MyClass.method(MyClass.java:10)"）
 	// 用于识别并跳过堆栈跟踪行，因为 IntelliJ 的 ExceptionFilter 已经处理了这些行
 	public static final Pattern STACK_TRACE_ELEMENT_PATTERN = Pattern.compile("^[\\w|\\s]*at\\s+(.+)\\.(.+)\\((.+\\.(java|kts?)):(\\d+)\\)");
+
+	/** 只包含点号的匹配模式 */
+	private static final Pattern ONLY_DOTS_PATTERN = Pattern.compile("^\\.+$");
+	
+	/** 只包含反斜杠的匹配模式 */
+	private static final Pattern ONLY_BACKSLASHES_PATTERN = Pattern.compile("^\\\\+$");
+	
+	/** 只包含字母的匹配模式 */
+	private static final Pattern ONLY_LETTERS_PATTERN = Pattern.compile("^[A-Za-z]+$");
 
 	/** 最大搜索深度（用于完全限定类名搜索） */
 	// 定义私有静态final常量，限制完全限定类名搜索的递归深度
@@ -1294,10 +1303,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			));
 		}
 		
-		// 应用忽略模式过滤，同时检查是否是省略号的一部分
+		// 应用忽略模式过滤，同时检查是否应该被忽略（省略号、反斜杠、句子末尾点号等）
 		final String finalLine = line;
 		return results.stream()
-				.filter(fileLinkMatch -> !shouldIgnore(fileLinkMatch.match) && !isPartOfEllipsis(finalLine, fileLinkMatch))
+				.filter(fileLinkMatch -> !shouldIgnore(fileLinkMatch.match) && !shouldIgnoreMatch(finalLine, fileLinkMatch))
 				.collect(Collectors.toList());
 	}
 
@@ -1369,37 +1378,136 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	}
 
 	/**
-	 * 检查匹配项是否是省略号的一部分
-	 * 如果匹配的是 ".." 且前面有字母+点号的模式，则认为是省略号的一部分
+	 * 检查匹配项是否应该被忽略（不应该被识别为文件路径）
+	 * 包括以下情况：
+	 * 1. 省略号的一部分（如 "Building..."）
+	 * 2. 反斜杠（如 "(\)"）
+	 * 3. 句子末尾的点号（前面是字母或数字）
+	 * 4. 单词后紧跟点号的情况（如 "sentence."）
 	 */
-	private boolean isPartOfEllipsis(@NotNull final String line, @NotNull final FileLinkMatch fileLinkMatch) {
-		// 只检查点号匹配
-		if (!fileLinkMatch.match.matches("^\\.+$")) {
+	private boolean shouldIgnoreMatch(@NotNull final String line, @NotNull final FileLinkMatch fileLinkMatch) {
+		String match = fileLinkMatch.match;
+		int startPos = fileLinkMatch.start;
+		int endPos = fileLinkMatch.end;
+		
+		// 检查是否只包含点号
+		boolean isOnlyDots = ONLY_DOTS_PATTERN.matcher(match).matches();
+		
+		// 检查是否只包含反斜杠
+		boolean isOnlyBackslashes = ONLY_BACKSLASHES_PATTERN.matcher(match).matches();
+		
+		// 如果是反斜杠，直接忽略
+		if (isOnlyBackslashes) {
+			return true;
+		}
+		
+		// 如果不是点号，检查是否是单词后紧跟点号的情况
+		if (!isOnlyDots) {
+			return isWordFollowedByDot(line, match, endPos);
+		}
+		
+		// 以下处理只包含点号的情况
+		
+		// 检查是否是省略号（前面有字母）
+		if (isEllipsisAfterLetter(line, match, startPos)) {
+			return true;
+		}
+		
+		// 检查是否是句子末尾的点号
+		if (match.equals(".") && isDotAtSentenceEnd(line, startPos, endPos)) {
+			return true;
+		}
+		
+		return false;
+	}
+	
+	/**
+	 * 检查是否是单词后紧跟点号的情况（如 "word."）
+	 * 
+	 * @param line 完整的行
+	 * @param match 匹配的字符串
+	 * @param endPos 匹配结束位置
+	 * @return 如果是单词后紧跟点号则返回true
+	 */
+	private boolean isWordFollowedByDot(@NotNull final String line, @NotNull final String match, int endPos) {
+		// 检查匹配项后面是否紧跟点号（句子末尾）
+		if (endPos < line.length() && line.charAt(endPos) == '.') {
+			// 检查点号后面是否是空白字符或行尾
+			boolean nextIsWhitespaceOrEnd = isNextCharWhitespaceOrEnd(line, endPos + 1);
+			// 检查匹配项是否只包含字母（纯单词）
+			boolean isOnlyLetters = ONLY_LETTERS_PATTERN.matcher(match).matches();
+			
+			return nextIsWhitespaceOrEnd && isOnlyLetters;
+		}
+		return false;
+	}
+	
+	/**
+	 * 检查是否是省略号（前面有字母）
+	 * 包括两种情况：
+	 * 1. "Building." + ".." （前面有字母+点号）
+	 * 2. "Building.." （前面直接是字母）
+	 * 
+	 * @param line 完整的行
+	 * @param match 匹配的字符串（只包含点号）
+	 * @param startPos 匹配开始位置
+	 * @return 如果是省略号则返回true
+	 */
+	private boolean isEllipsisAfterLetter(@NotNull final String line, @NotNull final String match, int startPos) {
+		// 至少需要两个点号才认为是省略号
+		if (match.length() < 2) {
 			return false;
 		}
 		
-		// 获取匹配的起始位置
-		int startPos = fileLinkMatch.start;
-		
 		// 检查前面是否有字母+点号的模式（如 "Building." + ".."）
 		if (startPos >= 2) {
-			// 检查前面两个字符：倒数第二个是字母，倒数第一个是点号
 			char prevChar1 = line.charAt(startPos - 1);  // 紧前面的字符
 			char prevChar2 = line.charAt(startPos - 2);  // 再前面的字符
 			
-			if (prevChar1 == '.' && Character.isLetter(prevChar2) && fileLinkMatch.match.length() >= 2) {
+			if (prevChar1 == '.' && Character.isLetter(prevChar2)) {
 				return true;
 			}
 		}
 		
-		// 也检查直接前面是字母的情况
+		// 检查直接前面是字母的情况（省略号：如 "Building.."）
 		if (startPos > 0) {
 			char prevChar = line.charAt(startPos - 1);
-			if (Character.isLetter(prevChar) && fileLinkMatch.match.length() >= 2) {
+			if (Character.isLetter(prevChar)) {
 				return true;
 			}
 		}
 		
 		return false;
+	}
+	
+	/**
+	 * 检查是否是句子末尾的点号
+	 * 如果前面是字母、数字或右括号，且后面是空白字符或行尾，则认为是句子末尾
+	 * 
+	 * @param line 完整的行
+	 * @param startPos 匹配开始位置
+	 * @param endPos 匹配结束位置
+	 * @return 如果是句子末尾的点号则返回true
+	 */
+	private boolean isDotAtSentenceEnd(@NotNull final String line, int startPos, int endPos) {
+		if (startPos <= 0) {
+			return false;
+		}
+		
+		char prevChar = line.charAt(startPos - 1);
+		boolean nextIsWhitespaceOrEnd = isNextCharWhitespaceOrEnd(line, endPos);
+		
+		return (Character.isLetterOrDigit(prevChar) || prevChar == ')') && nextIsWhitespaceOrEnd;
+	}
+	
+	/**
+	 * 检查指定位置的下一个字符是否是空白字符或已到达行尾
+	 * 
+	 * @param line 完整的行
+	 * @param pos 要检查的位置
+	 * @return 如果是空白字符或行尾则返回true
+	 */
+	private boolean isNextCharWhitespaceOrEnd(@NotNull final String line, int pos) {
+		return pos >= line.length() || Character.isWhitespace(line.charAt(pos));
 	}
 }

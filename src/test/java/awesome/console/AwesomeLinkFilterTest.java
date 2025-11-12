@@ -7,7 +7,6 @@ import static awesome.console.IntegrationTest.TEST_DIR_WINDOWS2;
 import static awesome.console.IntegrationTest.getFileProtocols;
 import static awesome.console.IntegrationTest.getJarFileProtocols;
 import static awesome.console.IntegrationTest.parseTemplate;
-import static awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT;
 
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
@@ -108,6 +107,87 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	@Test
 	public void testFileContainingDotsWithoutDirectory() {
 		assertPathDetection("Just a file: t.es.t.txt", "t.es.t.txt");
+	}
+
+
+	/**
+	 * 测试句子末尾的独立点号不应该被识别为文件
+	 * 注意：点号在某些上下文中是合法的路径（如表示当前目录），所以只测试句子末尾的情况
+	 */
+	@Test
+	public void testStandaloneDotShouldNotBeDetected() {
+		// 测试句子末尾的点号不应该被识别
+		List<FileLinkMatch> matches = filter.detectPaths("word.");
+		List<String> results = matches.stream().map(it -> it.match).collect(Collectors.toList());
+		// "word"可能被识别为文件名，但点号"."不应该被识别
+		assertFalse("Dot at end of sentence should not be detected", results.contains("."));
+	}
+
+
+	/**
+	 * 测试句子末尾的点号不应该被识别为文件
+	 * 注意：这里测试的是点号本身，而不是句子中的单词
+	 * 单词可能是合法的文件名（如没有扩展名的文件），所以不应该被过滤
+	 */
+	@Test
+	public void testSentenceEndingDotShouldNotBeDetected() {
+		// 测试点号本身不应该被识别
+		List<FileLinkMatch> matches1 = filter.detectPaths("This is a sentence.");
+		List<String> results1 = matches1.stream().map(it -> it.match).collect(Collectors.toList());
+		// 确保点号"."不在结果中
+		assertFalse("Dot should not be detected", results1.contains("."));
+		
+		List<FileLinkMatch> matches2 = filter.detectPaths("Building project.");
+		List<String> results2 = matches2.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Dot should not be detected", results2.contains("."));
+		
+		List<FileLinkMatch> matches3 = filter.detectPaths("Task completed successfully.");
+		List<String> results3 = matches3.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Dot should not be detected", results3.contains("."));
+	}
+
+
+	/**
+	 * 测试省略号不应该被识别为文件
+	 * 注意：这里测试的是省略号本身（连续的点号），而不是前面的单词
+	 */
+	@Test
+	public void testEllipsisShouldNotBeDetected() {
+		// 测试省略号本身不应该被识别
+		List<FileLinkMatch> matches1 = filter.detectPaths("Building...");
+		List<String> results1 = matches1.stream().map(it -> it.match).collect(Collectors.toList());
+		// 确保省略号"..."和".."不在结果中
+		assertFalse("Ellipsis should not be detected", results1.contains("..."));
+		assertFalse("Ellipsis should not be detected", results1.contains(".."));
+		
+		List<FileLinkMatch> matches2 = filter.detectPaths("Processing..");
+		List<String> results2 = matches2.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Ellipsis should not be detected", results2.contains(".."));
+		
+		List<FileLinkMatch> matches3 = filter.detectPaths("Loading data...");
+		List<String> results3 = matches3.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Ellipsis should not be detected", results3.contains("..."));
+		assertFalse("Ellipsis should not be detected", results3.contains(".."));
+	}
+
+
+	/**
+	 * 测试反斜杠不应该被识别为文件
+	 */
+	@Test
+	public void testBackslashShouldNotBeDetected() {
+		// 测试反斜杠本身不应该被识别
+		List<FileLinkMatch> matches1 = filter.detectPaths("remote: Processing pre-receive: push-check: 2 (\\)");
+		List<String> results1 = matches1.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Backslash should not be detected", results1.contains("\\"));
+		
+		List<FileLinkMatch> matches2 = filter.detectPaths("\\");
+		List<String> results2 = matches2.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Backslash should not be detected", results2.contains("\\"));
+		
+		List<FileLinkMatch> matches3 = filter.detectPaths(" \\ ");
+		List<String> results3 = matches3.stream().map(it -> it.match).collect(Collectors.toList());
+		assertFalse("Backslash should not be detected", results3.contains("\\"));
 	}
 
 
