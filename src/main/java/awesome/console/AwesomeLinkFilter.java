@@ -223,12 +223,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			REGEX_PROTOCOL, REGEX_DRIVE, REGEX_SEPARATOR, REGEX_FILE_NAME, REGEX_DOTS_PATH
 	);
 
+	/** Git重命名格式路径正则表达式 */
+	// 定义公共静态final常量，匹配Git重命名格式的路径（如 path/{old => new}/file）
+	// 这种格式在Git输出中用于表示文件重命名，花括号内包含 "旧名 => 新名" 的格式
+	// 捕获组 path3 用于提取完整的路径（包括花括号部分）
+	// 匹配模式：[\w./-]+ 匹配路径前缀，\{[^}]+=>\s*[^}]+\} 匹配重命名部分，[\w./-]* 匹配路径后缀
+	public static final String REGEX_GIT_RENAME = "(?<path3>[\\w./-]+\\{[^}]+=>[\\s]*[^}]+\\}[\\w./-]*)";
+
 	/** 文件路径匹配模式 */
 	// 定义公共静态final模式，编译文件路径正则表达式
 	// 匹配带引号或不带引号的路径，以及可选的行号和列号
+	// 同时支持Git重命名格式（如 {old => new}），Git重命名格式优先匹配
 	// 使用 UNICODE_CHARACTER_CLASS 标志支持 Unicode 字符
 	public static final Pattern FILE_PATTERN = Pattern.compile(
-			String.format("(?![\\s,;\\]])(?<link>['(\\[]?(?:%s|%s)%s[')\\]]?)", REGEX_PATH_WITH_SPACE, REGEX_PATH, REGEX_ROW_COL),
+			String.format("(?![\\s,;\\]])(?<link>['(\\[]?(?:%s|%s|%s)%s[')\\]]?)", REGEX_GIT_RENAME, REGEX_PATH_WITH_SPACE, REGEX_PATH, REGEX_ROW_COL),
 			Pattern.UNICODE_CHARACTER_CLASS);
 
 	/** URL 匹配模式 */

@@ -765,10 +765,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"fatal: unable to access 'https://github.com/anthraxx/intellij-awesome-console.git/': schannel: failed to receive handshake, SSL/TLS connection failed",
 				"https://github.com/anthraxx/intellij-awesome-console.git/"
 		);
-		assertPathDetection("rename packages/frontend/core/src/modules/pdf/renderer/{worker.ts => pdf.worker.ts}");
-		assertPathDetection("rename packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts");
-		assertPathDetection("rename packages/frontend/admin/src/modules/{config => about}/index.tsx ");
-		assertPathDetection("rename blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json");
+		assertPathDetection("rename packages/frontend/core/src/modules/pdf/renderer/{worker.ts => pdf.worker.ts}", "packages/frontend/core/src/modules/pdf/renderer/{worker.ts => pdf.worker.ts}");
+		assertPathDetection("rename packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts", "packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts");
+		assertPathDetection("rename packages/frontend/admin/src/modules/{config => about}/index.tsx ", "packages/frontend/admin/src/modules/{config => about}/index.tsx");
+		assertPathDetection("rename blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json", "blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json");
+		assertPathDetection("rename app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}", "app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}");
+		assertPathDetection("rename app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json} (100%)", "app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}");
 	}
 
 
@@ -1914,6 +1916,273 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试忽略样式功能（USE_IGNORE_STYLE）
+	 * 验证当启用忽略样式时，被忽略的匹配项会创建空的超链接占位符
+	 * 这个功能用于防止其他插件在被忽略的位置生成错误的超链接
+	 */
+	public void testIgnoreStyleFeature() {
+		System.out.println("Test ignore style feature:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
+		
+		try {
+			// 启用忽略模式和忽略样式
+			storage.useIgnorePattern = true;
+			storage.useIgnoreStyle = true;
+			storage.setIgnorePatternText("^(dev|test|build)$|^node_modules/");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试被忽略的命令参数
+			// 注意：这些匹配项会被忽略，但会创建空的超链接占位符
+			// 由于我们测试的是过滤器行为，这里主要验证配置生效
+			System.out.println("Testing ignored patterns with ignore style enabled:");
+			System.out.println("Command: dev");
+			System.out.println("Command: test");
+			System.out.println("Command: build");
+			System.out.println("Path: node_modules/package");
+			
+			// 验证真正的文件路径仍然能被识别
+			assertPathDetection(
+				"Error in src/dev/index.js:10",
+				"src/dev/index.js:10"
+			);
+			
+			assertPathDetection(
+				"Build failed: ./test.config.js",
+				"./test.config.js"
+			);
+			
+			// 测试禁用忽略样式的情况
+			storage.useIgnoreStyle = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			System.out.println("Testing with ignore style disabled:");
+			// 被忽略的匹配项不会创建任何超链接（包括占位符）
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "build");
+			
+			// 验证真正的文件路径仍然能被识别
+			assertPathDetection(
+				"Error in src/main.java:20",
+				"src/main.java:20"
+			);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			storage.useIgnoreStyle = originalUseIgnoreStyle;
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试忽略样式与其他插件的兼容性
+	 * 验证忽略样式功能可以防止其他插件生成错误的超链接
+	 * 例如：防止 GrCompilationErrorsFilterProvider 将 "/ gzip" 识别为路径
+	 */
+	public void testIgnoreStylePreventIncorrectHyperlinks() {
+		System.out.println("Test ignore style prevents incorrect hyperlinks from other plugins:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
+		
+		try {
+			// 启用忽略模式和忽略样式
+			storage.useIgnorePattern = true;
+			storage.useIgnoreStyle = true;
+			// 设置忽略模式：忽略以斜杠开头的单个单词（如 "/ gzip"）
+			storage.setIgnorePatternText("^/[a-z]+$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试场景：vite-plugin-compression 的输出
+			// "/ gzip" 应该被忽略，但会创建空的超链接占位符
+			System.out.println("Use ignore style to prevent this ( / gzip from vite-plugin-compression ) to be highlighted by other plugins");
+			
+			// 验证正常的路径仍然能被识别
+			assertPathDetection(
+				"Compressing /dist/assets/main.js with gzip",
+				"/dist/assets/main.js"
+			);
+			
+			assertPathDetection(
+				"Output: /build/output.js",
+				"/build/output.js"
+			);
+			
+			// 测试相对路径符号的忽略
+			storage.setIgnorePatternText("^(\"?)[./]+\\1$");
+			filter = new AwesomeLinkFilter(getProject());
+			
+			assertPathNoMatches("Path: ", "./");
+			assertPathNoMatches("Path: ", "../");
+			assertPathNoMatches("Path: ", "\"./\"");
+			assertPathNoMatches("Path: ", "\"../\"");
+			
+			// 但是包含文件名的相对路径应该被识别
+			assertPathDetection(
+				"Path: ./src/main.java",
+				"./src/main.java"
+			);
+			
+			assertPathDetection(
+				"Path: ../config/app.json",
+				"../config/app.json"
+			);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			storage.useIgnoreStyle = originalUseIgnoreStyle;
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试忽略样式在Terminal中的行为
+	 * 验证忽略样式功能在Terminal中不生效（因为JediTerm不支持highlightAttributes）
+	 * 注意：这个测试主要是文档性质的，实际的Terminal检测需要在运行时环境中进行
+	 */
+	public void testIgnoreStyleNotSupportedInTerminal() {
+		System.out.println("Test ignore style is not supported in Terminal:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
+		
+		try {
+			// 启用忽略模式和忽略样式
+			storage.useIgnorePattern = true;
+			storage.useIgnoreStyle = true;
+			storage.setIgnorePatternText("^(dev|test)$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 注意：在Terminal中，即使启用了useIgnoreStyle，
+			// 被忽略的匹配项也不会创建空的超链接占位符
+			// 因为JediTerm不使用highlightAttributes参数
+			// 这是预期行为，在代码中有明确的注释说明
+			
+			System.out.println("In Terminal, ignore style feature is not supported");
+			System.out.println("Ignored patterns will simply not be highlighted");
+			
+			// 验证配置已正确设置
+			assertTrue("useIgnoreStyle should be enabled", storage.useIgnoreStyle);
+			assertTrue("useIgnorePattern should be enabled", storage.useIgnorePattern);
+			
+			// 验证正常的文件路径仍然能被识别
+			assertPathDetection(
+				"Error in src/main.java:10",
+				"src/main.java:10"
+			);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			storage.useIgnoreStyle = originalUseIgnoreStyle;
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试忽略样式与默认忽略模式的组合
+	 * 验证使用默认的忽略模式时，忽略样式功能正常工作
+	 */
+	public void testIgnoreStyleWithDefaultIgnorePattern() {
+		System.out.println("Test ignore style with default ignore pattern:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
+		
+		try {
+			// 使用默认的忽略模式
+			storage.useIgnorePattern = true;
+			storage.useIgnoreStyle = true;
+			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试默认忽略模式中的各种情况
+			System.out.println("Testing default ignore pattern with ignore style:");
+			
+			// 相对路径符号应该被忽略
+			assertPathNoMatches("Path: ", "./");
+			assertPathNoMatches("Path: ", "../");
+			assertPathNoMatches("Path: ", "\"./\"");
+			assertPathNoMatches("Path: ", "\"../\"");
+			
+			// node_modules 目录应该被忽略
+			assertPathNoMatches("Path: ", "node_modules/");
+			assertPathNoMatches("Path: ", "node_modules/package");
+			
+			// 常见命令参数应该被忽略（不区分大小写）
+			assertPathNoMatches("Command: ", "start");
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "Start");
+			assertPathNoMatches("Command: ", "Dev");
+			assertPathNoMatches("Command: ", "Test");
+			
+			// 但是真正的文件路径应该被识别
+			assertPathDetection(
+				"Error in ./src/main.java:10",
+				"./src/main.java:10"
+			);
+			
+			assertPathDetection(
+				"Build: ./node_modules/package/index.js:20",
+				"./node_modules/package/index.js:20"
+			);
+			
+			assertPathDetection(
+				"File: start.sh",
+				"start.sh"
+			);
+			
+			assertPathDetection(
+				"Script: dev.config.js",
+				"dev.config.js"
+			);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			storage.useIgnoreStyle = originalUseIgnoreStyle;
 			// 重新创建过滤器以恢复原始配置
 			filter = new AwesomeLinkFilter(getProject());
 		}

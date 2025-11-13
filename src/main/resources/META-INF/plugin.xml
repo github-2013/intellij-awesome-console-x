@@ -15,6 +15,14 @@
 	<change-notes>
 		<![CDATA[
         <p>
+        	<b>0.1337.27</b><br/>
+        	<ul>
+        		<li>Fixed Git rename format path detection with dedicated REGEX_GIT_RENAME pattern</li>
+        		<li>Added specialized regex pattern to match Git rename format: path/{old => new}/file</li>
+        		<li>Improved FILE_PATTERN to prioritize Git rename format matching</li>
+        		<li>Fixed testGit test case failure - now correctly matches all Git rename format paths</li>
+        		<li>Enhanced support for complex Git rename scenarios with spaces in arrow notation (=>)</li>
+        	</ul>
         	<b>0.1337.26</b><br/>
         	<ul>
         		<li>Enhanced link filtering with new regex patterns for dots, backslashes, and letters-only matches</li>
