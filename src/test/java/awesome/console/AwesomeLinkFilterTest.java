@@ -1458,7 +1458,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试ANSI颜色保留功能禁用时的路径检测
 	 * 当禁用ANSI颜色保留时，ANSI转义序列应该被移除后再进行路径识别
 	 */
-
 	public void testAnsiColorPreservationDisabled() {
 		System.out.println("ANSI color preservation disabled (default):");
 		
@@ -1520,7 +1519,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试ANSI颜色保留功能启用时的路径检测
 	 * 当启用ANSI颜色保留时，ANSI转义序列不会被移除
 	 */
-
 	public void testAnsiColorPreservationEnabled() {
 		System.out.println("ANSI color preservation enabled:");
 		
@@ -1575,7 +1573,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试各种ANSI颜色格式
 	 * 包括基本颜色、亮色、RGB真彩色、256色模式等
 	 */
-
 	public void testAnsiColorVariousFormats() {
 		System.out.println("Test various ANSI color formats with preservation disabled:");
 		
@@ -1655,7 +1652,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 验证常见的命令参数（如 dev、test、build 等）不会被误识别为文件链接
 	 * 这是为了解决前端项目中 "npm run dev" 等命令输出时，dev 被误识别为文件的问题
 	 */
-
 	public void testCommandArgumentFiltering() {
 		System.out.println("Test command argument filtering:");
 		
@@ -1764,7 +1760,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"Error in ./node_modules/package/index.js:10",
 				"./node_modules/package/index.js:10"
 			);
-			
 		} finally {
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
@@ -1778,7 +1773,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试忽略模式禁用时的行为
 	 * 验证当忽略模式被禁用时，命令参数可能会被识别为文件（如果文件存在）
 	 */
-
 	public void testIgnorePatternDisabled() {
 		System.out.println("Test with ignore pattern disabled:");
 		
@@ -1911,7 +1905,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"start   Building... src/app.ts:10",
 				"src/app.ts:10"
 			);
-			
 		} finally {
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
@@ -1980,7 +1973,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"Error in src/main.java:20",
 				"src/main.java:20"
 			);
-			
 		} finally {
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;

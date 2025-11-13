@@ -698,93 +698,135 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * @return 文件路径结果项列表，每个结果项包含超链接信息、位置和样式
 	 */
 	public List<ResultItem> getResultItemsFile(final String line, final int startPoint) {
+		// 创建结果列表，用于存储所有匹配的文件超链接结果项
 		final List<ResultItem> results = new ArrayList<>();
 
+		// 调用 detectPaths 方法检测当前行中的所有文件路径匹配项
+		// 返回包含路径、位置、行号、列号等信息的匹配列表
 		final List<FileLinkMatch> matches = detectPaths(line);
 
+		// 遍历所有检测到的文件路径匹配项
 		for(final FileLinkMatch match: matches) {
+			// 检查该匹配项是否应该被忽略（根据用户配置的忽略模式）
 			if (shouldIgnore(match.match)) {
-				// TODO This feature is not supported in the Terminal because JediTerm does not use the highlightAttributes parameter.
-				//     ref: https://github.com/JetBrains/jediterm/blob/78b143010fc53456f2d16eb67572ed23b4a99543/core/src/com/jediterm/terminal/model/hyperlinks/TextProcessing.java#L67-L68
+				// TODO: 终端中不支持此功能，因为 JediTerm 不使用 highlightAttributes 参数
+				// 参考: https://github.com/JetBrains/jediterm/blob/78b143010fc53456f2d16eb67572ed23b4a99543/core/src/com/jediterm/terminal/model/hyperlinks/TextProcessing.java#L67-L68
+				// 如果配置了使用忽略样式且不是在终端环境中
 				if (config.useIgnoreStyle && Boolean.FALSE.equals(isTerminal.get())) {
-					// a meaningless hyperlink that serves only as a placeholder so that
-					// other filters can no longer generate incorrect hyperlinks.
+					// 创建一个无意义的超链接作为占位符，防止其他过滤器生成错误的超链接
 					HyperlinkInfo linkInfo = __ -> {};
+					// 创建忽略样式（灰色等特殊样式）
 					TextAttributes attributes = HyperlinkUtils.createIgnoreStyle();
+					// 添加一个占位符结果项，使用忽略样式
 					results.add(new Result(
 							startPoint + match.start, startPoint + match.end,
 							linkInfo, attributes, attributes
 					));
 				}
+				// 跳过这个被忽略的匹配项，继续处理下一个
 				continue;
 			}
 
+			// 获取匹配项中的路径部分
 			String matchPath = match.path;
+			// 尝试将路径解析为实际的文件对象（处理相对路径、绝对路径等）
 			File file = resolveFile(matchPath);
+			// 如果成功解析为文件对象
 			if (null != file) {
+				// 判断文件是否在项目外部（相对于项目根目录）
 				final boolean isExternal = isExternal(file);
+				// 获取文件的绝对路径
 				String filePath = file.getAbsolutePath();
-				// If a file is a symlink, it should be highlighted regardless of whether its target file exists
+				// 检查文件是否存在（如果是符号链接，只要链接本身存在就会返回true）
 				final boolean exists = FileUtils.quickExists(filePath);
+			// 如果文件确实存在
 			if (exists) {
+				// 为存在的文件创建超链接信息对象（包含项目、文件路径、行号、列号）
 				final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
 						project, filePath, match.linkedRow, match.linkedCol
 				);
+				// 创建普通超链接的文本属性（蓝色下划线等）
 				TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+				// 创建已访问超链接的文本属性（紫色等）
 				TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+				// 添加文件超链接结果项
 				results.add(new Result(
 						startPoint + match.start, startPoint + match.end,
 						linkInfo, hyperlinkAttributes, followedHyperlinkAttributes
 				));
+				// 继续处理下一个匹配项
 				continue;
 				} else if (isExternal) {
+					// 如果文件不存在但是在项目外部，且不是Unix绝对路径
 					if (!isUnixAbsolutePath(matchPath)) {
+						// 跳过处理（外部相对路径无法正确解析）
 						continue;
 					}
-					// Resolve absolute paths starting with a slash into relative paths based on the project root as a fallback
+					// 作为回退方案，将以斜杠开头的绝对路径解析为基于项目根目录的相对路径
 					filePath = new File(project.getBasePath(), matchPath).getAbsolutePath();
 				}
+				// 将文件路径转换为相对于项目根目录的相对路径
 				matchPath = getRelativePath(filePath);
 			}
 
+			// 从路径中提取文件名（不包含路径部分）
 			String path = PathUtil.getFileName(matchPath);
+			// 如果文件名以$结尾（通常是内部类或匿名类），移除$符号
 			if (path.endsWith("$")) {
 				path = path.substring(0, path.length() - 1);
 			}
 
+			// 声明变量存储匹配的虚拟文件列表
 			List<VirtualFile> matchingFiles;
+			// 获取读锁，确保线程安全地访问文件缓存
 			cacheReadLock.lock();
 			try {
+				// 从文件名缓存中查找匹配的文件列表
 				matchingFiles = fileCache.get(path);
+				// 如果没有找到匹配文件且配置了搜索类文件
 				if (null == matchingFiles && config.searchClasses) {
+					// 尝试通过基础名搜索（处理完全限定类名的情况）
 					matchingFiles = getResultItemsFileFromBasename(path);
 				}
+				// 如果找到了匹配的文件
 				if (null != matchingFiles) {
-					// Don't use parallelStream because `shouldIgnore` uses ThreadLocal
+					// 不能使用并行流，因为 shouldIgnore 方法使用了 ThreadLocal
 					matchingFiles = matchingFiles.stream()
-							.filter(f -> !shouldIgnore(getRelativePath(f.getPath())))
-							.limit(config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
-							.collect(Collectors.toList());
+						// 过滤掉应该被忽略的文件
+						.filter(f -> !shouldIgnore(getRelativePath(f.getPath())))
+						// 如果配置了结果限制，则限制结果数量
+						.limit(config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
+						// 收集为列表
+						.collect(Collectors.toList());
 				}
 			} finally {
+				// 释放读锁
 				cacheReadLock.unlock();
 			}
 
+			// 如果没有找到匹配的文件或匹配列表为空，跳过处理
 			if (null == matchingFiles || matchingFiles.isEmpty()) {
 				continue;
 			}
 
+			// 查找最佳匹配的文件列表（通过递归移除路径层级来提高匹配精度）
 			final List<VirtualFile> bestMatchingFiles = findBestMatchingFiles(generalizePath(matchPath), matchingFiles);
+			// 如果找到了更好的匹配文件
 			if (bestMatchingFiles != null && !bestMatchingFiles.isEmpty()) {
+				// 使用最佳匹配的文件列表
 				matchingFiles = bestMatchingFiles;
 			}
 
+		// 为多个匹配文件创建超链接信息对象（显示选择对话框）
 		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
 				project, matchingFiles, match.linkedRow, match.linkedCol
 		);
 
+		// 创建普通超链接的文本属性
 		TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+		// 创建已访问超链接的文本属性
 		TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		// 添加最终的超链接结果项
 		results.add(new Result(
 				startPoint + match.start,
 				startPoint + match.end,
@@ -792,6 +834,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		);
 		}
 
+		// 返回所有文件超链接结果项列表
 		return results;
 	}
 
