@@ -3,7 +3,7 @@ package awesome.console.util;
 /**
  * 系统工具类
  * 提供系统相关信息的获取功能
- */
+ * */
 public class SystemUtils {
 
     /**

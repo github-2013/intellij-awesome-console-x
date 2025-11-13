@@ -15,9 +15,9 @@ import org.jetbrains.annotations.Nullable;
 /**
  * 多文件超链接信息包装器
  * 修复内置MultipleFilesHyperlinkInfo的问题，将`popup.showInFocusCenter()`改为`popup.showCenteredInCurrentWindow(project)`
- * <p>
+ * 
  * ref: https://github.com/JetBrains/intellij-community/blob/212.5080/platform/lang-impl/src/com/intellij/execution/filters/impl/MultipleFilesHyperlinkInfo.java#L116
- */
+ * */
 public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase implements FileHyperlinkInfo {
 
     /** 被包装的超链接信息对象 */

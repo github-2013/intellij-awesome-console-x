@@ -6,8 +6,7 @@ import java.util.regex.Pattern;
 /**
  * Awesome Console 默认配置接口
  * 定义了插件的所有默认配置常量，包括调试模式、行长度限制、搜索选项、正则表达式等
- *
- */
+ * */
 public interface AwesomeConsoleDefaults {
 
     /** 默认的正则表达式分组重试次数 */

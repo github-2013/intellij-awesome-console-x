@@ -26,13 +26,12 @@ import javax.swing.*;
  * 3. 设置对话框关闭时会调用 disposeUIResources() 方法
  * 
  * 主要功能：
- * - 初始化配置表单界面
- * - 检测配置是否被修改
- * - 应用配置更改到存储
- * - 验证用户输入（正则表达式、数值等）
+ * 初始化配置表单界面
+ * 检测配置是否被修改
+ * 应用配置更改到存储
+ * 验证用户输入（正则表达式、数值等）
  * 
  * @see <a href="https://plugins.jetbrains.com/docs/intellij/settings-guide.html">Settings Guide</a>
- * @author awesome-console
  */
 @SuppressWarnings({"unused", "SameParameterValue"})
 public class AwesomeConsoleConfig implements Configurable {
@@ -195,7 +194,7 @@ public class AwesomeConsoleConfig implements Configurable {
 	@Override
 	public boolean isModified() {
 		final String text = form.maxLengthTextField.getText().trim();
-		if (text.length() < 1) {
+		if (text.isEmpty()) {
 			return true;
 		}
 		final int len;

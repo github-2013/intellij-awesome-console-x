@@ -33,12 +33,7 @@ public class FileLinkMatch {
 	 * @param row 链接指向的行号
 	 * @param col 链接指向的列号
 	 */
-	public FileLinkMatch(final String match,
-						 final String path,
-						 final int start,
-						 final int end,
-						 final int row,
-						 final int col) {
+	public FileLinkMatch(final String match, final String path, final int start, final int end, final int row, final int col) {
 		this.match = match;
 		this.path = path;
 		this.start = start;

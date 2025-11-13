@@ -22,10 +22,10 @@ import org.jetbrains.annotations.NotNull;
  * @see <a href="https://plugins.jetbrains.com/docs/intellij/persisting-state-of-components.html">Persisting State of Components</a>
  */
 @State(
-        name = "Awesome Console Config",
-        storages = {
-                @Storage(value = "awesomeconsole.xml", roamingType = RoamingType.DISABLED)
-        }
+    name = "Awesome Console Config",
+    storages = {
+        @Storage(value = "awesomeconsole.xml", roamingType = RoamingType.DISABLED)
+    }
 )
 public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeConsoleStorage>, AwesomeConsoleDefaults {
 

@@ -43,9 +43,10 @@ public class FileUtils {
     /**
      * 判断路径是否为JAR文件路径
      * 
+     * @see java.net.JarURLConnection
+     * 
      * @param path 待检查的路径
      * @return 如果路径包含JAR分隔符则返回true
-     * @see java.net.JarURLConnection
      */
     public static boolean isJarPath(@NotNull final String path) {
         return path.contains(JAR_SEPARATOR);
@@ -54,14 +55,12 @@ public class FileUtils {
     /**
      * 分割JAR文件路径
      * 例如: "jar:file:///path/to/jar.jar!/resource.xml" 会被转换为 ["/path/to/jar.jar", "resource.xml"]
-     * <p>
+     * 
      * ref: https://github.com/JetBrains/intellij-community/blob/212.5080/plugins/ide-features-trainer/src/training/project/FileUtils.kt#L119-L127
      * ref: https://github.com/JetBrains/intellij-community/blob/212.5080/platform/util/src/com/intellij/util/io/URLUtil.java#L138
      *
      * @param path JAR文件路径
      * @return 包含JAR文件路径和内部资源路径的Pair对象，如果不是JAR路径则返回null
-     * @see java.net.JarURLConnection
-     * @see com.intellij.util.io.URLUtil#splitJarUrl(String)
      */
     @Nullable
     public static Pair<String, String> splitJarPath(@NotNull final String path) {
@@ -118,12 +117,12 @@ public class FileUtils {
 
     /**
      * 检测是否为连接点/重解析点（Windows特有）
-     * <p>
      *
-     * @param path 待检查的路径
-     * @return 如果是重解析点则返回true
      * @see <a href="https://stackoverflow.com/a/74801717">Cross platform way to detect a symbolic link / junction point</a>
      * @see sun.nio.fs.WindowsFileAttributes#isReparsePoint(int)
+     * 
+     * @param path 待检查的路径
+     * @return 如果是重解析点则返回true
      */
     @SuppressWarnings("JavadocReference")
     public static boolean isReparsePoint(@NotNull Path path) {
@@ -157,9 +156,10 @@ public class FileUtils {
      * 快速检查文件或目录是否存在
      * 注意：UNC路径会被跳过以避免网络访问导致的UI冻结
      *
+     * @see java.net.JarURLConnection
+     * 
      * @param path 文件路径
      * @return 如果路径不是UNC路径且文件或目录存在则返回true，否则返回false
-     * @see java.net.JarURLConnection
      */
     public static boolean quickExists(@NotNull String path) {
         // Finding the UNC path will access the network,
@@ -182,11 +182,12 @@ public class FileUtils {
      * 根据路径获取VirtualFile对象
      * 仅支持Unix和Windows下的"file"和"jar"协议
      *
-     * @param path 文件路径
-     * @return VirtualFile对象，如果找不到则返回null
      * @see VfsUtil#findFileByURL(URL)
      * @see com.intellij.openapi.vfs.VirtualFileManager#findFileByUrl(String)
      * @see java.net.JarURLConnection
+     * 
+     * @param path 文件路径
+     * @return VirtualFile对象，如果找不到则返回null
      */
     @Nullable
     public static VirtualFile findFileByPath(@NotNull String path) {

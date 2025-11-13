@@ -8,12 +8,11 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 项目文件迭代器
+ * 项目文件迭代器，以实现 ContentIterator 接口以支持内容迭代
  * 用于遍历项目中的所有文件，并将文件信息缓存到两个Map中：
  * 1. fileCache: 以完整文件名（包含扩展名）为key
  * 2. fileBaseCache: 以文件基础名（不含扩展名）为key，用于支持完全限定类名的查找
- */
-// 定义公共类 AwesomeProjectFilesIterator，实现 ContentIterator 接口以支持内容迭代
+ * */
 public class AwesomeProjectFilesIterator implements ContentIterator {
 	/** 文件名缓存，key为完整文件名（包含扩展名），value为对应的虚拟文件列表 */
 	// 声明私有final成员变量fileCache，用于存储完整文件名到虚拟文件列表的映射

@@ -61,7 +61,7 @@ import java.util.stream.Collectors;
  * 3. 支持行号、列号的解析
  * 4. 支持完全限定类名的识别
  * 5. 支持自定义忽略模式
- */
+ * */
 // 定义公共类 AwesomeLinkFilter，实现 Filter 接口（控制台过滤器）和 DumbAware 接口（支持在索引更新期间运行）
 public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
@@ -102,7 +102,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
 	 * 路径分隔符正则表达式
 	 * 定义公共静态final常量，匹配一个或多个正斜杠或反斜杠（支持 Unix 和 Windows 路径分隔符）
-	 *
 	 * */
 	public static final String REGEX_SEPARATOR = "[/\\\\]+";
 
@@ -110,33 +109,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 文件名中允许的字符正则表达式
 	 * 定义公共静态final常量，匹配文件名中允许的字符（排除空白字符、控制字符和文件系统保留字符）
 	 * 注意：包含花括号{}以支持Git rename格式（如 {old => new}）
-	 *
-	 *  */
+	 * */
 	public static final String REGEX_CHAR = "[^\\s\\x00-\\x1F\"*/:<>?\\\\|\\x7F]";
 
 	/**
 	 * 字母字符正则表达式
 	 * 定义公共静态final常量，匹配大小写字母
-	 *  */
+	 * */
 	public static final String REGEX_LETTER = "[A-Za-z]";
 
 	/**
 	 * ANSI转义序列匹配模式
 	 * 定义私有静态final模式，用于匹配 ANSI 转义序列（用于终端颜色和样式控制）
 	 * ANSI 转义序列以 ESC (\x1B) 开头，后跟控制字符或 CSI 序列
-	 *
 	 * */
 	private static final Pattern ANSI_ESCAPE_PATTERN = Pattern.compile(
-			// 匹配 ESC 后跟单字符控制序列或 CSI（Control Sequence Introducer）序列
-			"\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])"
+        // 匹配 ESC 后跟单字符控制序列或 CSI（Control Sequence Introducer）序列
+        "\\x1B(?:[@-Z\\\\-_]|\\[[0-?]*[ -/]*[@-~])"
 	);
 
-	/**
-	 * Note: The path in the {@code file:} URI has a leading slash which is added by the {@code slashify} method.
-	 *
-	 * @see java.io.File#toURI()
-	 * @see java.io.File#slashify(String, boolean)
-	 */
 	/**
 	 * 驱动器路径正则表达式（支持 Windows 驱动器号和 Unix 波浪号）
 	 * 注意：file: URI 中的路径有一个前导斜杠，由 slashify 方法添加
@@ -185,7 +176,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * URI 协议正则表达式
 	 * 定义公共静态final常量，匹配 URI 协议（如 http:、file:、jar:file: 等）
 	 * 协议由2个或更多字母后跟冒号组成，可选的双斜杠，支持嵌套协议（如 jar:file:）
-	 *
 	 * */
 	public static final String REGEX_PROTOCOL = String.format("(?:%s{2,}:(?://)?)+", REGEX_LETTER);
 
@@ -937,13 +927,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	public List<VirtualFile> getResultItemsFileFromBasename(final String match, final int depth) {
 		final char packageSeparator = '.';
 		final int index = match.lastIndexOf(packageSeparator);
-		if (-1 >= index) {
+		if (-1 == index) {
 			return new ArrayList<>();
 		}
 		final String basename = match.substring(index + 1);
 		final String origin = match.substring(0, index);
 		final String path = origin.replace(packageSeparator, File.separatorChar);
-		if (0 >= basename.length()) {
+		if (basename.isEmpty()) {
 			return new ArrayList<>();
 		}
 		if (!fileBaseCache.containsKey(basename)) {
@@ -1044,7 +1034,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file-system.html#virtual-file-system-events
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file.html#how-do-i-get-notified-when-vfs-changes
 		connection.subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
-			@SuppressWarnings("StatementWithEmptyBody")
 			@Override
 			public void after(@NotNull List<? extends @NotNull VFileEvent> events) {
 				List<VirtualFile> newFiles = new ArrayList<>();
