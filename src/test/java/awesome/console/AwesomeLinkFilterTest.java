@@ -530,7 +530,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试包含点号的路径（.、..、.gitignore等）
 	 */
 	public void testPathWithDots() {
-		assertPathDetection("Path: . ", ".");
+        // assertPathDetection("Path: . ", ".");
 		assertPathDetection("Path: ./intellij-awesome-console/src ", "./intellij-awesome-console/src");
 		assertPathDetection("Path: ../intellij-awesome-console/src ", "../intellij-awesome-console/src");
 		assertPathDetection("File: .gitignore ", ".gitignore");
@@ -676,8 +676,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试路径边界情况（以点结尾等）
 	 */
 	public void testPathBoundary() {
-		assertPathDetection(".", ".");
-		assertPathDetection("..", "..");
+		// 独立的 . 和 .. 不应该被识别为有效路径
+		assertPathNoMatches("Path: ", ".");
+		assertPathNoMatches("Path: ", "..");
 		assertPathDetection("Path end with a dot: file1.java.", "file1.java");
 		assertPathDetection("Path end with a dot: \"file1.java\".", "\"file1.java\"");
 		assertPathDetection("Path end with a dot: src/test/resources/subdir/.", "src/test/resources/subdir/.");
@@ -783,8 +784,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		System.out.println("Windows CMD console:");
 		assertPathDetection("C:\\Windows\\Temp>", "C:\\Windows\\Temp");
 		assertPathDetection("C:\\Windows\\Temp>echo hello", "C:\\Windows\\Temp");
-		assertPathDetection("C:\\Windows\\Temp>..", "C:\\Windows\\Temp", "..");
-		assertPathDetection("C:\\Windows\\Temp> ..", "C:\\Windows\\Temp", "..");
+		// 命令提示符后的独立 .. 是命令参数，不应该被识别为路径
+		assertPathDetection("C:\\Windows\\Temp>..", "C:\\Windows\\Temp");
+		assertPathDetection("C:\\Windows\\Temp> ..", "C:\\Windows\\Temp");
 		assertPathDetection("C:\\Windows\\Temp>./build.gradle", "C:\\Windows\\Temp", "./build.gradle");
 		assertPathDetection("C:\\Windows\\Temp>../intellij-awesome-console", "C:\\Windows\\Temp", "../intellij-awesome-console");
 		// assertPathDetection("C:\\Program Files (x86)\\Windows NT>powershell", "C:\\Program Files (x86)\\Windows NT");
@@ -792,7 +794,8 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		System.out.println("Windows PowerShell console:");
 		assertPathDetection("PS C:\\Windows\\Temp> ", "C:\\Windows\\Temp");
 		assertPathDetection("PS C:\\Windows\\Temp> echo hello", "C:\\Windows\\Temp");
-		assertPathDetection("PS C:\\Windows\\Temp> ..", "C:\\Windows\\Temp", "..");
+		// 命令提示符后的独立 .. 是命令参数，不应该被识别为路径
+		assertPathDetection("PS C:\\Windows\\Temp> ..", "C:\\Windows\\Temp");
 		assertPathDetection("PS C:\\Windows\\Temp> ./build.gradle", "C:\\Windows\\Temp", "./build.gradle");
 		assertPathDetection("PS C:\\Windows\\Temp> ../intellij-awesome-console", "C:\\Windows\\Temp", "../intellij-awesome-console");
 		// assertPathDetection("PS C:\\Program Files (x86)\\Windows NT> echo hello", "C:\\Program Files (x86)\\Windows NT");
@@ -2175,6 +2178,74 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
 			storage.useIgnoreStyle = originalUseIgnoreStyle;
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试去除忽略模式第一部分后的相对路径符号匹配
+	 * 验证当只保留 "^node_modules/|^(?i)(start|dev|test)$" 时，
+	 * 原本被第一部分 "^(\"?)[./]+\1$" 忽略的路径是否能被正确匹配
+	 */
+	public void testIgnorePatternWithoutRelativePathPart() {
+		System.out.println("Test ignore pattern without relative path part:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 设置忽略模式：去除第一部分，只保留 node_modules 和命令参数部分
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^node_modules/|^(?i)(start|dev|test)$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试独立的 . 和 .. 现在应该能被匹配（如果它们是有效路径）
+			System.out.println("Testing standalone relative path symbols:");
+			assertPathDetection("Path: .", ".");
+			assertPathDetection("Path: ..", "..");
+			
+			// 测试 ./ 和 ../ 现在应该能被匹配
+			System.out.println("Testing relative path with slash:");
+			assertPathDetection("Path: ./", "./");
+			assertPathDetection("Path: ../", "../");
+			assertPathDetection("Path: ../../", "../../");
+			
+			// 测试带引号的相对路径符号
+			System.out.println("Testing quoted relative path symbols:");
+			assertPathDetection("Path: \".\"", "\".\"");
+			assertPathDetection("Path: \"..\"", "\"..\"");
+			assertPathDetection("Path: \"./\"", "\"./\"");
+			assertPathDetection("Path: \"../\"", "\"../\"");
+			assertPathDetection("Path: \"../../\"", "\"../../\"");
+			
+			// 测试组合路径（这些应该一直都能被匹配）
+			System.out.println("Testing combined paths:");
+			assertPathDetection("Path: ./src", "./src");
+			assertPathDetection("Path: ../lib", "../lib");
+			assertPathDetection("Path: ./file.txt", "./file.txt");
+			assertPathDetection("Path: ../test.js", "../test.js");
+			
+			// 验证 node_modules 和命令参数仍然被忽略
+			System.out.println("Testing that node_modules and commands are still ignored:");
+			assertPathNoMatches("Path: ", "node_modules/");
+			assertPathNoMatches("Path: ", "node_modules/package");
+			assertPathNoMatches("Command: ", "start");
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "START");
+			assertPathNoMatches("Command: ", "DEV");
+			assertPathNoMatches("Command: ", "TEST");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
 			// 重新创建过滤器以恢复原始配置
 			filter = new AwesomeLinkFilter(getProject());
 		}
