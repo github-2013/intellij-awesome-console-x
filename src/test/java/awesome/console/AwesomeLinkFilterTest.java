@@ -2130,49 +2130,42 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
-			
-			// 测试默认忽略模式中的各种情况
+
+			// 默认忽略模式: ^(\"?)[./]+\1$|^node_modules/|^(?i)(start|dev|test)$
 			System.out.println("Testing default ignore pattern with ignore style:");
-			
-			// 相对路径符号应该被忽略
+		
+			// 测试相对路径符号被忽略（匹配 ^(\"?)[./]+\1$ 部分）
 			assertPathNoMatches("Path: ", "./");
 			assertPathNoMatches("Path: ", "../");
 			assertPathNoMatches("Path: ", "\"./\"");
 			assertPathNoMatches("Path: ", "\"../\"");
-			
-			// node_modules 目录应该被忽略
+		
+			/*
+			 * 测试 node_modules 目录被忽略（匹配 ^node_modules/ 部分）
+			 * 独立的 node_modules/ 和 node_modules/package 应该被忽略
+			 */
 			assertPathNoMatches("Path: ", "node_modules/");
 			assertPathNoMatches("Path: ", "node_modules/package");
-			
-			// 常见命令参数应该被忽略（不区分大小写）
+		
+			// 测试常见命令参数被忽略（匹配 ^(?i)(start|dev|test)$ 部分，不区分大小写）
 			assertPathNoMatches("Command: ", "start");
 			assertPathNoMatches("Command: ", "dev");
 			assertPathNoMatches("Command: ", "test");
 			assertPathNoMatches("Command: ", "Start");
 			assertPathNoMatches("Command: ", "Dev");
 			assertPathNoMatches("Command: ", "Test");
-			
-			// 但是真正的文件路径应该被识别
-			assertPathDetection(
-				"Error in ./src/main.java:10",
-				"./src/main.java:10"
-			);
-			
-			assertPathDetection(
-				"Build: ./node_modules/package/index.js:20",
-				"./node_modules/package/index.js:20"
-			);
-			
-			assertPathDetection(
-				"File: start.sh",
-				"start.sh"
-			);
-			
-			assertPathDetection(
-				"Script: dev.config.js",
-				"dev.config.js"
-			);
-			
+		
+			// ./src/main.java:10 不匹配忽略模式（包含文件名和扩展名，不是单纯的相对路径符号）
+			assertPathDetection("Error in ./src/main.java:10", "./src/main.java:10");
+		
+			// ./node_modules/package/index.js:20 不匹配 ^node_modules/（因为以 ./ 开头，不是以 node_modules/ 开头）
+			assertPathDetection("Build: ./node_modules/package/index.js:20", "./node_modules/package/index.js:20");
+		
+			// start.sh 不匹配 ^(?i)(start|dev|test)$（因为包含扩展名 .sh，不是单纯的命令词）
+			assertPathDetection("File: start.sh", "start.sh");
+		
+			// dev.config.js 不匹配 ^(?i)(start|dev|test)$（因为包含 .config.js，不是单纯的命令词）
+			assertPathDetection("Script: dev.config.js", "dev.config.js");
 		} finally {
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
@@ -2241,7 +2234,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			assertPathNoMatches("Command: ", "START");
 			assertPathNoMatches("Command: ", "DEV");
 			assertPathNoMatches("Command: ", "TEST");
-			
 		} finally {
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;

@@ -14,7 +14,13 @@ plugins {
 // ========== 仓库配置 ==========
 repositories {
     // Maven 中央仓库：用于下载通用的 Java 依赖（如 JUnit 等）
-    mavenCentral()
+    // mavenCentral()
+
+    // Tencent Maven 中央仓库：用于下载通用的 Java 依赖（如 JUnit 等）
+    maven {
+        url "http://mirrors.tencent.com/nexus/repository/maven-public/"
+        allowInsecureProtocol = true
+    }
 
     // IntelliJ Platform 专用仓库配置
     intellijPlatform {
