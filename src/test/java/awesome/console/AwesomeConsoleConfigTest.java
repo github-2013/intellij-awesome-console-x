@@ -1,6 +1,7 @@
-package awesome.console.config;
+package awesome.console;
 
-import awesome.console.AwesomeLinkFilter;
+import awesome.console.config.AwesomeConsoleDefaults;
+import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
