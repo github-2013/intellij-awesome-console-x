@@ -252,7 +252,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 
-
 	/**
 	 * 测试Maven风格的行列号格式
 	 * 格式：file.java:[row,col]
@@ -530,7 +529,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试包含点号的路径（.、..、.gitignore等）
 	 */
 	public void testPathWithDots() {
-        // assertPathDetection("Path: . ", ".");
 		assertPathDetection("Path: ./intellij-awesome-console/src ", "./intellij-awesome-console/src");
 		assertPathDetection("Path: ../intellij-awesome-console/src ", "../intellij-awesome-console/src");
 		assertPathDetection("File: .gitignore ", ".gitignore");
@@ -1708,9 +1706,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			assertPathNoMatches("Command: ", "format");
 			assertPathNoMatches("Command: ", "clean");
 			
-		// 注意：对于包含多个单词的命令行（如 "npm run dev"），
-		// 只有在忽略列表中的单词会被过滤，其他单词（如 "npm"）可能仍然会被识别为潜在的文件名
-		// 因此这里不测试完整的命令行，只测试单个命令参数
+			// 注意：对于包含多个单词的命令行（如 "npm run dev"），
+			// 只有在忽略列表中的单词会被过滤，其他单词（如 "npm"）可能仍然会被识别为潜在的文件名
+			// 因此这里不测试完整的命令行，只测试单个命令参数
 			
 			// 但是，包含路径分隔符、扩展名或行号的路径仍然应该被识别
 			assertPathDetection(
@@ -2131,10 +2129,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 
-			// 默认忽略模式: ^(\"?)[./]+\1$|^node_modules/|^(?i)(start|dev|test)$
+			// 默认忽略模式: ^(\"?)[./\\\\]+\\1$|^node_modules/|^(?i)(start|dev|test)$
 			System.out.println("Testing default ignore pattern with ignore style:");
 		
-			// 测试相对路径符号被忽略（匹配 ^(\"?)[./]+\1$ 部分）
+			// 测试相对路径符号被忽略（匹配 ^(\"?)[./\\\\]+\\1$ 部分）
 			assertPathNoMatches("Path: ", "./");
 			assertPathNoMatches("Path: ", "../");
 			assertPathNoMatches("Path: ", "\"./\"");
@@ -2177,9 +2175,121 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 测试更正后的默认忽略模式正则表达式
+	 * 验证 DEFAULT_IGNORE_PATTERN_TEXT 中的正则表达式是否正确工作
+	 * 正则表达式：^(\"?)[./\\\\]+\1$|^node_modules/|^(?i)(start|dev|test)$
+	 * 
+	 * 该正则表达式包含三个部分：
+	 * 1. ^(\"?)[./\\\\]+\1$ - 匹配相对路径符号（如 .、..、./、.\、"."、".."等）
+	 * 2. ^node_modules/ - 匹配 node_modules 目录
+	 * 3. ^(?i)(start|dev|test)$ - 不区分大小写匹配命令参数
+	 */
+	public void testCorrectedDefaultIgnorePattern() {
+		System.out.println("Test corrected DEFAULT_IGNORE_PATTERN_TEXT:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 使用更正后的默认忽略模式
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^(\"?)[./\\\\]+\\1$|^node_modules/|^(?i)(start|dev|test)$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试第一部分：相对路径符号应该被忽略
+			System.out.println("Testing relative path symbols (should be ignored):");
+			assertPathNoMatches("Path: ", ".");
+			assertPathNoMatches("Path: ", "..");
+			assertPathNoMatches("Path: ", "./");
+			assertPathNoMatches("Path: ", ".\\");
+			assertPathNoMatches("Path: ", "../");
+			assertPathNoMatches("Path: ", "..\\");
+			assertPathNoMatches("Path: ", "../../");
+			assertPathNoMatches("Path: ", "..\\..\\");
+			assertPathNoMatches("Path: ", ".//");
+			assertPathNoMatches("Path: ", ".\\\\");
+			
+			// 测试带引号的相对路径符号
+			System.out.println("Testing quoted relative path symbols (should be ignored):");
+			assertPathNoMatches("Path: ", "\".\"");
+			assertPathNoMatches("Path: ", "\"..\"");
+			assertPathNoMatches("Path: ", "\"./\"");
+			assertPathNoMatches("Path: ", "\".\\\"");
+			assertPathNoMatches("Path: ", "\"../\"");
+			assertPathNoMatches("Path: ", "\"..\\\"");
+			assertPathNoMatches("Path: ", "\"../../\"");
+			assertPathNoMatches("Path: ", "\"..\\..\\\"");
+			
+			// 测试混合斜杠的相对路径符号
+			System.out.println("Testing mixed slash relative path symbols (should be ignored):");
+			assertPathNoMatches("Path: ", "./\\");
+			assertPathNoMatches("Path: ", ".\\//");
+			assertPathNoMatches("Path: ", "../\\");
+			assertPathNoMatches("Path: ", "..\\//");
+			
+			// 测试第二部分：node_modules 路径应该被忽略
+			System.out.println("Testing node_modules paths (should be ignored):");
+			assertPathNoMatches("Path: ", "node_modules/");
+			assertPathNoMatches("Path: ", "node_modules/package");
+			assertPathNoMatches("Path: ", "node_modules/package/index.js");
+			assertPathNoMatches("Path: ", "node_modules/@scope/package");
+			
+			// 测试第三部分：命令参数应该被忽略（不区分大小写）
+			System.out.println("Testing command parameters (should be ignored, case-insensitive):");
+			assertPathNoMatches("Command: ", "start");
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "START");
+			assertPathNoMatches("Command: ", "Dev");
+			assertPathNoMatches("Command: ", "TEST");
+			assertPathNoMatches("Command: ", "StArT");
+			assertPathNoMatches("Command: ", "dEv");
+			assertPathNoMatches("Command: ", "TeSt");
+			
+			// 测试不应该被忽略的路径（组合路径）
+			System.out.println("Testing paths that should NOT be ignored:");
+			assertPathDetection("Path: ./src", "./src");
+			assertPathDetection("Path: ../lib", "../lib");
+			assertPathDetection("Path: ./file.txt", "./file.txt");
+			assertPathDetection("Path: ../test.js", "../test.js");
+			assertPathDetection("Path: .gitignore", ".gitignore");
+			assertPathDetection("Path: ..config", "..config");
+			
+			// 测试不应该被忽略的文件名（包含命令参数但不完全匹配）
+			// 注意：FILE_PATTERN 在匹配单独的文件名时需要适当的上下文
+			// 使用路径形式或在文件名周围添加其他字符可以帮助正确匹配
+			System.out.println("Testing filenames that should NOT be ignored:");
+			assertPathDetection("File: src/starter.js", "src/starter.js");
+			assertPathDetection("File: config/develop.config", "config/develop.config");
+			assertPathDetection("File: tests/testing.txt", "tests/testing.txt");
+			assertPathDetection("Path: ./mystart.sh", "./mystart.sh");
+			assertPathDetection("Path: ./devtools.js", "./devtools.js");
+			assertPathDetection("Path: ./testcase.java", "./testcase.java");
+			
+			// 测试不应该被忽略的路径（不以 node_modules/ 开头）
+			System.out.println("Testing paths that should NOT be ignored (not starting with node_modules/):");
+			assertPathDetection("Error in src/node_modules", "src/node_modules");
+			assertPathDetection("File: my_node_modules/package", "my_node_modules/package");
+			assertPathDetection("See: node_modules.txt", "node_modules.txt");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
 	 * 测试去除忽略模式第一部分后的相对路径符号匹配
 	 * 验证当只保留 "^node_modules/|^(?i)(start|dev|test)$" 时，
-	 * 原本被第一部分 "^(\"?)[./]+\1$" 忽略的路径是否能被正确匹配
+	 * 原本被第一部分 "^(\"?)[./\\\\]+\\1$" 忽略的路径是否能被正确匹配
 	 */
 	public void testIgnorePatternWithoutRelativePathPart() {
 		System.out.println("Test ignore pattern without relative path part:");
