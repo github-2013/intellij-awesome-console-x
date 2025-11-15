@@ -1337,6 +1337,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				match = match.substring(offsets[0], match.length() - offsets[1]);
 			}
 			int[] groupRange = RegexUtils.tryGetGroupRange(fileMatcher, "link");
+			
+			// 在处理完 match 后，检查是否应该被忽略
+			// 先检查 ignorePattern，再检查其他忽略条件（省略号、反斜杠、句子末尾点号等）
+			if (shouldIgnore(match) || shouldIgnoreMatch(line, new FileLinkMatch(match, decodeDwc(path), groupRange[0] + offsets[0], groupRange[1] - offsets[1], row, col))) {
+				continue;
+			}
+			
 			results.add(new FileLinkMatch(
 					match, decodeDwc(path),
 					groupRange[0] + offsets[0],
@@ -1345,11 +1352,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			));
 		}
 		
-		// 应用忽略模式过滤，同时检查是否应该被忽略（省略号、反斜杠、句子末尾点号等）
-		final String finalLine = line;
-		return results.stream()
-				.filter(fileLinkMatch -> !shouldIgnore(fileLinkMatch.match) && !shouldIgnoreMatch(finalLine, fileLinkMatch))
-				.collect(Collectors.toList());
+		return results;
 	}
 
 	/**
@@ -1416,6 +1419,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		// 获取当前线程的忽略匹配器
 		final Matcher ignoreMatcher = this.ignoreMatcher.get();
 		// 如果启用了忽略模式且匹配器存在且匹配成功，则返回 true
+		// 使用 find() 而不是 matches()，因为忽略模式中的某些部分（如 ^node_modules/）没有 $ 结尾
 		return config.useIgnorePattern && null != ignoreMatcher && ignoreMatcher.reset(match).find();
 	}
 

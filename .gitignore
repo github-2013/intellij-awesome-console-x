@@ -2,7 +2,6 @@ out
 build
 .gradle
 *.class
-*.jar
 .idea
 .intellijPlatform
 .DS_Store

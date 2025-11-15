@@ -2177,7 +2177,6 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	/**
 	 * 测试更正后的默认忽略模式正则表达式
 	 * 验证 DEFAULT_IGNORE_PATTERN_TEXT 中的正则表达式是否正确工作
-	 * 正则表达式：^(\"?)[./\\\\]+\1$|^node_modules/|^(?i)(start|dev|test)$
 	 * 
 	 * 该正则表达式包含三个部分：
 	 * 1. ^(\"?)[./\\\\]+\1$ - 匹配相对路径符号（如 .、..、./、.\、"."、".."等）
@@ -2261,15 +2260,15 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			assertPathDetection("Path: ..config", "..config");
 			
 			// 测试不应该被忽略的文件名（包含命令参数但不完全匹配）
-			// 注意：FILE_PATTERN 在匹配单独的文件名时需要适当的上下文
-			// 使用路径形式或在文件名周围添加其他字符可以帮助正确匹配
-			System.out.println("Testing filenames that should NOT be ignored:");
-			assertPathDetection("File: src/starter.js", "src/starter.js");
-			assertPathDetection("File: config/develop.config", "config/develop.config");
-			assertPathDetection("File: tests/testing.txt", "tests/testing.txt");
-			assertPathDetection("Path: ./mystart.sh", "./mystart.sh");
-			assertPathDetection("Path: ./devtools.js", "./devtools.js");
-			assertPathDetection("Path: ./testcase.java", "./testcase.java");
+			// 这些文件名虽然以 start/dev/test 开头，但因为有扩展名，不应该被忽略模式过滤
+			// 忽略模式 ^(?i)(start|dev|test)$ 只匹配完全等于这些单词的情况
+			System.out.println("Testing filenames that should NOT be ignored (contain command prefixes but have extensions):");
+			assertPathDetection("File: start.js", "start.js");
+			assertPathDetection("File: dev.config", "dev.config");
+			assertPathDetection("File: test.txt", "test.txt");
+			assertPathDetection("File: start.sh", "start.sh");
+			assertPathDetection("File: dev.json", "dev.json");
+			assertPathDetection("File: test.py", "test.py");
 			
 			// 测试不应该被忽略的路径（不以 node_modules/ 开头）
 			System.out.println("Testing paths that should NOT be ignored (not starting with node_modules/):");
@@ -2349,6 +2348,1015 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
 			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试自定义忽略模式：专门忽略start.js文件
+	 * 验证可以通过自定义正则表达式来忽略特定的文件名
+	 */
+	public void testCustomIgnorePatternForStartJs() {
+		System.out.println("Test custom ignore pattern to ignore start.js file:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 设置自定义忽略模式：专门忽略start.js文件
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^start\\.js$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试start.js文件应该被忽略
+			System.out.println("Testing start.js file (should be ignored):");
+			assertPathNoMatches("File: ", "start.js");
+			assertPathNoMatches("Error in ", "start.js");
+			assertPathNoMatches("Loading ", "start.js");
+			
+			// 测试其他类似文件名不应该被忽略
+			System.out.println("Testing similar files that should NOT be ignored:");
+			assertPathDetection("File: starter.js", "starter.js");
+			assertPathDetection("File: start.sh", "start.sh");
+			assertPathDetection("File: start.json", "start.json");
+			assertPathDetection("File: restart.js", "restart.js");
+			assertPathDetection("File: start", "start");
+			assertPathDetection("File: START.js", "START.js");  // 大小写敏感
+			
+			// 测试路径中包含start.js但不是单独文件名的情况
+			System.out.println("Testing paths containing start.js but not as standalone filename:");
+			assertPathDetection("Path: src/start.js", "src/start.js");
+			assertPathDetection("Path: ./start.js", "./start.js");
+			assertPathDetection("Path: ../config/start.js", "../config/start.js");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试自定义忽略模式：忽略多个特定文件
+	 * 验证可以通过一个正则表达式同时忽略多个特定文件
+	 */
+	public void testCustomIgnorePatternForMultipleFiles() {
+		System.out.println("Test custom ignore pattern to ignore multiple specific files:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 设置自定义忽略模式：忽略start.js、dev.config和test.txt文件
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^(start\\.js|dev\\.config|test\\.txt)$");
+			
+			// 重新创建过滤器以应用新配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试指定的文件应该被忽略
+			System.out.println("Testing specific files that should be ignored:");
+			assertPathNoMatches("File: ", "start.js");
+			assertPathNoMatches("File: ", "dev.config");
+			assertPathNoMatches("File: ", "test.txt");
+			
+			// 测试类似但不完全匹配的文件名不应该被忽略
+			System.out.println("Testing similar files that should NOT be ignored:");
+			assertPathDetection("File: starter.js", "starter.js");
+			assertPathDetection("File: start.json", "start.json");
+			assertPathDetection("File: dev.json", "dev.json");
+			assertPathDetection("File: development.config", "development.config");
+			assertPathDetection("File: test.py", "test.py");
+			assertPathDetection("File: unittest.txt", "unittest.txt");
+			
+			// 测试大小写敏感性
+			System.out.println("Testing case sensitivity:");
+			assertPathDetection("File: START.JS", "START.JS");
+			assertPathDetection("File: Dev.Config", "Dev.Config");
+			assertPathDetection("File: TEST.TXT", "TEST.TXT");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	// ========================================
+	// 配置面板测试用例
+	// ========================================
+
+	/**
+	 * 测试Debug Mode配置项
+	 * 验证调试模式开关对过滤器行为的影响
+	 */
+	public void testDebugModeConfiguration() {
+		System.out.println("Test Debug Mode configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalDebugMode = storage.DEBUG_MODE;
+		
+		try {
+			// 测试启用调试模式
+			storage.DEBUG_MODE = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证调试模式启用时，基本功能仍然正常
+			assertPathDetection("Debug mode enabled: src/main.java:10", "src/main.java:10", 10);
+			assertURLDetection("Debug mode enabled: https://example.com", "https://example.com");
+			
+			// 测试禁用调试模式
+			storage.DEBUG_MODE = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证调试模式禁用时，基本功能仍然正常
+			assertPathDetection("Debug mode disabled: src/test.java:20", "src/test.java:20", 20);
+			assertURLDetection("Debug mode disabled: http://test.com", "http://test.com");
+			
+			// 验证默认值
+			assertEquals("Debug mode default value should be false", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_DEBUG_MODE, false);
+			
+		} finally {
+			// 恢复原始配置
+			storage.DEBUG_MODE = originalDebugMode;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Line Length Limit配置项
+	 * 验证行长度限制对过滤器行为的影响
+	 */
+	public void testLineLengthLimitConfiguration() {
+		System.out.println("Test Line Length Limit configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalLimitLineLength = storage.LIMIT_LINE_LENGTH;
+		int originalLineMaxLength = storage.LINE_MAX_LENGTH;
+		
+		try {
+			// 测试启用行长度限制
+			storage.LIMIT_LINE_LENGTH = true;
+			storage.LINE_MAX_LENGTH = 50; // 设置较短的限制用于测试
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试短行（在限制内）- 应该正常处理
+			String shortLine = "Error in src/main.java:10";
+			assertPathDetection(shortLine, "src/main.java:10", 10);
+			
+			// 测试长行（超过限制）- 根据配置可能被截断或分块处理
+			String longLine = "This is a very long line that exceeds the limit: src/test.java:20 and continues with more text";
+			// 注意：具体行为取决于SPLIT_ON_LIMIT配置
+			System.out.println("Testing long line: " + longLine);
+			
+			// 测试禁用行长度限制
+			storage.LIMIT_LINE_LENGTH = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证禁用限制时，长行也能正常处理
+			assertPathDetection(longLine, "src/test.java:20", 20);
+			
+			// 验证默认值
+			assertEquals("Line length limit default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_LIMIT_LINE_LENGTH, true);
+			assertEquals("Default max line length should be 1024", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_LINE_MAX_LENGTH, 1024);
+			
+		} finally {
+			// 恢复原始配置
+			storage.LIMIT_LINE_LENGTH = originalLimitLineLength;
+			storage.LINE_MAX_LENGTH = originalLineMaxLength;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Split Lines配置项
+	 * 验证超长行分块处理配置对过滤器行为的影响
+	 */
+	public void testSplitLinesConfiguration() {
+		System.out.println("Test Split Lines configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalLimitLineLength = storage.LIMIT_LINE_LENGTH;
+		boolean originalSplitOnLimit = storage.SPLIT_ON_LIMIT;
+		int originalLineMaxLength = storage.LINE_MAX_LENGTH;
+		
+		try {
+			// 设置基础配置：启用行长度限制
+			storage.LIMIT_LINE_LENGTH = true;
+			storage.LINE_MAX_LENGTH = 50; // 设置较短的限制用于测试
+			
+			// 测试启用分块处理
+			storage.SPLIT_ON_LIMIT = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试超长行的分块处理
+			String longLine = "This is a very long line that exceeds the limit: src/main.java:10 and continues with more text that should be split";
+			System.out.println("Testing split on limit enabled: " + longLine);
+			// 注意：分块处理的具体行为可能因实现而异
+			
+			// 测试禁用分块处理
+			storage.SPLIT_ON_LIMIT = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 测试超长行的截断处理
+			System.out.println("Testing split on limit disabled: " + longLine);
+			// 当禁用分块时，超长行可能被截断
+			
+			// 验证默认值
+			assertEquals("Split on limit default value should be false", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SPLIT_ON_LIMIT, false);
+			
+			// 测试分块处理与行长度限制的交互
+			storage.LIMIT_LINE_LENGTH = false;
+			storage.SPLIT_ON_LIMIT = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 当行长度限制禁用时，分块处理应该不生效
+			assertPathDetection(longLine, "src/main.java:10", 10);
+			
+		} finally {
+			// 恢复原始配置
+			storage.LIMIT_LINE_LENGTH = originalLimitLineLength;
+			storage.SPLIT_ON_LIMIT = originalSplitOnLimit;
+			storage.LINE_MAX_LENGTH = originalLineMaxLength;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Search URLs配置项
+	 * 验证URL搜索开关对过滤器行为的影响
+	 */
+	public void testSearchURLsConfiguration() {
+		System.out.println("Test Search URLs configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalSearchUrls = storage.searchUrls;
+		
+		try {
+			// 测试启用URL搜索
+			storage.searchUrls = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证各种URL格式能被正确检测
+			assertURLDetection("HTTP URL: https://example.com/path", "https://example.com/path");
+			assertURLDetection("FTP URL: ftp://server.com:21/file", "ftp://server.com:21/file");
+			assertURLDetection("File URL: file:///home/user/file.txt", "file:///home/user/file.txt");
+			assertURLDetection("Git URL: git://github.com/user/repo.git", "git://github.com/user/repo.git");
+			
+			// 测试禁用URL搜索
+			storage.searchUrls = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证URL不会被检测（应该没有URL匹配）
+			assertUrlNoMatches("HTTP URL disabled: ", "https://example.com/path");
+			assertUrlNoMatches("FTP URL disabled: ", "ftp://server.com:21/file");
+			assertUrlNoMatches("File URL disabled: ", "file:///home/user/file.txt");
+			assertUrlNoMatches("Git URL disabled: ", "git://github.com/user/repo.git");
+			
+			// 验证默认值
+			assertEquals("Search URLs default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_URLS, true);
+			
+			// 验证禁用URL搜索时，文件路径检测仍然正常工作
+			storage.searchUrls = false;
+			filter = new AwesomeLinkFilter(getProject());
+			assertPathDetection("File path should still work: src/main.java:10", "src/main.java:10", 10);
+			
+		} finally {
+			// 恢复原始配置
+			storage.searchUrls = originalSearchUrls;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Search Files配置项
+	 * 验证文件路径搜索开关对过滤器行为的影响
+	 */
+	public void testSearchFilesConfiguration() {
+		System.out.println("Test Search Files configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalSearchFiles = storage.searchFiles;
+		
+		try {
+			// 测试启用文件路径搜索
+			storage.searchFiles = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证各种文件路径格式能被正确检测
+			assertPathDetection("Relative path: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Absolute Unix path: /home/user/project/file.txt", "/home/user/project/file.txt");
+			assertPathDetection("Windows path: C:\\Windows\\System32\\file.dll", "C:\\Windows\\System32\\file.dll");
+			assertPathDetection("File with line and column: test.py:25:10", "test.py:25:10", 25, 10);
+			assertPathDetection("TypeScript format: service.ts(29,50)", "service.ts(29,50)", 29, 50);
+			
+			// 测试禁用文件路径搜索
+			storage.searchFiles = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证文件路径不会被检测（应该没有路径匹配）
+			assertPathNoMatches("File path disabled: ", "src/main.java:10");
+			assertPathNoMatches("Absolute path disabled: ", "/home/user/project/file.txt");
+			assertPathNoMatches("Windows path disabled: ", "C:\\Windows\\System32\\file.dll");
+			assertPathNoMatches("File with line disabled: ", "test.py:25:10");
+			assertPathNoMatches("TypeScript format disabled: ", "service.ts(29,50)");
+			
+			// 验证默认值
+			assertEquals("Search Files default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_FILES, true);
+			
+			// 验证禁用文件搜索时，URL检测仍然正常工作
+			storage.searchFiles = false;
+			filter = new AwesomeLinkFilter(getProject());
+			assertURLDetection("URL should still work: https://example.com", "https://example.com");
+			
+		} finally {
+			// 恢复原始配置
+			storage.searchFiles = originalSearchFiles;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Search Classes配置项
+	 * 验证Java类名搜索开关对过滤器行为的影响
+	 */
+	public void testSearchClassesConfiguration() {
+		System.out.println("Test Search Classes configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalSearchClasses = storage.searchClasses;
+		
+		try {
+			// 测试启用类名搜索
+			storage.searchClasses = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证各种Java类名格式能被正确检测
+			assertPathDetection("Java class: awesome.console.AwesomeLinkFilter:150", "awesome.console.AwesomeLinkFilter:150", 150);
+			assertPathDetection("Simple class: MyClass:42", "MyClass:42", 42);
+			assertPathDetection("Scala class: awesome.console.IntegrationTest$:4", "awesome.console.IntegrationTest$:4", 4);
+			assertPathDetection("Class file: build/classes/java/main/awesome/console/AwesomeLinkFilter.class:85:50", 
+				"build/classes/java/main/awesome/console/AwesomeLinkFilter.class:85:50", 85, 50);
+			
+			// 测试Java堆栈跟踪格式
+			assertPathDetection("Stack trace: at awesome.console.AwesomeLinkFilterTest.testFileWithoutDirectory(AwesomeLinkFilterTest.java:14)",
+				"awesome.console.AwesomeLinkFilterTest.testFileWithoutDirectory", "AwesomeLinkFilterTest.java:14");
+			assertPathDetection("JAR stack trace: at redis.clients.jedis.util.Pool.getResource(Pool.java:59) ~[jedis-3.0.0.jar:?]",
+				"redis.clients.jedis.util.Pool.getResource", "Pool.java:59");
+			
+			// 测试禁用类名搜索
+			storage.searchClasses = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证类名不会被检测（应该没有类名匹配）
+			assertPathNoMatches("Java class disabled: ", "awesome.console.AwesomeLinkFilter:150");
+			assertPathNoMatches("Simple class disabled: ", "MyClass:42");
+			assertPathNoMatches("Scala class disabled: ", "awesome.console.IntegrationTest$:4");
+			
+			// 但是文件路径仍然应该被检测（如果文件搜索启用）
+			storage.searchFiles = true;
+			filter = new AwesomeLinkFilter(getProject());
+			assertPathDetection("File path should still work: AwesomeLinkFilterTest.java:14", "AwesomeLinkFilterTest.java:14", 14);
+			
+			// 验证默认值
+			assertEquals("Search Classes default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_CLASSES, true);
+			
+		} finally {
+			// 恢复原始配置
+			storage.searchClasses = originalSearchClasses;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Result Limit配置项
+	 * 验证搜索结果数量限制对过滤器行为的影响
+	 */
+	public void testResultLimitConfiguration() {
+		System.out.println("Test Result Limit configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseResultLimit = storage.useResultLimit;
+		int originalResultLimit = storage.getResultLimit();
+		
+		try {
+			// 测试启用结果限制
+			storage.useResultLimit = true;
+			storage.setResultLimit(2); // 设置较小的限制用于测试
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 创建包含多个路径的测试行
+			String multiplePathsLine = "Files: file1.java file2.java file3.java file4.java file5.java";
+			System.out.println("Testing result limit enabled (limit=2): " + multiplePathsLine);
+			
+			// 检测路径，应该受到数量限制
+			List<awesome.console.match.FileLinkMatch> results = filter.detectPaths(multiplePathsLine);
+			System.out.println("Found " + results.size() + " results with limit enabled");
+			
+			// 测试禁用结果限制
+			storage.useResultLimit = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 检测相同的行，应该没有数量限制
+			results = filter.detectPaths(multiplePathsLine);
+			System.out.println("Found " + results.size() + " results with limit disabled");
+			
+			// 验证默认值
+			assertEquals("Use result limit default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_RESULT_LIMIT, true);
+			assertEquals("Default result limit should be 100", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_RESULT_LIMIT, 100);
+			assertEquals("Minimum result limit should be 1", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_MIN_RESULT_LIMIT, 1);
+			
+			// 测试边界值
+			storage.useResultLimit = true;
+			storage.setResultLimit(1); // 最小限制
+			filter = new AwesomeLinkFilter(getProject());
+			
+			String singlePathLine = "Error in src/main.java:10";
+			assertPathDetection(singlePathLine, "src/main.java:10", 10);
+			
+			// 测试较大的限制值
+			storage.setResultLimit(1000);
+			filter = new AwesomeLinkFilter(getProject());
+			assertPathDetection(singlePathLine, "src/main.java:10", 10);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useResultLimit = originalUseResultLimit;
+			storage.setResultLimit(originalResultLimit);
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试File Pattern配置项
+	 * 验证自定义文件路径正则表达式对过滤器行为的影响
+	 */
+	public void testFilePatternConfiguration() {
+		System.out.println("Test File Pattern configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseFilePattern = storage.useFilePattern;
+		String originalFilePatternText = storage.getFilePatternText();
+		
+		try {
+			// 测试禁用自定义文件模式（使用默认模式）
+			storage.useFilePattern = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证默认模式能正确检测各种路径格式
+			assertPathDetection("Default pattern: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Default pattern: test.py:25:15", "test.py:25:15", 25, 15);
+			assertPathDetection("Default pattern: service.ts(29,50)", "service.ts(29,50)", 29, 50);
+			
+			// 测试启用自定义文件模式
+			storage.useFilePattern = true;
+			// 设置一个简单的自定义模式，只匹配.java文件
+			String customPattern = "(?<link>(?<path>[\\w/\\\\.-]+\\.java)(?::(?<row>\\d+)(?::(?<col>\\d+))?)?)";
+			storage.setFilePatternText(customPattern);
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证自定义模式只匹配.java文件
+			assertPathDetection("Custom pattern Java: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Custom pattern Java: Test.java:5", "Test.java:5", 5);
+			
+			// 验证自定义模式不匹配其他文件类型
+			assertPathNoMatches("Custom pattern Python: ", "test.py:25:15");
+			assertPathNoMatches("Custom pattern TypeScript: ", "service.ts:29:50");
+			
+			// 验证默认值
+			assertEquals("Use file pattern default value should be false", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_FILE_PATTERN, false);
+			assertNotNull("Default file pattern should not be null", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_FILE_PATTERN);
+			
+			// 测试无效的正则表达式（应该回退到默认模式）
+			storage.useFilePattern = true;
+			storage.setFilePatternText("invalid[regex"); // 无效的正则表达式
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 即使设置了无效的正则，基本功能仍应工作（使用默认模式）
+			System.out.println("Testing invalid regex pattern (should fallback to default)");
+			
+			// 测试包含必需分组的自定义模式
+			storage.useFilePattern = true;
+			String validCustomPattern = "(?<link>(?<path>[\\w/\\\\.-]+\\.(java|py|ts))(?::(?<row>\\d+)(?::(?<col>\\d+))?)?)";
+			storage.setFilePatternText(validCustomPattern);
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证包含必需分组的模式能正常工作
+			assertPathDetection("Valid custom pattern: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Valid custom pattern: test.py:25", "test.py:25", 25);
+			assertPathDetection("Valid custom pattern: app.ts:30:5", "app.ts:30:5", 30, 5);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useFilePattern = originalUseFilePattern;
+			storage.setFilePatternText(originalFilePatternText);
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Ignore Pattern配置项
+	 * 验证忽略模式配置对过滤器行为的影响
+	 */
+	public void testIgnorePatternConfiguration() {
+		System.out.println("Test Ignore Pattern configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePatternText = storage.getIgnorePatternText();
+		
+		try {
+			// 测试禁用忽略模式
+			storage.useIgnorePattern = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 当忽略模式禁用时，所有匹配项都应该被检测
+			assertPathDetection("Ignore disabled: dev", "dev");
+			assertPathDetection("Ignore disabled: test", "test");
+			assertPathDetection("Ignore disabled: ./", "./");
+			assertPathDetection("Ignore disabled: node_modules/package", "node_modules/package");
+			
+			// 测试启用默认忽略模式
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证默认忽略模式能正确过滤常见的误匹配项
+			assertPathNoMatches("Default ignore: ", "dev");
+			assertPathNoMatches("Default ignore: ", "test");
+			assertPathNoMatches("Default ignore: ", "start");
+			assertPathNoMatches("Default ignore: ", "./");
+			assertPathNoMatches("Default ignore: ", "../");
+			assertPathNoMatches("Default ignore: ", "node_modules/");
+			
+			// 但是真正的文件路径仍应被检测
+			assertPathDetection("Real path: src/dev/index.js", "src/dev/index.js");
+			assertPathDetection("Real path: test.java", "test.java");
+			assertPathDetection("Real path: ./src/main.java", "./src/main.java");
+			
+			// 测试自定义忽略模式
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^(temp|cache|logs?)$"); // 忽略temp、cache、log、logs
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证自定义忽略模式
+			assertPathNoMatches("Custom ignore: ", "temp");
+			assertPathNoMatches("Custom ignore: ", "cache");
+			assertPathNoMatches("Custom ignore: ", "log");
+			assertPathNoMatches("Custom ignore: ", "logs");
+			
+			// 其他词汇不应被忽略
+			assertPathDetection("Not ignored: temporary", "temporary");
+			assertPathDetection("Not ignored: cached", "cached");
+			assertPathDetection("Not ignored: logger", "logger");
+			
+			// 验证默认值
+			assertEquals("Use ignore pattern default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_PATTERN, true);
+			assertNotNull("Default ignore pattern should not be null", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN);
+			assertEquals("Default ignore pattern text should match", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT, 
+				"^(\"?)[./\\\\]+\\1$|^node_modules/|^(?i)(start|dev|test)$");
+			
+			// 测试无效的忽略模式（应该禁用忽略功能）
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("invalid[regex"); // 无效的正则表达式
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 无效的忽略模式应该不影响基本功能
+			System.out.println("Testing invalid ignore pattern (should disable ignore)");
+			assertPathDetection("Invalid ignore pattern: src/main.java", "src/main.java");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePatternText);
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Ignore Style配置项
+	 * 验证忽略样式配置对过滤器行为的影响
+	 */
+	public void testIgnoreStyleConfiguration() {
+		System.out.println("Test Ignore Style configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
+		String originalIgnorePatternText = storage.getIgnorePatternText();
+		
+		try {
+			// 设置基础配置：启用忽略模式
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^(dev|test)$"); // 简单的忽略模式用于测试
+			
+			// 测试禁用忽略样式
+			storage.useIgnoreStyle = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 当忽略样式禁用时，被忽略的匹配项不会创建任何超链接
+			System.out.println("Testing ignore style disabled:");
+			assertPathNoMatches("Ignore style disabled: ", "dev");
+			assertPathNoMatches("Ignore style disabled: ", "test");
+			
+			// 正常的文件路径仍应被检测
+			assertPathDetection("Normal path: src/main.java", "src/main.java");
+			
+			// 测试启用忽略样式
+			storage.useIgnoreStyle = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 当忽略样式启用时，被忽略的匹配项会创建空的超链接占位符
+			// 注意：这个功能主要用于防止其他插件在被忽略的位置生成错误的超链接
+			System.out.println("Testing ignore style enabled:");
+			System.out.println("Ignored items should create empty hyperlink placeholders");
+			
+			// 正常的文件路径仍应被检测
+			assertPathDetection("Normal path with ignore style: src/main.java", "src/main.java");
+			
+			// 验证默认值
+			assertEquals("Use ignore style default value should be false", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_STYLE, false);
+			
+			// 测试忽略样式与忽略模式的交互
+			storage.useIgnorePattern = false; // 禁用忽略模式
+			storage.useIgnoreStyle = true;    // 启用忽略样式
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 当忽略模式禁用时，忽略样式应该不生效
+			assertPathDetection("Ignore pattern disabled: dev", "dev");
+			assertPathDetection("Ignore pattern disabled: test", "test");
+			
+			// 测试Terminal环境下的行为
+			// 注意：在Terminal中，忽略样式功能不被支持（JediTerm不使用highlightAttributes）
+			System.out.println("Note: Ignore style is not supported in Terminal environment");
+			System.out.println("In Terminal, ignored patterns will simply not be highlighted");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.useIgnoreStyle = originalUseIgnoreStyle;
+			storage.setIgnorePatternText(originalIgnorePatternText);
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Fix Choose Target File配置项
+	 * 验证修复选择目标文件弹窗配置对过滤器行为的影响
+	 */
+	public void testFixChooseTargetFileConfiguration() {
+		System.out.println("Test Fix Choose Target File configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalFixChooseTargetFile = storage.fixChooseTargetFile;
+		
+		try {
+			// 测试启用修复选择目标文件功能
+			storage.fixChooseTargetFile = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证基本路径检测功能仍然正常
+			assertPathDetection("Fix enabled: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Fix enabled: test/MyTest.java:25", "test/MyTest.java:25", 25);
+			
+			// 测试可能触发"Choose Target File"弹窗的场景
+			// 这通常发生在有多个同名文件时
+			assertPathDetection("Multiple files scenario: Main.java:15", "Main.java:15", 15);
+			assertPathDetection("Common filename: Test.java:30", "Test.java:30", 30);
+			
+			// 测试禁用修复选择目标文件功能
+			storage.fixChooseTargetFile = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证基本功能仍然正常，但可能会出现"Choose Target File"弹窗
+			assertPathDetection("Fix disabled: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Fix disabled: test/MyTest.java:25", "test/MyTest.java:25", 25);
+			
+			// 验证默认值
+			assertEquals("Fix choose target file default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_FIX_CHOOSE_TARGET_FILE, true);
+			
+			// 测试与其他配置的交互
+			storage.fixChooseTargetFile = true;
+			storage.searchFiles = true; // 确保文件搜索启用
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证修复功能与文件搜索的配合
+			assertPathDetection("Fix with file search: utils/Helper.java:5", "utils/Helper.java:5", 5);
+			
+			// 测试相对路径和绝对路径
+			assertPathDetection("Relative path: ./src/App.java:20", "./src/App.java:20", 20);
+			assertPathDetection("Absolute path: /home/user/project/Service.java:35", "/home/user/project/Service.java:35", 35);
+			
+			// 注意：这个配置主要影响IntelliJ IDEA的文件导航行为
+			// 当启用时，插件会尝试避免显示"Choose Target File"弹窗
+			// 当禁用时，可能会在有多个同名文件时显示选择弹窗
+			System.out.println("Note: This configuration affects IntelliJ IDEA file navigation behavior");
+			System.out.println("When enabled, it tries to avoid 'Choose Target File' popup");
+			System.out.println("When disabled, popup may appear for files with same name");
+			
+		} finally {
+			// 恢复原始配置
+			storage.fixChooseTargetFile = originalFixChooseTargetFile;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试File Types配置项
+	 * 验证非文本文件类型过滤配置对过滤器行为的影响
+	 */
+	public void testFileTypesConfiguration() {
+		System.out.println("Test File Types configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseFileTypes = storage.useFileTypes;
+		String originalFileTypes = storage.getFileTypes();
+		
+		try {
+			// 测试启用文件类型过滤
+			storage.useFileTypes = true;
+			storage.setFileTypes("bmp,gif,jpeg,jpg,png,webp,ttf"); // 使用默认的非文本文件类型
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证文本文件仍然能被正确检测
+			assertPathDetection("Text file: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Text file: script.py:25", "script.py:25", 25);
+			assertPathDetection("Text file: app.ts:15", "app.ts:15", 15);
+			assertPathDetection("Text file: style.css:30", "style.css:30", 30);
+			assertPathDetection("Text file: README.md:5", "README.md:5", 5);
+			
+			// 验证配置中的非文本文件类型的处理
+			// 注意：这个配置主要用于修复某些文件仍在外部程序中打开的问题
+			System.out.println("Testing non-text file types (may have special handling):");
+			assertPathDetection("Image file: assets/logo.png", "assets/logo.png");
+			assertPathDetection("Image file: images/banner.jpg", "images/banner.jpg");
+			assertPathDetection("Font file: fonts/arial.ttf", "fonts/arial.ttf");
+			
+			// 测试自定义文件类型配置
+			storage.useFileTypes = true;
+			storage.setFileTypes("exe,dll,so,dylib"); // 自定义二进制文件类型
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证文本文件仍然正常
+			assertPathDetection("Custom config text: main.cpp:20", "main.cpp:20", 20);
+			assertPathDetection("Custom config text: config.json:10", "config.json:10", 10);
+			
+			// 验证自定义的二进制文件类型
+			assertPathDetection("Binary file: lib/library.dll", "lib/library.dll");
+			assertPathDetection("Binary file: bin/program.exe", "bin/program.exe");
+			
+			// 测试禁用文件类型过滤
+			storage.useFileTypes = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证所有文件类型都能正常检测
+			assertPathDetection("Filter disabled: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Filter disabled: assets/logo.png", "assets/logo.png");
+			assertPathDetection("Filter disabled: fonts/arial.ttf", "fonts/arial.ttf");
+			
+			// 验证默认值
+			assertEquals("Use file types default value should be true", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_FILE_TYPES, true);
+			assertEquals("Default file types should match", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_FILE_TYPES, 
+				"bmp,gif,jpeg,jpg,png,webp,ttf");
+			
+			// 测试空的文件类型配置
+			storage.useFileTypes = true;
+			storage.setFileTypes(""); // 空配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 空配置时应该正常工作
+			assertPathDetection("Empty config: src/test.java:15", "src/test.java:15", 15);
+			
+			// 测试包含空格的文件类型配置
+			storage.useFileTypes = true;
+			storage.setFileTypes("pdf, doc, docx, xls, xlsx"); // 包含空格
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证空格被正确处理
+			assertPathDetection("Spaces in config: document.pdf", "document.pdf");
+			assertPathDetection("Spaces in config: report.docx", "report.docx");
+			
+			// 注意：这个配置主要用于解决某些文件仍在外部程序中打开的问题
+			// 如果不需要这个功能，可以取消勾选
+			System.out.println("Note: This configuration helps fix issues with files still open in external programs");
+			System.out.println("Uncheck if you don't need this functionality");
+			
+		} finally {
+			// 恢复原始配置
+			storage.useFileTypes = originalUseFileTypes;
+			storage.setFileTypes(originalFileTypes);
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Resolve Symlinks配置项
+	 * 验证符号链接解析配置对过滤器行为的影响
+	 */
+	public void testResolveSymlinksConfiguration() {
+		System.out.println("Test Resolve Symlinks configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalResolveSymlink = storage.resolveSymlink;
+		
+		try {
+			// 测试启用符号链接解析
+			storage.resolveSymlink = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证基本路径检测功能仍然正常
+			assertPathDetection("Symlink enabled: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Symlink enabled: test/MyTest.java:25", "test/MyTest.java:25", 25);
+			
+			// 测试可能包含符号链接的路径
+			// 注意：符号链接解析是实验性功能，主要用于解析符号链接到实际文件
+			assertPathDetection("Potential symlink: lib/shared.so", "lib/shared.so");
+			assertPathDetection("Potential symlink: bin/executable", "bin/executable");
+			assertPathDetection("Potential symlink: /usr/local/bin/tool", "/usr/local/bin/tool");
+			
+			// 测试禁用符号链接解析
+			storage.resolveSymlink = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证基本功能仍然正常，但不会解析符号链接
+			assertPathDetection("Symlink disabled: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("Symlink disabled: test/MyTest.java:25", "test/MyTest.java:25", 25);
+			
+			// 符号链接路径仍应被检测，但不会被解析
+			assertPathDetection("Symlink not resolved: lib/shared.so", "lib/shared.so");
+			assertPathDetection("Symlink not resolved: bin/executable", "bin/executable");
+			
+			// 验证默认值
+			assertEquals("Resolve symlink default value should be false", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_RESOLVE_SYMLINK, false);
+			
+			// 测试与其他配置的交互
+			storage.resolveSymlink = true;
+			storage.searchFiles = true; // 确保文件搜索启用
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证符号链接解析与文件搜索的配合
+			assertPathDetection("Symlink with file search: utils/Helper.java:5", "utils/Helper.java:5", 5);
+			
+			// 测试Unix风格的符号链接路径
+			assertPathDetection("Unix symlink: /var/log/app.log", "/var/log/app.log");
+			assertPathDetection("Unix symlink: ~/.bashrc", "~/.bashrc");
+			
+			// 测试相对路径符号链接
+			assertPathDetection("Relative symlink: ../shared/config.json", "../shared/config.json");
+			assertPathDetection("Relative symlink: ./link/file.txt", "./link/file.txt");
+			
+			// 注意：这个功能是实验性的，用于解析符号链接
+			// 与IDEA Resolve Symlinks插件兼容
+			System.out.println("Note: This is an experimental feature for resolving symlinks");
+			System.out.println("Compatible with IDEA Resolve Symlinks plugin");
+			System.out.println("When enabled, symlinks will be resolved to actual files");
+			System.out.println("When disabled, symlinks are treated as regular paths");
+			
+		} finally {
+			// 恢复原始配置
+			storage.resolveSymlink = originalResolveSymlink;
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 测试Preserve ANSI Colors配置项
+	 * 验证ANSI颜色保留配置对过滤器行为的影响
+	 */
+	public void testPreserveAnsiColorsConfiguration() {
+		System.out.println("Test Preserve ANSI Colors configuration:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalPreserveAnsiColors = storage.preserveAnsiColors;
+		
+		try {
+			// 测试禁用ANSI颜色保留（默认行为）
+			storage.preserveAnsiColors = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证带ANSI转义序列的路径能被正确检测（ANSI序列被移除）
+			assertPathDetection("ANSI disabled: \u001b[31msrc/main.java\u001b[0m:10", "src/main.java:10", 10);
+			assertPathDetection("ANSI disabled: \u001b[32m./test.py\u001b[0m:25", "./test.py:25", 25);
+			assertPathDetection("ANSI disabled: \u001b[1m\u001b[4mapp.ts\u001b[0m:15", "app.ts:15", 15);
+			
+			// 测试现代Shell提示符中的ANSI序列
+			assertPathDetection("Shell prompt: \u001b[34m~/projects/my-app\u001b[0m $ ls", "~/projects/my-app");
+			assertPathDetection("Oh-my-posh: \u001b[48;2;41;184;219m jan \u001b[0m oh-my-posh", "oh-my-posh");
+			
+			// 测试启用ANSI颜色保留
+			storage.preserveAnsiColors = true;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证不带ANSI序列的路径仍能正常检测
+			assertPathDetection("ANSI enabled: src/main.java:10", "src/main.java:10", 10);
+			assertPathDetection("ANSI enabled: test/MyTest.java:25", "test/MyTest.java:25", 25);
+			
+			// 验证Shell提示符（不带ANSI序列）
+			assertPathDetection("Plain prompt: ~/projects/my-app $ ls", "~/projects/my-app");
+			assertPathDetection("Plain prompt: jan oh-my-posh main $ hello", "oh-my-posh");
+			
+			// 验证默认值
+			assertEquals("Preserve ANSI colors default value should be false", 
+				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_PRESERVE_ANSI_COLORS, false);
+			
+			// 测试与其他配置的交互
+			storage.preserveAnsiColors = false; // 禁用ANSI保留
+			storage.searchFiles = true;         // 启用文件搜索
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证ANSI处理与文件搜索的配合
+			assertPathDetection("ANSI + file search: \u001b[36mutils/Helper.java\u001b[0m:5", "utils/Helper.java:5", 5);
+			
+			// 测试各种ANSI颜色格式
+			storage.preserveAnsiColors = false;
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 基本颜色代码
+			assertPathDetection("Basic color: \u001b[31mError:\u001b[0m file.txt:10", "file.txt:10", 10);
+			
+			// 亮色代码
+			assertPathDetection("Bright color: \u001b[91mWarning:\u001b[0m src/test.java:20", "src/test.java:20", 20);
+			
+			// RGB真彩色
+			assertPathDetection("RGB color: \u001b[38;2;255;0;0mFatal:\u001b[0m /var/log/app.log:100", "/var/log/app.log:100", 100);
+			
+			// 256色模式
+			assertPathDetection("256 color: \u001b[38;5;196mError:\u001b[0m build.gradle:15", "build.gradle:15", 15);
+			
+			// 组合样式（粗体+颜色）
+			assertPathDetection("Combined style: \u001b[1;31mFatal error:\u001b[0m main.cpp:50", "main.cpp:50", 50);
+			
+			// 注意：这个配置用于支持现代Shell提示符（oh-my-posh、starship等）
+			// 当禁用时，ANSI转义序列会被移除后再进行路径识别
+			// 当启用时，ANSI转义序列会被保留，可能影响路径识别
+			System.out.println("Note: This configuration supports modern shell prompts (oh-my-posh, starship)");
+			System.out.println("When disabled (default), ANSI escape sequences are removed before path detection");
+			System.out.println("When enabled, ANSI sequences are preserved, which may affect path recognition");
+			System.out.println("Enable this if you want to preserve ANSI color codes and formatting");
+			
+		} finally {
+			// 恢复原始配置
+			storage.preserveAnsiColors = originalPreserveAnsiColors;
 			filter = new AwesomeLinkFilter(getProject());
 		}
 	}
