@@ -1,7 +1,6 @@
 out
 build
 .gradle
-*.class
 .idea
 .intellijPlatform
 .DS_Store

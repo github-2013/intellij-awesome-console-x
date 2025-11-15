@@ -1258,6 +1258,18 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 断言给定的文本中没有检测到 URL 链接
+	 * @param desc 描述信息
+	 * @param line 待测试的文本行
+	 */
+	private void assertUrlNoMatches(@NotNull final String desc, @NotNull final String line) {
+		System.out.println(desc + line);
+		List<URLLinkMatch> matches = filter.detectURLs(line);
+		List<String> results = matches.stream().map(it -> it.match).toList();
+		Assertions.assertTrue(results.isEmpty(), "Expected no URL matches in: " + line);
+	}
+
+	/**
 	 * 辅助方法：断言URL检测无匹配
 	 * 
 	 * 该方法用于验证给定的文本行不应该被识别为URL链接。
@@ -2725,19 +2737,19 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			assertPathDetection("Java class: awesome.console.AwesomeLinkFilter:150", "awesome.console.AwesomeLinkFilter:150", 150);
 			assertPathDetection("Simple class: MyClass:42", "MyClass:42", 42);
 			assertPathDetection("Scala class: awesome.console.IntegrationTest$:4", "awesome.console.IntegrationTest$:4", 4);
-			assertPathDetection("Class file: build/classes/java/main/awesome/console/AwesomeLinkFilter.class:85:50", 
+			assertPathDetection("Class file: build/classes/java/main/awesome/console/AwesomeLinkFilter.class:85:50",
 				"build/classes/java/main/awesome/console/AwesomeLinkFilter.class:85:50", 85, 50);
-			
+
 			// 测试Java堆栈跟踪格式
 			assertPathDetection("Stack trace: at awesome.console.AwesomeLinkFilterTest.testFileWithoutDirectory(AwesomeLinkFilterTest.java:14)",
 				"awesome.console.AwesomeLinkFilterTest.testFileWithoutDirectory", "AwesomeLinkFilterTest.java:14");
 			assertPathDetection("JAR stack trace: at redis.clients.jedis.util.Pool.getResource(Pool.java:59) ~[jedis-3.0.0.jar:?]",
 				"redis.clients.jedis.util.Pool.getResource", "Pool.java:59");
-			
+
 			// 测试禁用类名搜索
 			storage.searchClasses = false;
 			filter = new AwesomeLinkFilter(getProject());
-			
+
 			// 验证类名不会被检测（应该没有类名匹配）
 			assertPathNoMatches("Java class disabled: ", "awesome.console.AwesomeLinkFilter:150");
 			assertPathNoMatches("Simple class disabled: ", "MyClass:42");
@@ -2749,9 +2761,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			assertPathDetection("File path should still work: AwesomeLinkFilterTest.java:14", "AwesomeLinkFilterTest.java:14", 14);
 			
 			// 验证默认值
-			assertEquals("Search Classes default value should be true", 
+			assertEquals("Search Classes default value should be true",
 				awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_CLASSES, true);
-			
+
 		} finally {
 			// 恢复原始配置
 			storage.searchClasses = originalSearchClasses;

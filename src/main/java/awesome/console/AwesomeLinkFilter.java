@@ -1272,7 +1272,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * @return 文件路径匹配结果列表，包含匹配的路径、位置、行号、列号等信息
 	 */
 	@NotNull
-	public List<FileLinkMatch> detectPaths(@NotNull String line) {
+public List<FileLinkMatch> detectPaths(@NotNull String line) {
+		// 检查文件搜索配置
+		if (!config.searchFiles) {
+			return Collections.emptyList();
+		}
+
+		List<FileLinkMatch> results = new LinkedList<>();
+
 		// 准备过滤器，初始化自定义匹配器和忽略匹配器
 		prepareFilter();
 		
@@ -1282,7 +1289,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		final Matcher fileMatcherConfig = this.fileMatcherConfig.get();
 		final Matcher fileMatcher = config.useFilePattern && null != fileMatcherConfig ? fileMatcherConfig : this.fileMatcher.get();
 		fileMatcher.reset(line);
-		final List<FileLinkMatch> results = new LinkedList<>();
 		while (fileMatcher.find()) {
 			String match = RegexUtils.tryMatchGroup(fileMatcher, "link");
 			if (null == match) {
@@ -1371,6 +1377,12 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 */
 	@NotNull
 	public List<URLLinkMatch> detectURLs(@NotNull String line) {
+		// 检查配置：如果禁用URL搜索，直接返回空列表
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		if (!storage.searchUrls) {
+			return Collections.emptyList();
+		}
+
 		// 预处理：根据配置决定是否移除ANSI转义序列
 		line = preprocessLine(line);
 		
