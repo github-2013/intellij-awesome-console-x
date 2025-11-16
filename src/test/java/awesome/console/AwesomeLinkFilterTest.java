@@ -44,10 +44,27 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	/**
 	 * 测试初始化方法
 	 * 在每个测试方法执行前创建新的过滤器实例
+	 * 并显式设置默认配置参数，确保测试环境的一致性
 	 */
 	@Override
     public void setUp() throws Exception {
 		super.setUp();
+		
+		// 获取配置存储实例并显式设置默认参数
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 显式启用搜索功能（确保文件路径、URL和类名搜索都开启）
+		storage.searchFiles = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_FILES;
+		storage.searchUrls = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_URLS;
+		storage.searchClasses = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_CLASSES;
+		
+		// 显式设置其他关键配置
+		storage.useResultLimit = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_RESULT_LIMIT;
+		storage.useIgnorePattern = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_PATTERN;
+		storage.useIgnoreStyle = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_STYLE;
+		storage.preserveAnsiColors = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_PRESERVE_ANSI_COLORS;
+		
+		// 创建过滤器实例
 		filter = new AwesomeLinkFilter(getProject());
 	}
 
