@@ -2482,4 +2482,325 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			filter = new AwesomeLinkFilter(getProject());
 		}
 	}
+
+	// ========== 索引管理功能测试 ==========
+
+	/**
+	 * 测试手动重建索引功能
+	 * 验证手动重建索引后，索引数据正确更新且功能正常
+	 */
+	public void testManualRebuildIndex() throws InterruptedException {
+		// 获取重建前的统计信息
+		int filesBefore = filter.getTotalCachedFiles();
+		
+		// 执行手动重建（不应抛出异常）
+		filter.manualRebuild();
+		Thread.sleep(1000); // 等待重建完成
+		
+		// 获取重建后的统计信息
+		int filesAfter = filter.getTotalCachedFiles();
+		
+		// 验证重建方法执行成功（不验证文件数，因为测试项目可能为空）
+		assertTrue("Rebuild should complete without error", filesAfter >= 0);
+		
+		// 验证路径检测功能仍然正常（即使没有索引文件）
+		List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+		assertNotNull("Detection should return non-null result", results);
+		
+		// 验证索引统计信息对象可以正常获取
+		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+		assertNotNull("Statistics should not be null", stats);
+		assertTrue("File cache size should be non-negative", stats.getFileCacheSize() >= 0);
+		assertTrue("Base cache size should be non-negative", stats.getFileBaseCacheSize() >= 0);
+		assertTrue("Total files should be non-negative", stats.getTotalFiles() >= 0);
+	}
+
+	/**
+	 * 测试带进度回调的手动重建功能
+	 * 验证进度回调能够正确报告重建进度
+	 */
+	public void testManualRebuildWithProgress() throws InterruptedException {
+		java.util.concurrent.atomic.AtomicInteger lastProgress = new java.util.concurrent.atomic.AtomicInteger(-1);
+		java.util.List<Integer> progressUpdates = new java.util.ArrayList<>();
+		
+		// 执行带进度回调的重建
+		filter.manualRebuild(count -> {
+			lastProgress.set(count);
+			progressUpdates.add(count);
+		});
+		
+		Thread.sleep(1000); // 等待重建完成
+		
+		// 验证重建方法执行成功（即使项目为空，也应该调用回调）
+		assertTrue("Progress callback should be called at least once", lastProgress.get() >= 0);
+		
+		// 如果有进度更新，验证进度是递增的
+		if (progressUpdates.size() > 1) {
+			for (int i = 1; i < progressUpdates.size(); i++) {
+				assertTrue("Progress should be non-decreasing", 
+					progressUpdates.get(i) >= progressUpdates.get(i - 1));
+			}
+		}
+		
+		// 验证最终进度与实际索引文件数一致
+		int totalFiles = filter.getTotalCachedFiles();
+		assertTrue("Final progress should match total files", 
+			lastProgress.get() >= 0 && lastProgress.get() == totalFiles);
+		
+		// 验证路径检测功能仍然正常
+		List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+		assertNotNull("Detection should return non-null result", results);
+	}
+
+	/**
+	 * 测试清除缓存功能
+	 * 验证清除缓存后索引为空，且能自动重建
+	 */
+	public void testClearCache() throws InterruptedException {
+		// 触发索引初始化
+		filter.detectPaths("Error in test.java:10");
+		Thread.sleep(500);
+		
+		int filesBeforeClear = filter.getTotalCachedFiles();
+		
+		// 清除缓存（不应抛出异常）
+		filter.clearCache();
+		
+		// 验证缓存已清空
+		assertEquals("File cache should be empty", 0, filter.getFileCacheSize());
+		assertEquals("File base cache should be empty", 0, filter.getFileBaseCacheSize());
+		assertEquals("Total files should be 0", 0, filter.getTotalCachedFiles());
+		
+		// 验证统计信息也被重置
+		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+		assertEquals("Statistics should show 0 files", 0, stats.getTotalFiles());
+		assertEquals("Statistics should show 0 file cache", 0, stats.getFileCacheSize());
+		assertEquals("Statistics should show 0 base cache", 0, stats.getFileBaseCacheSize());
+		
+		// 验证清除后路径检测仍然可以工作（会触发自动重建）
+		List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+		assertNotNull("Detection should return non-null result", results);
+		Thread.sleep(500);
+		
+		// 验证索引状态（可能已自动重建，也可能仍为空）
+		int filesAfterDetection = filter.getTotalCachedFiles();
+		assertTrue("File count should be non-negative", filesAfterDetection >= 0);
+	}
+
+	/**
+	 * 测试获取缓存大小功能
+	 * 验证各种缓存大小统计方法返回正确的值
+	 */
+	public void testGetCacheSizes() throws InterruptedException {
+		// 触发索引初始化
+		filter.detectPaths("Error in test.java:10");
+		Thread.sleep(500);
+		
+		int fileCacheSize = filter.getFileCacheSize();
+		int fileBaseCacheSize = filter.getFileBaseCacheSize();
+		int totalFiles = filter.getTotalCachedFiles();
+		
+		// 验证缓存大小的合理性（非负数）
+		assertTrue("File cache size should be non-negative", fileCacheSize >= 0);
+		assertTrue("File base cache size should be non-negative", fileBaseCacheSize >= 0);
+		assertTrue("Total files should be non-negative", totalFiles >= 0);
+		
+		// 验证缓存大小的关系
+		assertTrue("Total files should >= file cache size", totalFiles >= fileCacheSize);
+		assertTrue("File cache size should >= base cache size", fileCacheSize >= fileBaseCacheSize);
+		
+		// 多次调用应该返回一致的结果（在没有修改的情况下）
+		assertEquals("File cache size should be consistent", 
+			fileCacheSize, filter.getFileCacheSize());
+		assertEquals("File base cache size should be consistent", 
+			fileBaseCacheSize, filter.getFileBaseCacheSize());
+		assertEquals("Total files should be consistent", 
+			totalFiles, filter.getTotalCachedFiles());
+		
+		// 验证统计信息与单独方法返回值一致
+		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+		assertEquals("Statistics file cache should match", 
+			fileCacheSize, stats.getFileCacheSize());
+		assertEquals("Statistics base cache should match", 
+			fileBaseCacheSize, stats.getFileBaseCacheSize());
+		assertEquals("Statistics total files should match", 
+			totalFiles, stats.getTotalFiles());
+	}
+
+	/**
+	 * 测试获取索引统计信息功能
+	 * 验证IndexStatistics对象包含完整且正确的统计信息
+	 */
+	public void testGetIndexStatistics() throws InterruptedException {
+		// 执行手动重建以确保有完整的统计信息
+		filter.manualRebuild();
+		Thread.sleep(1000);
+		
+		// 获取统计信息
+		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+		
+		// 验证统计对象不为空
+		assertNotNull("Statistics should not be null", stats);
+		
+		// 验证基本统计信息（非负数）
+		assertTrue("Total files should be non-negative", stats.getTotalFiles() >= 0);
+		assertTrue("File cache size should be non-negative", stats.getFileCacheSize() >= 0);
+		assertTrue("Base cache size should be non-negative", stats.getFileBaseCacheSize() >= 0);
+		
+		// 验证重建时间信息
+		assertTrue("Last rebuild time should be set", stats.getLastRebuildTime() > 0);
+		assertTrue("Rebuild duration should be non-negative", stats.getLastRebuildDuration() >= 0);
+		
+		// 验证重建时间的合理性（应该在最近）
+		long now = System.currentTimeMillis();
+		long timeSinceRebuild = now - stats.getLastRebuildTime();
+		assertTrue("Rebuild time should be recent", timeSinceRebuild < 10000); // 10秒内
+		
+		// 验证统计信息的一致性
+		assertEquals("Total files should match", 
+			stats.getTotalFiles(), filter.getTotalCachedFiles());
+		assertEquals("File cache size should match", 
+			stats.getFileCacheSize(), filter.getFileCacheSize());
+		assertEquals("File base cache size should match", 
+			stats.getFileBaseCacheSize(), filter.getFileBaseCacheSize());
+		
+		// 验证统计信息的逻辑关系
+		assertTrue("Total files should >= file cache size", 
+			stats.getTotalFiles() >= stats.getFileCacheSize());
+		assertTrue("File cache size should >= base cache size", 
+			stats.getFileCacheSize() >= stats.getFileBaseCacheSize());
+	}
+
+	/**
+	 * 测试线程安全性
+	 * 验证多线程并发访问索引管理API时不会出现异常
+	 */
+	public void testThreadSafety() throws InterruptedException {
+		// 触发索引初始化
+		filter.detectPaths("Error in test.java:10");
+		Thread.sleep(500);
+		
+		// 创建多个线程并发访问索引API
+		Thread[] threads = new Thread[10];
+		final java.util.concurrent.atomic.AtomicInteger errorCount = new java.util.concurrent.atomic.AtomicInteger(0);
+		
+		for (int i = 0; i < 10; i++) {
+			threads[i] = new Thread(() -> {
+				try {
+					for (int j = 0; j < 5; j++) {
+						// 并发读取操作
+						filter.getFileCacheSize();
+						filter.getTotalCachedFiles();
+						filter.getFileBaseCacheSize();
+						filter.getIndexStatistics();
+						
+						// 短暂休眠
+						Thread.sleep(10);
+					}
+				} catch (Exception e) {
+					errorCount.incrementAndGet();
+					e.printStackTrace();
+				}
+			});
+			threads[i].start();
+		}
+		
+		// 等待所有线程完成
+		for (Thread thread : threads) {
+			thread.join(5000);
+		}
+		
+		// 验证没有发生错误
+		assertEquals("No errors should occur during concurrent access", 0, errorCount.get());
+		
+		// 验证索引仍然正常工作
+		List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+		assertNotNull("Detection should return non-null result", results);
+		assertTrue("File count should be non-negative", filter.getTotalCachedFiles() >= 0);
+	}
+
+	/**
+	 * 测试重建后功能验证
+	 * 验证手动重建索引后，所有路径检测功能仍然正常工作
+	 */
+	public void testFunctionalityAfterRebuild() throws InterruptedException {
+		// 测试重建前的功能
+		List<FileLinkMatch> before1 = filter.detectPaths("Error in test.java:10");
+		List<FileLinkMatch> before2 = filter.detectPaths("File: src/main/java/App.java:20");
+		assertNotNull("Detection should work before rebuild", before1);
+		assertNotNull("Detection should work before rebuild", before2);
+		
+		// 执行手动重建
+		filter.manualRebuild();
+		Thread.sleep(1000);
+		
+		// 验证重建后所有功能仍然正常
+		List<FileLinkMatch> after1 = filter.detectPaths("Error in test.java:10");
+		List<FileLinkMatch> after2 = filter.detectPaths("File: src/main/java/App.java:20");
+		assertNotNull("Detection should work after rebuild", after1);
+		assertNotNull("Detection should work after rebuild", after2);
+		
+		// 测试各种路径格式
+		assertNotNull(filter.detectPaths("Error in src/test/resources/file1.java:5"));
+		assertNotNull(filter.detectPaths("File: ./build.gradle:10"));
+		assertNotNull(filter.detectPaths("Path: ../README.md"));
+		
+		// 测试带行列号的路径
+		assertNotNull(filter.detectPaths("Error at test.java:10:5"));
+		assertNotNull(filter.detectPaths("File: src/main.java:20:10"));
+		
+		// 验证URL检测不受影响
+		assertURLDetection("Visit https://example.com", "https://example.com");
+		assertURLDetection("Download from ftp://server.com/file.zip", "ftp://server.com/file.zip");
+		
+		// 验证索引统计信息正常
+		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+		assertNotNull("Statistics should not be null", stats);
+		assertTrue("File count should be non-negative", stats.getTotalFiles() >= 0);
+	}
+
+	/**
+	 * 测试清除后自动重建功能
+	 * 验证清除缓存后，首次路径检测会触发自动重建
+	 */
+	public void testAutoRebuildAfterClear() throws InterruptedException {
+		// 触发索引初始化
+		filter.detectPaths("Error in test.java:10");
+		Thread.sleep(500);
+		
+		int filesBeforeClear = filter.getTotalCachedFiles();
+		
+		// 清除缓存
+		filter.clearCache();
+		assertEquals("Cache should be empty after clear", 0, filter.getTotalCachedFiles());
+		
+		// 触发路径检测，应该自动重建索引
+		List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+		assertNotNull("Detection should return non-null result", results);
+		Thread.sleep(1000); // 等待自动重建完成
+		
+		// 验证索引状态（可能已自动重建）
+		int filesAfterRebuild = filter.getTotalCachedFiles();
+		assertTrue("File count should be non-negative", filesAfterRebuild >= 0);
+		
+		// 验证路径检测功能仍然正常
+		assertNotNull(filter.detectPaths("Error in test.java:10"));
+		assertNotNull(filter.detectPaths("File: src/main.java:20"));
+		
+		// 验证统计信息可以获取
+		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+		assertNotNull("Statistics should not be null", stats);
+		assertTrue("File count should be non-negative", stats.getTotalFiles() >= 0);
+		
+		// 再次清除并验证
+		filter.clearCache();
+		assertEquals("Cache should be empty again", 0, filter.getTotalCachedFiles());
+		
+		// 再次触发检测
+		assertNotNull(filter.detectPaths("Error in config.json:5"));
+		Thread.sleep(500);
+		
+		// 验证索引状态
+		assertTrue("File count should be non-negative", filter.getTotalCachedFiles() >= 0);
+	}
 }

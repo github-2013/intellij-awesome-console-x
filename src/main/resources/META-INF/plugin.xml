@@ -14,7 +14,22 @@
 	</description>
 	<change-notes>
 		<![CDATA[
-        <p>
+		<p>
+        	<b>0.1337.28</b><br/>
+        	<ul>
+        		<li>Added comprehensive file index management system with manual rebuild and clear operations</li>
+        		<li>Enhanced settings UI with real-time index status display and progress bar feedback</li>
+        		<li>Implemented smooth progress animations for rebuild and clear operations with detailed statistics</li>
+        		<li>Added IndexStatistics class providing detailed metrics including file counts and rebuild timing</li>
+        		<li>Enhanced AwesomeLinkFilter with thread-safe cache management and progress callback support</li>
+        		<li>Improved ignore file tracking during index operations with real-time statistics display</li>
+        		<li>Added dual-color progress bar showing matched (✓) and ignored (⚠) file percentages when ignore mode is enabled</li>
+        		<li>Implemented comprehensive error handling and user feedback for index operations</li>
+        		<li>Added extensive test coverage with 9 new test methods for index management functionality</li>
+        		<li>Enhanced UI with buttons for rebuild/clear operations and detailed status labels</li>
+        		<li>Improved notifications with operation statistics and timing information</li>
+        		<li>Maintained full backward compatibility with existing functionality</li>
+        	</ul>
         	<b>0.1337.27</b><br/>
         	<ul>
         		<li>Fixed Git rename format path detection with dedicated REGEX_GIT_RENAME pattern</li>

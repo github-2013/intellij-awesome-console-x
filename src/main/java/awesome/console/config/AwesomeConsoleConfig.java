@@ -182,6 +182,8 @@ public class AwesomeConsoleConfig implements Configurable {
 	public JComponent createComponent() {
 		form = new AwesomeConsoleConfigForm();
 		initFromConfig();
+		// 更新索引状态
+		form.updateIndexStatus();
 		return form.mainPanel;
 	}
 
@@ -311,6 +313,9 @@ public class AwesomeConsoleConfig implements Configurable {
 	 */
 	@Override
 	public void disposeUIResources() {
-		form = null;
+		if (form != null) {
+			form.dispose();
+			form = null;
+		}
 	}
 }

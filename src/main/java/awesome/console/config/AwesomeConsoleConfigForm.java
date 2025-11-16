@@ -1,13 +1,25 @@
 package awesome.console.config;
 
+import awesome.console.AwesomeLinkFilter;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationGroup;
+import com.intellij.notification.NotificationGroupManager;
+import com.intellij.notification.NotificationType;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.ui.JBColor;
 
 import java.awt.*;
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import javax.swing.*;
+import javax.swing.plaf.FontUIResource;
 import javax.swing.text.JTextComponent;
 import javax.swing.text.NumberFormatter;
+import javax.swing.text.StyleContext;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
@@ -42,8 +54,25 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     public JCheckBox resolveSymlinkCheckBox;
     public JCheckBox preserveAnsiColorsCheckBox;
 
+    // 索引管理相关字段
+    public JLabel indexStatusLabel;
+    public JProgressBar indexProgressBar;
+    public JButton rebuildIndexButton;
+    public JButton clearIndexButton;
+
     private Map<JCheckBox, Set<JComponent>> bindMap;
     private Map<JComponent, Set<JCheckBox>> bindMap2;
+
+    // 防抖机制
+    private long lastRebuildTime = 0;
+    private static final long REBUILD_INTERVAL_MS = 5000; // 5秒间隔
+
+    // 操作互斥标志
+    private volatile boolean isOperationInProgress = false;
+
+    // 通知组
+    private static final NotificationGroup NOTIFICATION_GROUP =
+            NotificationGroupManager.getInstance().getNotificationGroup("Awesome Console X");
 
     private void createUIComponents() {
         bindMap = new HashMap<>();
@@ -58,6 +87,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         setupFileTypes();
         setupResolveSymlink();
         setupPreserveAnsiColors();
+        setupIndexManagement();
     }
 
     private void setupRestore(@NotNull JComponent component, ActionListener listener) {
@@ -288,6 +318,612 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         preserveAnsiColorsCheckBox.setToolTipText("Preserve ANSI color codes and formatting in console output. Useful for modern shell prompts (oh-my-posh, starship).");
     }
 
+    /**
+     * 设置索引管理组件
+     */
+    private void setupIndexManagement() {
+        indexStatusLabel = new JLabel("Index Status: Not initialized");
+        indexStatusLabel.setForeground(JBColor.GRAY);
+
+        indexProgressBar = new JProgressBar(0, 100);
+        indexProgressBar.setStringPainted(true);
+        indexProgressBar.setVisible(true);
+        indexProgressBar.setValue(0);
+        indexProgressBar.setString("0%");
+        // 设置默认颜色
+        updateProgressBarColor(0);
+
+        rebuildIndexButton = new JButton("Rebuild Index");
+        rebuildIndexButton.addActionListener(e -> rebuildIndex());
+
+        clearIndexButton = new JButton("Clear Index");
+        clearIndexButton.addActionListener(e -> clearIndex());
+    }
+
+    /**
+     * 根据进度百分比更新进度条颜色
+     * @param percentage 进度百分比 (0-100)
+     */
+    /**
+     * 更新进度条颜色（单色模式）
+     */
+    /**
+     * 更新进度条颜色（单色模式）
+     */
+    private void updateProgressBarColor(int percentage) {
+        Color color;
+        if (percentage == 0) {
+            // 0% - 默认颜色（灰色）
+            color = new Color(158, 158, 158);
+        } else if (percentage == 100) {
+            // 100% - 深绿色
+            color = new Color(76, 175, 80);
+        } else {
+            // 部分完成 - 黄色
+            color = new Color(255, 193, 7);
+        }
+
+        // 设置进度条颜色
+        indexProgressBar.setForeground(color);
+    }
+
+    /**
+     * 更新进度条颜色（双色模式，支持忽略文件统计）
+     *
+     * @param totalFiles   总文件数
+     * @param matchedFiles 匹配的文件数
+     * @param ignoredFiles 忽略的文件数
+     */
+    private void updateProgressBarWithIgnoreStats(int totalFiles, int matchedFiles, int ignoredFiles) {
+        if (totalFiles == 0) {
+            // 没有文件时使用默认颜色
+            indexProgressBar.setForeground(new Color(158, 158, 158));
+            return;
+        }
+
+        // 计算百分比
+        int matchedPercentage = (matchedFiles * 100) / totalFiles;
+        int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+        int totalPercentage = matchedPercentage + ignoredPercentage;
+
+        // 如果没有忽略文件，使用单色模式
+        if (ignoredFiles == 0) {
+            updateProgressBarColor(totalPercentage);
+            return;
+        }
+
+        // 有忽略文件时，使用绿色作为主色（匹配的文件）
+        // 黄色部分将通过进度条的文本显示来体现
+        if (totalPercentage == 100) {
+            // 完成时使用绿色
+            indexProgressBar.setForeground(new Color(76, 175, 80));
+        } else if (totalPercentage > 0) {
+            // 进行中使用绿色（主要表示匹配的文件）
+            indexProgressBar.setForeground(new Color(76, 175, 80));
+        } else {
+            // 初始状态
+            indexProgressBar.setForeground(new Color(158, 158, 158));
+        }
+    }
+
+    /**
+     * 根据索引统计信息更新进度条
+     *
+     * @param stats 索引统计信息
+     */
+    private void updateProgressBarFromStats(AwesomeLinkFilter.IndexStatistics stats) {
+        if (stats == null) {
+            indexProgressBar.setValue(0);
+            indexProgressBar.setString("0%");
+            updateProgressBarColor(0);
+            return;
+        }
+
+        int totalFiles = stats.getTotalFiles();
+        int percentage;
+
+        if (totalFiles == 0) {
+            percentage = 0;
+            indexProgressBar.setValue(percentage);
+            indexProgressBar.setString(percentage + "%");
+            updateProgressBarColor(percentage);
+        } else {
+            // 假设项目有文件就认为是100%索引完成
+            percentage = 100;
+            indexProgressBar.setValue(percentage);
+
+            // 如果有忽略文件统计，显示详细信息
+            if (stats.hasIgnoreStatistics()) {
+                int matchedFiles = stats.getMatchedFiles();
+                int ignoredFiles = stats.getIgnoredFiles();
+                int matchedPercentage = (matchedFiles * 100) / totalFiles;
+                int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+
+                // 显示匹配和忽略的百分比
+                indexProgressBar.setString(String.format("100%% (✓%d%% ⚠%d%%)",
+                        matchedPercentage, ignoredPercentage));
+                updateProgressBarWithIgnoreStats(totalFiles, matchedFiles, ignoredFiles);
+            } else {
+                indexProgressBar.setString(percentage + "%");
+                updateProgressBarColor(percentage);
+            }
+        }
+    }
+
+    /**
+     * 获取当前活动项目
+     */
+    private Project getCurrentProject() {
+        Project[] openProjects = ProjectManager.getInstance().getOpenProjects();
+        if (openProjects.length == 0) {
+            return null;
+        }
+        return openProjects[0]; // 简化实现：返回第一个项目
+    }
+
+    /**
+     * 更新索引状态显示
+     */
+    public void updateIndexStatus() {
+        Project project = getCurrentProject();
+        if (project == null) {
+            indexStatusLabel.setText("Index Status: No project opened");
+            indexStatusLabel.setForeground(JBColor.GRAY);
+            rebuildIndexButton.setEnabled(false);
+            clearIndexButton.setEnabled(false);
+            return;
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                AwesomeLinkFilter filter = project.getService(AwesomeLinkFilter.class);
+                if (filter != null) {
+                    AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        String statusText = formatIndexStatus(project.getName(), stats);
+                        indexStatusLabel.setText(statusText);
+                        indexStatusLabel.setForeground(new Color(76, 175, 80)); // 绿色
+
+                        // 更新进度条
+                        updateProgressBarFromStats(stats);
+
+                        rebuildIndexButton.setEnabled(true);
+                        clearIndexButton.setEnabled(true);
+                    });
+                } else {
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        indexStatusLabel.setText("Index Status: Service not available");
+                        indexStatusLabel.setForeground(JBColor.RED);
+                        rebuildIndexButton.setEnabled(false);
+                        clearIndexButton.setEnabled(false);
+                    });
+                }
+            } catch (Exception e) {
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    indexStatusLabel.setText("Index Status: Error - " + e.getMessage());
+                    indexStatusLabel.setForeground(JBColor.RED);
+                });
+            }
+        });
+    }
+
+    /**
+     * 格式化索引状态文本
+     */
+    private String formatIndexStatus(String projectName, AwesomeLinkFilter.IndexStatistics stats) {
+        StringBuilder sb = new StringBuilder();
+
+        // 基本信息
+        sb.append(String.format("Index Status [%s]: %d files indexed (%d filenames, %d basenames)",
+                projectName, stats.getTotalFiles(), stats.getFileCacheSize(), stats.getFileBaseCacheSize()));
+
+        // 忽略文件统计
+        if (stats.hasIgnoreStatistics()) {
+            int matchedFiles = stats.getMatchedFiles();
+            int ignoredFiles = stats.getIgnoredFiles();
+            sb.append(String.format(" - Matched: %d, Ignored: %d", matchedFiles, ignoredFiles));
+        }
+
+        // 重建时间信息
+        if (stats.getLastRebuildTime() > 0) {
+            long elapsed = System.currentTimeMillis() - stats.getLastRebuildTime();
+            sb.append(String.format(" - Last rebuild: %s ago", formatDuration(elapsed)));
+
+            if (stats.getLastRebuildDuration() > 0) {
+                sb.append(String.format(" (took %s)", formatDuration(stats.getLastRebuildDuration())));
+            }
+        }
+
+        return sb.toString();
+    }
+
+    /**
+     * 格式化时间间隔
+     */
+    private String formatDuration(long millis) {
+        if (millis < 1000) {
+            return millis + "ms";
+        } else if (millis < 60000) {
+            return (millis / 1000) + "s";
+        } else if (millis < 3600000) {
+            return (millis / 60000) + "m";
+        } else {
+            return (millis / 3600000) + "h";
+        }
+    }
+
+    /**
+     * 重建索引
+     */
+    private void rebuildIndex() {
+        Project project = getCurrentProject();
+        if (project == null) {
+            showNotification(null, "No project is currently opened.", NotificationType.ERROR);
+            return;
+        }
+
+        // 检查是否有操作正在进行
+        if (isOperationInProgress) {
+            showNotification(project, "Another index operation is already in progress.", NotificationType.WARNING);
+            return;
+        }
+
+        // 防抖机制：检查重建间隔
+        long now = System.currentTimeMillis();
+        if (now - lastRebuildTime < REBUILD_INTERVAL_MS) {
+            long remaining = (REBUILD_INTERVAL_MS - (now - lastRebuildTime)) / 1000;
+            showNotification(project,
+                    String.format("Please wait %d seconds before rebuilding again.", remaining),
+                    NotificationType.WARNING);
+            return;
+        }
+        lastRebuildTime = now;
+
+        // 设置操作状态
+        isOperationInProgress = true;
+        rebuildIndexButton.setEnabled(false);
+        clearIndexButton.setEnabled(false);
+        rebuildIndexButton.setText("Rebuilding...");
+        indexStatusLabel.setText(String.format("Rebuilding index [%s]...", project.getName()));
+        indexStatusLabel.setForeground(new Color(33, 150, 243)); // 蓝色
+
+        // 重置并初始化进度条
+        indexProgressBar.setValue(0);
+        indexProgressBar.setIndeterminate(false);
+        indexProgressBar.setString("0%");
+        updateProgressBarColor(0);
+
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                AwesomeLinkFilter filter = project.getService(AwesomeLinkFilter.class);
+                if (filter != null) {
+                    // 使用带进度回调的重建方法
+                    AtomicInteger processedFiles = new AtomicInteger(0);
+                    AtomicInteger lastDisplayedCount = new AtomicInteger(0);
+                    AtomicInteger totalEstimatedFiles = new AtomicInteger(1000); // 预估文件数，用于进度条
+
+                    long startTime = System.currentTimeMillis();
+
+                    try {
+                        filter.manualRebuild(count -> {
+                            try {
+                                processedFiles.set(count);
+
+                                // 动态调整预估总数
+                                if (count > totalEstimatedFiles.get()) {
+                                    totalEstimatedFiles.set(count + 100);
+                                }
+
+                                // 更频繁地更新UI，提供更好的用户体验
+                                if (count - lastDisplayedCount.get() >= 3 || count == 0) {
+                                    lastDisplayedCount.set(count);
+                                    ApplicationManager.getApplication().invokeLater(() -> {
+                                        try {
+                                            // 计算处理速度
+                                            long elapsed = System.currentTimeMillis() - startTime;
+                                            String speedInfo = "";
+                                            if (elapsed > 1000 && count > 0) {
+                                                double filesPerSecond = count * 1000.0 / elapsed;
+                                                speedInfo = String.format(" (%.0f files/sec)", filesPerSecond);
+                                            }
+
+                                            // 获取忽略文件统计
+                                            AwesomeLinkFilter.IndexStatistics currentStats = filter.getIndexStatistics();
+                                            int ignoredFiles = currentStats.getIgnoredFiles();
+                                            int matchedFiles = Math.max(0, count - ignoredFiles);
+
+                                            // 更新状态标签
+                                            String statusText = String.format(
+                                                    "Rebuilding index [%s]... %d files processed%s",
+                                                    project.getName(), count, speedInfo
+                                            );
+                                            if (ignoredFiles > 0) {
+                                                statusText += String.format(" (Matched: %d, Ignored: %d)", matchedFiles, ignoredFiles);
+                                            }
+                                            indexStatusLabel.setText(statusText);
+
+                                            // 更新进度条 - 使用更准确的百分比计算
+                                            int progress = Math.min(95, (count * 95) / Math.max(totalEstimatedFiles.get(), 1));
+                                            indexProgressBar.setValue(progress);
+
+                                            // 设置进度条文本，如果有忽略文件则显示详细信息
+                                            if (ignoredFiles > 0) {
+                                                int matchedPercentage = Math.max(0, (matchedFiles * 95) / Math.max(totalEstimatedFiles.get(), 1));
+                                                int ignoredPercentage = Math.max(0, (ignoredFiles * 95) / Math.max(totalEstimatedFiles.get(), 1));
+                                                indexProgressBar.setString(String.format("%d%% (✓%d%% ⚠%d%%)",
+                                                        progress, matchedPercentage, ignoredPercentage));
+                                                updateProgressBarWithIgnoreStats(totalEstimatedFiles.get(), matchedFiles, ignoredFiles);
+                                            } else {
+                                                indexProgressBar.setString(progress + "%");
+                                                updateProgressBarColor(progress);
+                                            }
+                                        } catch (Exception e) {
+                                            // 忽略UI更新异常，避免影响重建过程
+                                        }
+                                    });
+                                }
+                            } catch (Exception e) {
+                                // 忽略进度回调异常，避免影响重建过程
+                            }
+                        });
+
+                        Thread.sleep(500); // 等待重建完成
+
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            try {
+                                // 获取最终统计信息
+                                AwesomeLinkFilter.IndexStatistics finalStats = filter.getIndexStatistics();
+
+                                // 完成进度条动画
+                                indexProgressBar.setValue(100);
+                                if (finalStats.hasIgnoreStatistics()) {
+                                    int matchedFiles = finalStats.getMatchedFiles();
+                                    int ignoredFiles = finalStats.getIgnoredFiles();
+                                    int matchedPercentage = (matchedFiles * 100) / Math.max(finalStats.getTotalFiles(), 1);
+                                    int ignoredPercentage = (ignoredFiles * 100) / Math.max(finalStats.getTotalFiles(), 1);
+                                    indexProgressBar.setString(String.format("100%% (✓%d%% ⚠%d%%)",
+                                            matchedPercentage, ignoredPercentage));
+                                    updateProgressBarWithIgnoreStats(finalStats.getTotalFiles(), matchedFiles, ignoredFiles);
+                                } else {
+                                    indexProgressBar.setString("100%");
+                                    updateProgressBarColor(100);
+                                }
+
+                                // 立即恢复按钮状态
+                                rebuildIndexButton.setText("Rebuild Index");
+                                rebuildIndexButton.setEnabled(true);
+                                clearIndexButton.setEnabled(true);
+                                isOperationInProgress = false;
+
+                                // 立即更新索引状态
+                                updateIndexStatus();
+
+                                // 获取统计信息并显示通知
+                                AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+                                String notificationMessage = String.format("File index rebuilt successfully! %d files indexed in %s",
+                                        stats.getTotalFiles(), formatDuration(stats.getLastRebuildDuration()));
+                                if (stats.hasIgnoreStatistics()) {
+                                    notificationMessage += String.format(" (Matched: %d, Ignored: %d)",
+                                            stats.getMatchedFiles(), stats.getIgnoredFiles());
+                                }
+                                showNotification(project, notificationMessage, NotificationType.INFORMATION);
+                            } catch (Exception e) {
+                                // 如果完成时出现异常，仍然要恢复按钮状态
+                                showIndexError("Failed to complete rebuild: " + e.getMessage());
+                            }
+                        });
+                    } catch (Exception e) {
+                        // 重建过程中出现异常
+                        showIndexError("Failed to rebuild index: " + e.getMessage());
+                    }
+                } else {
+                    showIndexError("Index service not available");
+                }
+            } catch (Exception e) {
+                showIndexError("Failed to rebuild index: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 清除索引
+     */
+    private void clearIndex() {
+        Project project = getCurrentProject();
+        if (project == null) {
+            showNotification(null, "No project is currently opened.", NotificationType.ERROR);
+            return;
+        }
+
+        // 检查是否有操作正在进行
+        if (isOperationInProgress) {
+            showNotification(project, "Another index operation is already in progress.", NotificationType.WARNING);
+            return;
+        }
+
+        int result = JOptionPane.showConfirmDialog(mainPanel,
+                "Are you sure you want to clear the file index?\nIt will be automatically rebuilt when needed.",
+                "Confirm Clear", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+
+        if (result != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        // 设置操作状态
+        isOperationInProgress = true;
+        clearIndexButton.setEnabled(false);
+        rebuildIndexButton.setEnabled(false);
+        clearIndexButton.setText("Clearing...");
+        indexStatusLabel.setText(String.format("Clearing index [%s]...", project.getName()));
+        indexStatusLabel.setForeground(new Color(244, 67, 54)); // 红色
+
+        // 重置进度条为初始状态
+        indexProgressBar.setValue(0);
+        indexProgressBar.setIndeterminate(false);
+        indexProgressBar.setString("0%");
+        updateProgressBarColor(0);
+
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                AwesomeLinkFilter filter = project.getService(AwesomeLinkFilter.class);
+                if (filter != null) {
+                    try {
+                        // 获取当前缓存信息用于进度计算
+                        int totalFiles = filter.getTotalCachedFiles();
+                        int fileCacheSize = filter.getFileCacheSize();
+                        int fileBaseCacheSize = filter.getFileBaseCacheSize();
+
+                        long startTime = System.currentTimeMillis();
+
+                        // 模拟分批清除过程，提供真实的进度反馈
+                        int totalSteps = 20; // 分20步完成清除
+                        for (int step = 0; step <= totalSteps; step++) {
+                            final int currentStep = step;
+                            final int progress = (step * 100) / totalSteps;
+
+                            ApplicationManager.getApplication().invokeLater(() -> {
+                                try {
+                                    // 计算清除速度
+                                    long elapsed = System.currentTimeMillis() - startTime;
+                                    String speedInfo = "";
+                                    if (elapsed > 500 && currentStep > 0) {
+                                        double stepsPerSecond = currentStep * 1000.0 / elapsed;
+                                        speedInfo = String.format(" (%.1f steps/sec)", stepsPerSecond);
+                                    }
+
+                                    // 更新状态标签显示清除进度
+                                    if (currentStep == 0) {
+                                        indexStatusLabel.setText(String.format(
+                                                "Clearing index [%s]... Preparing to clear %d files (%d filenames, %d basenames)",
+                                                project.getName(), totalFiles, fileCacheSize, fileBaseCacheSize
+                                        ));
+                                    } else if (currentStep < totalSteps) {
+                                        indexStatusLabel.setText(String.format(
+                                                "Clearing index [%s]... Step %d/%d%s",
+                                                project.getName(), currentStep, totalSteps, speedInfo
+                                        ));
+                                    } else {
+                                        indexStatusLabel.setText(String.format(
+                                                "Clearing index [%s]... Finalizing cleanup",
+                                                project.getName()
+                                        ));
+                                    }
+
+                                    // 更新进度条
+                                    indexProgressBar.setValue(progress);
+                                    indexProgressBar.setString(progress + "%");
+                                    updateProgressBarColor(progress);
+                                } catch (Exception e) {
+                                    // 忽略UI更新异常
+                                }
+                            });
+
+                            // 在中间步骤执行实际清除操作
+                            if (step == totalSteps / 2) {
+                                filter.clearCache();
+                            }
+
+                            // 控制清除速度，让用户能看到进度
+                            try {
+                                Thread.sleep(80); // 80ms间隔，总共约1.6秒完成
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                        }
+
+                        // 确保进度条显示100%并立即更新状态
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            try {
+                                // 确保进度条显示100%
+                                indexProgressBar.setValue(100);
+                                indexProgressBar.setString("100%");
+                                updateProgressBarColor(100);
+
+                                // 立即恢复按钮状态
+                                clearIndexButton.setText("Clear Index");
+                                clearIndexButton.setEnabled(true);
+                                rebuildIndexButton.setEnabled(true);
+                                isOperationInProgress = false;
+
+                                // 立即更新索引状态
+                                updateIndexStatus();
+
+                                // 计算总耗时
+                                long totalTime = System.currentTimeMillis() - startTime;
+
+                                // 使用通知栏提示
+                                showNotification(project,
+                                        String.format("File index cleared successfully! Cleared %d files (%d filenames, %d basenames) in %s. Index will be rebuilt automatically when needed.",
+                                                totalFiles, fileCacheSize, fileBaseCacheSize, formatDuration(totalTime)),
+                                        NotificationType.INFORMATION);
+                            } catch (Exception e) {
+                                // 如果完成时出现异常，仍然要恢复按钮状态
+                                showIndexError("Failed to complete clear operation: " + e.getMessage());
+                            }
+                        });
+                    } catch (Exception e) {
+                        // 清除过程中出现异常
+                        showIndexError("Failed to clear index: " + e.getMessage());
+                    }
+                } else {
+                    showIndexError("Index service not available");
+                }
+            } catch (Exception e) {
+                showIndexError("Failed to clear index: " + e.getMessage());
+            }
+        });
+    }
+
+    /**
+     * 显示索引错误
+     */
+    private void showIndexError(String message) {
+        Project project = getCurrentProject();
+        ApplicationManager.getApplication().invokeLater(() -> {
+            indexStatusLabel.setText("Index Status: Error");
+            indexStatusLabel.setForeground(JBColor.RED);
+
+            // 重置进度条为错误状态
+            indexProgressBar.setValue(0);
+            indexProgressBar.setIndeterminate(false);
+            indexProgressBar.setString("0%");
+            updateProgressBarColor(0);
+
+            // 恢复按钮状态
+            rebuildIndexButton.setEnabled(true);
+            rebuildIndexButton.setText("Rebuild Index");
+            clearIndexButton.setEnabled(true);
+            clearIndexButton.setText("Clear Index");
+
+            // 重置操作状态
+            isOperationInProgress = false;
+
+            showNotification(project, message, NotificationType.ERROR);
+        });
+    }
+
+    /**
+     * 显示通知
+     */
+    private void showNotification(Project project, String content, NotificationType type) {
+        Notification notification = NOTIFICATION_GROUP.createNotification(
+                "Awesome Console - Index Management",
+                content,
+                type
+        );
+        notification.notify(project);
+    }
+
+    /**
+     * 清理资源（配置面板关闭时调用）
+     */
+    public void dispose() {
+        // 当前实现中，后台线程会自然结束，无需特殊处理
+        // 如果未来添加了需要取消的长时间任务，可以在这里处理
+    }
+
     {
 // GUI initializer generated by IntelliJ IDEA GUI Designer
 // >>> IMPORTANT!! <<<
@@ -307,14 +943,12 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         mainPanel = new JPanel();
         mainPanel.setLayout(new GridLayoutManager(1, 2, new Insets(0, 0, 0, 0), -1, -1));
         final JPanel panel1 = new JPanel();
-        panel1.setLayout(new GridLayoutManager(15, 4, new Insets(0, 0, 0, 0), -1, -1));
+        panel1.setLayout(new GridLayoutManager(20, 4, new Insets(0, 0, 0, 0), -1, -1));
         mainPanel.add(panel1, new GridConstraints(0, 0, 1, 2, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, null, null, null, 0, false));
         debugModeCheckBox.setText("Debug Mode");
         panel1.add(debugModeCheckBox, new GridConstraints(0, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
         limitLineMatchingByCheckBox.setText("Limit line matching by");
         panel1.add(limitLineMatchingByCheckBox, new GridConstraints(1, 0, 1, 2, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final Spacer spacer1 = new Spacer();
-        panel1.add(spacer1, new GridConstraints(14, 0, 1, 2, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_VERTICAL, 1, GridConstraints.SIZEPOLICY_WANT_GROW, null, null, null, 0, false));
         final JLabel label1 = new JLabel();
         label1.setText("chars.");
         panel1.add(label1, new GridConstraints(1, 3, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
@@ -337,8 +971,8 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         final JLabel label2 = new JLabel();
         label2.setText("results.");
         panel2.add(label2, new GridConstraints(0, 2, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final Spacer spacer2 = new Spacer();
-        panel2.add(spacer2, new GridConstraints(0, 3, 1, 1, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, 1, null, null, null, 0, false));
+        final Spacer spacer1 = new Spacer();
+        panel2.add(spacer1, new GridConstraints(0, 3, 1, 1, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, 1, null, null, null, 0, false));
         filePatternCheckBox.setText("Files matching pattern:");
         panel1.add(filePatternCheckBox, new GridConstraints(6, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
         final JScrollPane scrollPane1 = new JScrollPane();
@@ -366,6 +1000,49 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         preserveAnsiColorsCheckBox.setText("Preserve ANSI color.");
         preserveAnsiColorsCheckBox.setToolTipText("Preserve ANSI color codes and formatting in console output.");
         panel1.add(preserveAnsiColorsCheckBox, new GridConstraints(13, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        final JSeparator separator1 = new JSeparator();
+        panel1.add(separator1, new GridConstraints(14, 0, 1, 4, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        final JLabel label4 = new JLabel();
+        Font label4Font = this.$$$getFont$$$(null, Font.BOLD, -1, label4.getFont());
+        if (label4Font != null) label4.setFont(label4Font);
+        label4.setText("File Index Management");
+        panel1.add(label4, new GridConstraints(15, 0, 1, 4, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        indexStatusLabel.setText("Index Status: Not initialized");
+        panel1.add(indexStatusLabel, new GridConstraints(16, 0, 1, 4, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        indexProgressBar.setStringPainted(true);
+        indexProgressBar.setVisible(true);
+        panel1.add(indexProgressBar, new GridConstraints(17, 0, 1, 4, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, new Dimension(-1, 8), null, 0, false));
+        final JPanel panel3 = new JPanel();
+        panel3.setLayout(new FlowLayout(FlowLayout.LEFT, 5, 5));
+        panel1.add(panel3, new GridConstraints(18, 0, 1, 4, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+        rebuildIndexButton.setText("Rebuild Index");
+        panel3.add(rebuildIndexButton);
+        clearIndexButton.setText("Clear Index");
+        panel3.add(clearIndexButton);
+        final Spacer spacer2 = new Spacer();
+        panel1.add(spacer2, new GridConstraints(19, 0, 1, 4, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_VERTICAL, 1, GridConstraints.SIZEPOLICY_WANT_GROW, null, null, null, 0, false));
+    }
+
+    /**
+     * @noinspection ALL
+     */
+    private Font $$$getFont$$$(String fontName, int style, int size, Font currentFont) {
+        if (currentFont == null) return null;
+        String resultName;
+        if (fontName == null) {
+            resultName = currentFont.getName();
+        } else {
+            Font testFont = new Font(fontName, Font.PLAIN, 10);
+            if (testFont.canDisplay('a') && testFont.canDisplay('1')) {
+                resultName = fontName;
+            } else {
+                resultName = currentFont.getName();
+            }
+        }
+        Font font = new Font(resultName, style >= 0 ? style : currentFont.getStyle(), size >= 0 ? size : currentFont.getSize());
+        boolean isMac = System.getProperty("os.name", "").toLowerCase(Locale.ENGLISH).startsWith("mac");
+        Font fontWithFallback = isMac ? new Font(font.getFamily(), font.getStyle(), font.getSize()) : new StyleContext().getFont(font.getFamily(), font.getStyle(), font.getSize());
+        return fontWithFallback instanceof FontUIResource ? fontWithFallback : new FontUIResource(fontWithFallback);
     }
 
     /**

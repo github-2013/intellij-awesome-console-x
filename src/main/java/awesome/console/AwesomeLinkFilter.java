@@ -14,6 +14,7 @@ import awesome.console.util.IntegerUtil;
 import awesome.console.util.Notifier;
 import awesome.console.util.RegexUtils;
 import awesome.console.util.SystemUtils;
+import java.util.function.Consumer;
 import com.intellij.execution.filters.Filter;
 import com.intellij.execution.filters.HyperlinkInfo;
 import com.intellij.ide.browsers.OpenUrlHyperlinkInfo;
@@ -342,6 +343,15 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	// 声明私有volatile成员变量，标记缓存是否已经初始化
 	// 使用 volatile 确保多线程可见性，初始值为 false
 	private volatile boolean cacheInitialized = false;
+
+	/** 最后一次重建索引的时间戳（毫秒） */
+	private volatile long lastRebuildTime = 0;
+
+	/** 最后一次重建索引的耗时（毫秒） */
+	private volatile long lastRebuildDuration = 0;
+
+	/** 忽略的文件数量（在重建过程中统计） */
+	private volatile int ignoredFilesCount = 0;
 
 	/** 是否为终端环境（线程本地） */
 	// 声明公共final线程本地变量，标记当前线程是否在终端环境中运行
@@ -1032,26 +1042,122 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * @param reason 重新加载的原因，用于日志记录和通知（如 "open project"、"indices are updated"、"manual"）
 	 */
 	private void reloadFileCache(String reason) {
+		reloadFileCacheWithProgress(reason, null);
+	}
+
+	/**
+	 * 重建文件缓存（带进度回调）
+	 * 
+	 * @param reason 重建原因
+	 * @param progressCallback 进度回调函数，参数为已处理的文件数
+	 */
+	private void reloadFileCacheWithProgress(String reason, Consumer<Integer> progressCallback) {
 		cacheWriteLock.lock();
+		long startTime = System.currentTimeMillis();
 		try {
 			srcRoots = getSourceRoots();
 			fileCache.clear();
 			fileBaseCache.clear();
-			projectRootManager.getFileIndex().iterateContent(indexIterator);
+			
+			// 重置忽略文件计数
+			ignoredFilesCount = 0;
+			
+			// 如果有进度回调，使用带进度的迭代器
+			if (progressCallback != null) {
+				AwesomeProjectFilesIterator progressIterator = new AwesomeProjectFilesIterator(fileCache, fileBaseCache) {
+					private int processedCount = 0;
+					private int localIgnoredCount = 0;
+					private long lastCallbackTime = 0;
+					private static final long CALLBACK_INTERVAL_MS = 100; // 100ms间隔
+					
+					@Override
+					public boolean processFile(VirtualFile fileOrDir) {
+						boolean result = super.processFile(fileOrDir);
+						if (!fileOrDir.isDirectory()) {
+							processedCount++;
+							
+							// 检查文件是否应该被忽略（如果启用了忽略模式）
+							if (config.useIgnorePattern) {
+								String fileName = fileOrDir.getName();
+								String filePath = fileOrDir.getPath();
+								
+								// 检查文件名和路径是否匹配忽略模式
+								if (shouldIgnore(fileName) || shouldIgnore(filePath)) {
+									localIgnoredCount++;
+								}
+							}
+							
+							long currentTime = System.currentTimeMillis();
+							// 每10个文件或每100ms调用一次回调，确保进度更新更频繁
+							if (processedCount % 10 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
+								// 更新全局忽略计数
+								ignoredFilesCount = localIgnoredCount;
+								progressCallback.accept(processedCount);
+								lastCallbackTime = currentTime;
+							}
+						}
+						return result;
+					}
+				};
+				projectRootManager.getFileIndex().iterateContent(progressIterator);
+				// 最后一次回调，确保显示最终数量和忽略统计
+				progressCallback.accept(getTotalCachedFiles());
+			} else {
+				// 没有进度回调时，仍然需要统计忽略的文件
+				if (config.useIgnorePattern) {
+					AwesomeProjectFilesIterator countingIterator = new AwesomeProjectFilesIterator(fileCache, fileBaseCache) {
+						private int localIgnoredCount = 0;
+						
+						@Override
+						public boolean processFile(VirtualFile fileOrDir) {
+							boolean result = super.processFile(fileOrDir);
+							if (!fileOrDir.isDirectory()) {
+								String fileName = fileOrDir.getName();
+								String filePath = fileOrDir.getPath();
+								
+								// 检查文件名和路径是否匹配忽略模式
+								if (shouldIgnore(fileName) || shouldIgnore(filePath)) {
+									localIgnoredCount++;
+								}
+							}
+							// 更新全局忽略计数
+							ignoredFilesCount = localIgnoredCount;
+							return result;
+						}
+					};
+					projectRootManager.getFileIndex().iterateContent(countingIterator);
+				} else {
+					projectRootManager.getFileIndex().iterateContent(indexIterator);
+				}
+			}
+			
 			String state = cacheInitialized ? "reload" : "init";
 			if (!cacheInitialized || config.DEBUG_MODE) {
+				String notificationMessage = String.format("fileCache[%d], fileBaseCache[%d]", fileCache.size(), fileBaseCache.size());
+				if (config.useIgnorePattern && ignoredFilesCount > 0) {
+					notificationMessage += String.format(", ignored[%d]", ignoredFilesCount);
+				}
 				notifyUser(
 						String.format("%s file cache ( %s )", state, reason),
-						String.format("fileCache[%d], fileBaseCache[%d]", fileCache.size(), fileBaseCache.size())
+						notificationMessage
 				);
 			}
 			if (!cacheInitialized) {
 				cacheInitialized = true;
 			}
-			logger.info(String.format(
-					"project[%s]: %s file cache ( %s ): fileCache[%d], fileBaseCache[%d]",
-					project.getName(), state, reason, fileCache.size(), fileBaseCache.size()
-			));
+			
+			// 记录重建时间和耗时
+			lastRebuildTime = System.currentTimeMillis();
+			lastRebuildDuration = lastRebuildTime - startTime;
+			
+			String logMessage = String.format(
+					"project[%s]: %s file cache ( %s ): fileCache[%d], fileBaseCache[%d], duration[%dms]",
+					project.getName(), state, reason, fileCache.size(), fileBaseCache.size(), lastRebuildDuration
+			);
+			if (config.useIgnorePattern && ignoredFilesCount > 0) {
+				logMessage += String.format(", ignored[%d]", ignoredFilesCount);
+			}
+			logger.info(logMessage);
 		} finally {
 			cacheWriteLock.unlock();
 		}
@@ -1567,5 +1673,155 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 	 */
 	private boolean isNextCharWhitespaceOrEnd(@NotNull final String line, int pos) {
 		return pos >= line.length() || Character.isWhitespace(line.charAt(pos));
+	}
+
+	// ==================== 公共API：索引管理 ====================
+
+	/**
+	 * 手动重建文件索引
+	 * 清空现有缓存并重新遍历项目文件
+	 */
+	public void manualRebuild() {
+		reloadFileCache("manual");
+	}
+
+	/**
+	 * 手动重建文件索引（带进度回调）
+	 * @param progressCallback 进度回调函数，参数为已处理的文件数
+	 */
+	public void manualRebuild(Consumer<Integer> progressCallback) {
+		reloadFileCacheWithProgress("manual", progressCallback);
+	}
+
+	/**
+	 * 清除文件缓存
+	 * 删除所有索引数据，将在下次需要时自动重建
+	 */
+	public void clearCache() {
+		cacheWriteLock.lock();
+		try {
+			fileCache.clear();
+			fileBaseCache.clear();
+			cacheInitialized = false;
+			lastRebuildTime = 0;
+			lastRebuildDuration = 0;
+			logger.info(String.format("project[%s]: cache cleared manually", project.getName()));
+		} finally {
+			cacheWriteLock.unlock();
+		}
+	}
+
+	/**
+	 * 获取文件名缓存的大小
+	 * @return 缓存中不同文件名的数量
+	 */
+	public int getFileCacheSize() {
+		cacheReadLock.lock();
+		try {
+			return fileCache.size();
+		} finally {
+			cacheReadLock.unlock();
+		}
+	}
+
+	/**
+	 * 获取文件基础名缓存的大小
+	 * @return 缓存中不同基础名的数量
+	 */
+	public int getFileBaseCacheSize() {
+		cacheReadLock.lock();
+		try {
+			return fileBaseCache.size();
+		} finally {
+			cacheReadLock.unlock();
+		}
+	}
+
+	/**
+	 * 获取缓存中的总文件数
+	 * @return 所有缓存文件的总数（包括重复文件名）
+	 */
+	public int getTotalCachedFiles() {
+		cacheReadLock.lock();
+		try {
+			return fileCache.values().stream()
+				.mapToInt(List::size)
+				.sum();
+		} finally {
+			cacheReadLock.unlock();
+		}
+	}
+
+	/**
+	 * 获取索引统计信息
+	 * @return 索引统计对象
+	 */
+	public IndexStatistics getIndexStatistics() {
+		cacheReadLock.lock();
+		try {
+			return new IndexStatistics(
+				getFileCacheSize(),
+				getFileBaseCacheSize(),
+				getTotalCachedFiles(),
+				ignoredFilesCount,
+				lastRebuildTime,
+				lastRebuildDuration
+			);
+		} finally {
+			cacheReadLock.unlock();
+		}
+	}
+	
+	/**
+	 * 获取忽略的文件数量
+	 * @return 忽略的文件数量
+	 */
+	public int getIgnoredFilesCount() {
+		return ignoredFilesCount;
+	}
+
+	/**
+	 * 索引统计信息类
+	 */
+	public static class IndexStatistics {
+		private final int fileCacheSize;
+		private final int fileBaseCacheSize;
+		private final int totalFiles;
+		private final int ignoredFiles;
+		private final long lastRebuildTime;
+		private final long lastRebuildDuration;
+		
+		public IndexStatistics(int fileCacheSize, int fileBaseCacheSize, 
+						  int totalFiles, int ignoredFiles, long lastRebuildTime, long lastRebuildDuration) {
+			this.fileCacheSize = fileCacheSize;
+			this.fileBaseCacheSize = fileBaseCacheSize;
+			this.totalFiles = totalFiles;
+			this.ignoredFiles = ignoredFiles;
+			this.lastRebuildTime = lastRebuildTime;
+			this.lastRebuildDuration = lastRebuildDuration;
+		}
+		
+		public int getFileCacheSize() { return fileCacheSize; }
+		public int getFileBaseCacheSize() { return fileBaseCacheSize; }
+		public int getTotalFiles() { return totalFiles; }
+		public int getIgnoredFiles() { return ignoredFiles; }
+		public long getLastRebuildTime() { return lastRebuildTime; }
+		public long getLastRebuildDuration() { return lastRebuildDuration; }
+		
+		/**
+		 * 获取匹配的文件数量（总文件数减去忽略的文件数）
+		 * @return 匹配的文件数量
+		 */
+		public int getMatchedFiles() {
+			return Math.max(0, totalFiles - ignoredFiles);
+		}
+		
+		/**
+		 * 检查是否启用了忽略模式
+		 * @return 如果有忽略文件统计则表示启用了忽略模式
+		 */
+		public boolean hasIgnoreStatistics() {
+			return ignoredFiles > 0;
+		}
 	}
 }
