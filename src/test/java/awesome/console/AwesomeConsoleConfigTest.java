@@ -1478,7 +1478,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         // 验证进度条的初始状态
         assertEquals("Progress bar should start at 0", 0, form.indexProgressBar.getValue());
         assertEquals("Progress bar should have correct range", 100, form.indexProgressBar.getMaximum());
-        assertEquals("Progress bar should have initial text", "Ready", form.indexProgressBar.getString());
+        assertEquals("Progress bar should have initial text", "0%", form.indexProgressBar.getString());
         
         // 模拟进度条状态更新（重建开始）
         form.indexProgressBar.setIndeterminate(true);

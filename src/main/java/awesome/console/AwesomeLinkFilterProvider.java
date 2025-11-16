@@ -109,4 +109,17 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 		// 返回过滤器数组
 		return filters;
 	}
+
+	/**
+	 * 获取指定项目的 AwesomeLinkFilter 实例
+	 * 提供给配置表单等其他组件使用，保证获取的是同一个缓存实例
+	 * 
+	 * @param project 项目实例
+	 * @return AwesomeLinkFilter 实例，如果项目为 null 则返回 null
+	 */
+	@NotNull
+	public static AwesomeLinkFilter getFilter(@NotNull final Project project) {
+		Filter[] filters = cache.computeIfAbsent(project, (key) -> new Filter[]{new AwesomeLinkFilter(project)});
+		return (AwesomeLinkFilter) filters[0];
+	}
 }

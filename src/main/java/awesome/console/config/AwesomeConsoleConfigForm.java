@@ -1,6 +1,7 @@
 package awesome.console.config;
 
 import awesome.console.AwesomeLinkFilter;
+import awesome.console.AwesomeLinkFilterProvider;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationGroup;
 import com.intellij.notification.NotificationGroupManager;
@@ -476,7 +477,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                AwesomeLinkFilter filter = project.getService(AwesomeLinkFilter.class);
+                AwesomeLinkFilter filter = AwesomeLinkFilterProvider.getFilter(project);
                 if (filter != null) {
                     AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
 
@@ -596,123 +597,138 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                AwesomeLinkFilter filter = project.getService(AwesomeLinkFilter.class);
+                AwesomeLinkFilter filter = AwesomeLinkFilterProvider.getFilter(project);
                 if (filter != null) {
-                    // 使用带进度回调的重建方法
-                    AtomicInteger processedFiles = new AtomicInteger(0);
-                    AtomicInteger lastDisplayedCount = new AtomicInteger(0);
-                    AtomicInteger totalEstimatedFiles = new AtomicInteger(1000); // 预估文件数，用于进度条
-
                     long startTime = System.currentTimeMillis();
 
                     try {
+                        AtomicInteger callbackCount = new AtomicInteger(0);
+                        AtomicInteger totalEstimatedFiles = new AtomicInteger(1000); // 预估文件数，用于进度条
+
                         filter.manualRebuild(count -> {
                             try {
-                                processedFiles.set(count);
+                                callbackCount.incrementAndGet();
+                                
+                                // 调试日志
+                                System.out.println("[AwesomeConsole] Progress callback triggered: count=" + count);
 
                                 // 动态调整预估总数
                                 if (count > totalEstimatedFiles.get()) {
                                     totalEstimatedFiles.set(count + 100);
                                 }
 
-                                // 更频繁地更新UI，提供更好的用户体验
-                                if (count - lastDisplayedCount.get() >= 3 || count == 0) {
-                                    lastDisplayedCount.set(count);
-                                    ApplicationManager.getApplication().invokeLater(() -> {
-                                        try {
-                                            // 计算处理速度
-                                            long elapsed = System.currentTimeMillis() - startTime;
-                                            String speedInfo = "";
-                                            if (elapsed > 1000 && count > 0) {
-                                                double filesPerSecond = count * 1000.0 / elapsed;
-                                                speedInfo = String.format(" (%.0f files/sec)", filesPerSecond);
-                                            }
+                                ApplicationManager.getApplication().invokeLater(() -> {
+                                    try {
+                                        // 调试日志
+                                        System.out.println("[AwesomeConsole] UI update triggered: count=" + count);
+                                        
+                                        // 获取实时统计数据
+                                        AwesomeLinkFilter.IndexStatistics currentStats = filter.getIndexStatistics();
+                                        int ignoredFiles = currentStats.getIgnoredFiles();
+                                        int matchedFiles = Math.max(0, count - ignoredFiles);
+                                        int totalFiles = currentStats.getTotalFiles();
 
-                                            // 获取忽略文件统计
-                                            AwesomeLinkFilter.IndexStatistics currentStats = filter.getIndexStatistics();
-                                            int ignoredFiles = currentStats.getIgnoredFiles();
-                                            int matchedFiles = Math.max(0, count - ignoredFiles);
+                                        // 判断是否是最后一次回调（文件数不再增长）
+                                        boolean isLastCallback = (totalFiles > 0 && count == totalFiles);
 
-                                            // 更新状态标签
-                                            String statusText = String.format(
-                                                    "Rebuilding index [%s]... %d files processed%s",
-                                                    project.getName(), count, speedInfo
-                                            );
-                                            if (ignoredFiles > 0) {
-                                                statusText += String.format(" (Matched: %d, Ignored: %d)", matchedFiles, ignoredFiles);
-                                            }
-                                            indexStatusLabel.setText(statusText);
-
-                                            // 更新进度条 - 使用更准确的百分比计算
-                                            int progress = Math.min(95, (count * 95) / Math.max(totalEstimatedFiles.get(), 1));
-                                            indexProgressBar.setValue(progress);
-
-                                            // 设置进度条文本，如果有忽略文件则显示详细信息
-                                            if (ignoredFiles > 0) {
-                                                int matchedPercentage = Math.max(0, (matchedFiles * 95) / Math.max(totalEstimatedFiles.get(), 1));
-                                                int ignoredPercentage = Math.max(0, (ignoredFiles * 95) / Math.max(totalEstimatedFiles.get(), 1));
-                                                indexProgressBar.setString(String.format("%d%% (✓%d%% ⚠%d%%)",
-                                                        progress, matchedPercentage, ignoredPercentage));
-                                                updateProgressBarWithIgnoreStats(totalEstimatedFiles.get(), matchedFiles, ignoredFiles);
-                                            } else {
-                                                indexProgressBar.setString(progress + "%");
-                                                updateProgressBarColor(progress);
-                                            }
-                                        } catch (Exception e) {
-                                            // 忽略UI更新异常，避免影响重建过程
+                                        // 计算进度百分比
+                                        int progress;
+                                        if (isLastCallback) {
+                                            // 最后一次回调，直接设置为100%
+                                            progress = 100;
+                                        } else {
+                                            // 非最后一次回调，限制在95%以内
+                                            progress = Math.min(95, (count * 95) / Math.max(totalEstimatedFiles.get(), 1));
                                         }
-                                    });
-                                }
+
+                                        // 计算已用时间（用于完成时显示）
+                                        long elapsed = System.currentTimeMillis() - startTime;
+
+                                        // 更新状态标签
+                                        String statusText;
+                                        if (isLastCallback) {
+                                            statusText = String.format("Rebuild completed [%s]: %d files indexed in %s",
+                                                    project.getName(), count, formatDuration(elapsed));
+                                        } else {
+                                            statusText = String.format("Rebuilding index [%s]... %d files processed",
+                                                    project.getName(), count);
+                                        }
+                                        if (ignoredFiles > 0) {
+                                            statusText += String.format(" (Matched: %d, Ignored: %d)", matchedFiles, ignoredFiles);
+                                        }
+                                        indexStatusLabel.setText(statusText);
+
+                                        // 更新进度条
+                                        indexProgressBar.setValue(progress);
+                                        
+                                        // 强制刷新进度条显示
+                                        indexProgressBar.repaint();
+
+                                        // 设置进度条文本
+                                        if (ignoredFiles > 0 && totalFiles > 0) {
+                                            int matchedPercentage = (matchedFiles * 100) / totalFiles;
+                                            int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+                                            indexProgressBar.setString(String.format("%d%% (✓%d%% ⚠%d%%)",
+                                                    progress, matchedPercentage, ignoredPercentage));
+                                            updateProgressBarWithIgnoreStats(totalFiles, matchedFiles, ignoredFiles);
+                                        } else {
+                                            indexProgressBar.setString(progress + "%");
+                                            updateProgressBarColor(progress);
+                                        }
+                                        
+                                        // 强制刷新进度条
+                                        indexProgressBar.repaint();
+
+                                        // 如果是最后一次回调，恢复按钮状态并显示通知
+                                        if (isLastCallback) {
+                                            rebuildIndexButton.setText("Rebuild Index");
+                                            rebuildIndexButton.setEnabled(true);
+                                            clearIndexButton.setEnabled(true);
+                                            isOperationInProgress = false;
+
+                                            // 更新索引状态
+                                            updateIndexStatus();
+
+                                            // 显示通知
+                                            String notificationMessage = String.format("File index rebuilt successfully! %d files indexed in %s",
+                                                    totalFiles, formatDuration(currentStats.getLastRebuildDuration()));
+                                            if (ignoredFiles > 0) {
+                                                notificationMessage += String.format(" (Matched: %d, Ignored: %d)",
+                                                        matchedFiles, ignoredFiles);
+                                            }
+                                            showNotification(project, notificationMessage, NotificationType.INFORMATION);
+                                        }
+                                    } catch (Exception e) {
+                                        // 忽略UI更新异常，避免影响重建过程
+                                    }
+                                });
                             } catch (Exception e) {
                                 // 忽略进度回调异常，避免影响重建过程
                             }
                         });
 
-                        Thread.sleep(500); // 等待重建完成
-
-                        ApplicationManager.getApplication().invokeLater(() -> {
-                            try {
-                                // 获取最终统计信息
-                                AwesomeLinkFilter.IndexStatistics finalStats = filter.getIndexStatistics();
-
-                                // 完成进度条动画
-                                indexProgressBar.setValue(100);
-                                if (finalStats.hasIgnoreStatistics()) {
-                                    int matchedFiles = finalStats.getMatchedFiles();
-                                    int ignoredFiles = finalStats.getIgnoredFiles();
-                                    int matchedPercentage = (matchedFiles * 100) / Math.max(finalStats.getTotalFiles(), 1);
-                                    int ignoredPercentage = (ignoredFiles * 100) / Math.max(finalStats.getTotalFiles(), 1);
-                                    indexProgressBar.setString(String.format("100%% (✓%d%% ⚠%d%%)",
-                                            matchedPercentage, ignoredPercentage));
-                                    updateProgressBarWithIgnoreStats(finalStats.getTotalFiles(), matchedFiles, ignoredFiles);
-                                } else {
+                        // manualRebuild 是同步执行的，执行到这里表示重建已完成
+                        // 如果回调没有被触发（空项目等情况），手动触发完成逻辑
+                        if (callbackCount.get() == 0) {
+                            ApplicationManager.getApplication().invokeLater(() -> {
+                                try {
+                                    indexProgressBar.setValue(100);
                                     indexProgressBar.setString("100%");
                                     updateProgressBarColor(100);
+                                    indexStatusLabel.setText("Rebuild completed [" + project.getName() + "]: 0 files");
+
+                                    rebuildIndexButton.setText("Rebuild Index");
+                                    rebuildIndexButton.setEnabled(true);
+                                    clearIndexButton.setEnabled(true);
+                                    isOperationInProgress = false;
+
+                                    updateIndexStatus();
+                                    showNotification(project, "File index rebuilt successfully! 0 files indexed", NotificationType.INFORMATION);
+                                } catch (Exception e) {
+                                    showIndexError("Failed to complete rebuild: " + e.getMessage());
                                 }
-
-                                // 立即恢复按钮状态
-                                rebuildIndexButton.setText("Rebuild Index");
-                                rebuildIndexButton.setEnabled(true);
-                                clearIndexButton.setEnabled(true);
-                                isOperationInProgress = false;
-
-                                // 立即更新索引状态
-                                updateIndexStatus();
-
-                                // 获取统计信息并显示通知
-                                AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
-                                String notificationMessage = String.format("File index rebuilt successfully! %d files indexed in %s",
-                                        stats.getTotalFiles(), formatDuration(stats.getLastRebuildDuration()));
-                                if (stats.hasIgnoreStatistics()) {
-                                    notificationMessage += String.format(" (Matched: %d, Ignored: %d)",
-                                            stats.getMatchedFiles(), stats.getIgnoredFiles());
-                                }
-                                showNotification(project, notificationMessage, NotificationType.INFORMATION);
-                            } catch (Exception e) {
-                                // 如果完成时出现异常，仍然要恢复按钮状态
-                                showIndexError("Failed to complete rebuild: " + e.getMessage());
-                            }
-                        });
+                            });
+                        }
                     } catch (Exception e) {
                         // 重建过程中出现异常
                         showIndexError("Failed to rebuild index: " + e.getMessage());
@@ -766,77 +782,37 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                AwesomeLinkFilter filter = project.getService(AwesomeLinkFilter.class);
+                AwesomeLinkFilter filter = AwesomeLinkFilterProvider.getFilter(project);
                 if (filter != null) {
                     try {
-                        // 获取当前缓存信息用于进度计算
+                        // 获取当前缓存信息
                         int totalFiles = filter.getTotalCachedFiles();
                         int fileCacheSize = filter.getFileCacheSize();
                         int fileBaseCacheSize = filter.getFileBaseCacheSize();
 
                         long startTime = System.currentTimeMillis();
 
-                        // 模拟分批清除过程，提供真实的进度反馈
-                        int totalSteps = 20; // 分20步完成清除
-                        for (int step = 0; step <= totalSteps; step++) {
-                            final int currentStep = step;
-                            final int progress = (step * 100) / totalSteps;
+                        // 显示开始清除
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            indexStatusLabel.setText(String.format(
+                                    "Clearing index [%s]... %d files (%d filenames, %d basenames)",
+                                    project.getName(), totalFiles, fileCacheSize, fileBaseCacheSize
+                            ));
+                            indexProgressBar.setValue(50);
+                            indexProgressBar.setString("50%");
+                            updateProgressBarColor(50);
+                        });
 
-                            ApplicationManager.getApplication().invokeLater(() -> {
-                                try {
-                                    // 计算清除速度
-                                    long elapsed = System.currentTimeMillis() - startTime;
-                                    String speedInfo = "";
-                                    if (elapsed > 500 && currentStep > 0) {
-                                        double stepsPerSecond = currentStep * 1000.0 / elapsed;
-                                        speedInfo = String.format(" (%.1f steps/sec)", stepsPerSecond);
-                                    }
+                        // 执行清除操作（这是瞬时的）
+                        filter.clearCache();
 
-                                    // 更新状态标签显示清除进度
-                                    if (currentStep == 0) {
-                                        indexStatusLabel.setText(String.format(
-                                                "Clearing index [%s]... Preparing to clear %d files (%d filenames, %d basenames)",
-                                                project.getName(), totalFiles, fileCacheSize, fileBaseCacheSize
-                                        ));
-                                    } else if (currentStep < totalSteps) {
-                                        indexStatusLabel.setText(String.format(
-                                                "Clearing index [%s]... Step %d/%d%s",
-                                                project.getName(), currentStep, totalSteps, speedInfo
-                                        ));
-                                    } else {
-                                        indexStatusLabel.setText(String.format(
-                                                "Clearing index [%s]... Finalizing cleanup",
-                                                project.getName()
-                                        ));
-                                    }
+                        // 计算耗时
+                        long totalTime = System.currentTimeMillis() - startTime;
 
-                                    // 更新进度条
-                                    indexProgressBar.setValue(progress);
-                                    indexProgressBar.setString(progress + "%");
-                                    updateProgressBarColor(progress);
-                                } catch (Exception e) {
-                                    // 忽略UI更新异常
-                                }
-                            });
-
-                            // 在中间步骤执行实际清除操作
-                            if (step == totalSteps / 2) {
-                                filter.clearCache();
-                            }
-
-                            // 控制清除速度，让用户能看到进度
-                            try {
-                                Thread.sleep(80); // 80ms间隔，总共约1.6秒完成
-                            } catch (InterruptedException e) {
-                                Thread.currentThread().interrupt();
-                                break;
-                            }
-                        }
-
-                        // 确保进度条显示100%并立即更新状态
+                        // 更新完成状态
                         ApplicationManager.getApplication().invokeLater(() -> {
                             try {
-                                // 确保进度条显示100%
+                                // 立即将进度条设置为100%
                                 indexProgressBar.setValue(100);
                                 indexProgressBar.setString("100%");
                                 updateProgressBarColor(100);
@@ -849,9 +825,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
                                 // 立即更新索引状态
                                 updateIndexStatus();
-
-                                // 计算总耗时
-                                long totalTime = System.currentTimeMillis() - startTime;
 
                                 // 使用通知栏提示
                                 showNotification(project,
@@ -1003,8 +976,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         final JSeparator separator1 = new JSeparator();
         panel1.add(separator1, new GridConstraints(14, 0, 1, 4, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
         final JLabel label4 = new JLabel();
-        Font label4Font = this.$$$getFont$$$(null, Font.BOLD, -1, label4.getFont());
-        if (label4Font != null) label4.setFont(label4Font);
         label4.setText("File Index Management");
         panel1.add(label4, new GridConstraints(15, 0, 1, 4, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
         indexStatusLabel.setText("Index Status: Not initialized");
@@ -1015,9 +986,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         final JPanel panel3 = new JPanel();
         panel3.setLayout(new FlowLayout(FlowLayout.LEFT, 5, 5));
         panel1.add(panel3, new GridConstraints(18, 0, 1, 4, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        rebuildIndexButton.setText("Rebuild Index");
+        rebuildIndexButton.setText("Rebuild");
         panel3.add(rebuildIndexButton);
-        clearIndexButton.setText("Clear Index");
+        clearIndexButton.setText("Clear");
         panel3.add(clearIndexButton);
         final Spacer spacer2 = new Spacer();
         panel1.add(spacer2, new GridConstraints(19, 0, 1, 4, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_VERTICAL, 1, GridConstraints.SIZEPOLICY_WANT_GROW, null, null, null, 0, false));
@@ -1026,30 +997,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     /**
      * @noinspection ALL
      */
-    private Font $$$getFont$$$(String fontName, int style, int size, Font currentFont) {
-        if (currentFont == null) return null;
-        String resultName;
-        if (fontName == null) {
-            resultName = currentFont.getName();
-        } else {
-            Font testFont = new Font(fontName, Font.PLAIN, 10);
-            if (testFont.canDisplay('a') && testFont.canDisplay('1')) {
-                resultName = fontName;
-            } else {
-                resultName = currentFont.getName();
-            }
-        }
-        Font font = new Font(resultName, style >= 0 ? style : currentFont.getStyle(), size >= 0 ? size : currentFont.getSize());
-        boolean isMac = System.getProperty("os.name", "").toLowerCase(Locale.ENGLISH).startsWith("mac");
-        Font fontWithFallback = isMac ? new Font(font.getFamily(), font.getStyle(), font.getSize()) : new StyleContext().getFont(font.getFamily(), font.getStyle(), font.getSize());
-        return fontWithFallback instanceof FontUIResource ? fontWithFallback : new FontUIResource(fontWithFallback);
-    }
-
-    /**
-     * @noinspection ALL
-     */
     public JComponent $$$getRootComponent$$$() {
         return mainPanel;
     }
-
 }

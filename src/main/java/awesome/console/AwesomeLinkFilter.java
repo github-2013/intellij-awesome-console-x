@@ -1068,7 +1068,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 					private int processedCount = 0;
 					private int localIgnoredCount = 0;
 					private long lastCallbackTime = 0;
-					private static final long CALLBACK_INTERVAL_MS = 100; // 100ms间隔
+					private static final long CALLBACK_INTERVAL_MS = 50; // 50ms间隔，提高刷新频率
 					
 					@Override
 					public boolean processFile(VirtualFile fileOrDir) {
@@ -1088,8 +1088,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 							}
 							
 							long currentTime = System.currentTimeMillis();
-							// 每10个文件或每100ms调用一次回调，确保进度更新更频繁
-							if (processedCount % 10 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
+							// 每5个文件或每50ms调用一次回调，提高进度更新频率
+							if (processedCount % 5 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
 								// 更新全局忽略计数
 								ignoredFilesCount = localIgnoredCount;
 								progressCallback.accept(processedCount);

@@ -238,7 +238,6 @@
               <grid row="15" column="0" row-span="1" col-span="4" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
-              <font style="1"/>
               <text value="File Index Management"/>
             </properties>
           </component>
@@ -271,13 +270,13 @@
               <component id="rebuildIndexButton" class="javax.swing.JButton" binding="rebuildIndexButton" custom-create="true">
                 <constraints/>
                 <properties>
-                  <text value="Rebuild Index"/>
+                  <text value="Rebuild"/>
                 </properties>
               </component>
               <component id="clearIndexButton" class="javax.swing.JButton" binding="clearIndexButton" custom-create="true">
                 <constraints/>
                 <properties>
-                  <text value="Clear Index"/>
+                  <text value="Clear"/>
                 </properties>
               </component>
             </children>
