@@ -1,7 +1,6 @@
 package awesome.console.config;
 
 import awesome.console.AwesomeLinkFilter;
-import awesome.console.AwesomeLinkFilterProvider;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
@@ -16,7 +15,6 @@ import java.util.stream.Stream;
 import javax.swing.*;
 import javax.swing.text.JTextComponent;
 import javax.swing.text.NumberFormatter;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
 import java.text.DecimalFormat;
@@ -176,14 +174,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
     private void setupLineLimit() {
         limitLineMatchingByCheckBox = new JCheckBox("limitLineMatchingByCheckBox");
-        limitLineMatchingByCheckBox.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(final ActionEvent e) {
-                final boolean selected = limitLineMatchingByCheckBox.isSelected();
-                maxLengthTextField.setEnabled(selected);
-                maxLengthTextField.setEditable(selected);
-                matchLinesLongerThanCheckBox.setEnabled(selected);
-            }
+        limitLineMatchingByCheckBox.addActionListener(e -> {
+            final boolean selected = limitLineMatchingByCheckBox.isSelected();
+            maxLengthTextField.setEnabled(selected);
+            maxLengthTextField.setEditable(selected);
+            matchLinesLongerThanCheckBox.setEnabled(selected);
         });
 
         final DecimalFormat decimalFormat = new DecimalFormat("#####");
@@ -198,15 +193,12 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         final JMenuItem itm = popup.add("Restore defaults");
         itm.setMnemonic(KeyEvent.VK_R);
-        itm.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(final ActionEvent e) {
-                maxLengthTextField.setText(String.valueOf(DEFAULT_LINE_MAX_LENGTH));
-                maxLengthTextField.setEnabled(true);
-                maxLengthTextField.setEditable(true);
-                limitLineMatchingByCheckBox.setSelected(DEFAULT_LIMIT_LINE_LENGTH);
-                matchLinesLongerThanCheckBox.setEnabled(true);
-            }
+        itm.addActionListener(e -> {
+            maxLengthTextField.setText(String.valueOf(DEFAULT_LINE_MAX_LENGTH));
+            maxLengthTextField.setEnabled(true);
+            maxLengthTextField.setEditable(true);
+            limitLineMatchingByCheckBox.setSelected(DEFAULT_LIMIT_LINE_LENGTH);
+            matchLinesLongerThanCheckBox.setEnabled(true);
         });
     }
 
@@ -218,12 +210,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         final JMenuItem itm = popup.add("Restore defaults");
         itm.setMnemonic(KeyEvent.VK_R);
-        itm.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(final ActionEvent e) {
-                matchLinesLongerThanCheckBox.setSelected(DEFAULT_SPLIT_ON_LIMIT);
-            }
-        });
+        itm.addActionListener(e -> matchLinesLongerThanCheckBox.setSelected(DEFAULT_SPLIT_ON_LIMIT));
     }
 
     private void setupMatchURLs() {
