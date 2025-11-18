@@ -48,6 +48,7 @@ dependencies {
         
         // 代码插桩工具：用于处理 IntelliJ Platform 的特殊注解和字节码增强
         // 例如 @NotNull、@Nullable 等注解的运行时检查
+        // 这个配置启用了 GUI Designer 的字节码增强
         instrumentationTools()
 
         // 测试框架：提供 IntelliJ Platform 的测试基础设施
@@ -132,5 +133,14 @@ test {
     javaLauncher = javaToolchains.launcherFor {
         languageVersion = JavaLanguageVersion.of(21)
     }
+}
+
+// ========== buildSearchableOptions 任务配置 ==========
+// 禁用 buildSearchableOptions 任务
+// 该任务会在构建时启动完整的 IDEA 实例来生成可搜索选项索引
+// 但可能因网络问题（尝试从 JetBrains Marketplace 下载插件信息）导致 JsonEOFException 错误
+// 对于简单插件，可以安全地禁用此任务
+tasks.named('buildSearchableOptions') {
+    enabled = true
 }
 

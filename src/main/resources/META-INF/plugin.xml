@@ -14,7 +14,16 @@
 	</description>
 	<change-notes>
 		<![CDATA[
-        <p>
+		<p>
+        	<b>0.1337.28</b><br/>
+        	<ul>
+        		<li>Added comprehensive file index management system with manual rebuild and clear operations</li>
+        		<li>Enhanced AwesomeLinkFilter with thread-safe cache management and progress callback support</li>
+        		<li>Improved notifications with operation statistics and timing information</li>
+        		<li>Optimized UI responsiveness with higher progress update frequency and simplified button text</li>
+        		<li>Adjusted progress bar height for better visual appearance</li>
+        		<li>Maintained full backward compatibility with existing functionality</li>
+        	</ul>
         	<b>0.1337.27</b><br/>
         	<ul>
         		<li>Fixed Git rename format path detection with dedicated REGEX_GIT_RENAME pattern</li>

@@ -1,29 +1,32 @@
 package awesome.console.config;
 
+import awesome.console.AwesomeLinkFilter;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
+import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.ui.JBColor;
 
 import java.awt.*;
 import java.util.*;
 import java.util.stream.Stream;
 import javax.swing.*;
 import javax.swing.text.JTextComponent;
-import javax.swing.text.NumberFormatter;
-import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
-import java.text.DecimalFormat;
 
-import com.intellij.uiDesigner.core.GridConstraints;
-import com.intellij.uiDesigner.core.GridLayoutManager;
-import com.intellij.uiDesigner.core.Spacer;
 import org.jetbrains.annotations.NotNull;
 
 @SuppressWarnings("SameParameterValue")
 public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
+    private static final Logger logger = Logger.getInstance(AwesomeConsoleConfigForm.class);
+
     public JPanel mainPanel;
     public JCheckBox debugModeCheckBox;
     public JCheckBox limitLineMatchingByCheckBox;
-    public JFormattedTextField maxLengthTextField;
+    public JSpinner maxLengthSpinner;
     public JCheckBox matchLinesLongerThanCheckBox;
     public JCheckBox searchForURLsCheckBox;
     public JCheckBox searchForFilesCheckBox;
@@ -42,8 +45,17 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     public JCheckBox resolveSymlinkCheckBox;
     public JCheckBox preserveAnsiColorsCheckBox;
 
+    // 索引管理相关字段
+    public JLabel indexStatusLabel;
+    public JProgressBar indexProgressBar;
+    public JButton rebuildIndexButton;
+    public JButton clearIndexButton;
+
     private Map<JCheckBox, Set<JComponent>> bindMap;
     private Map<JComponent, Set<JCheckBox>> bindMap2;
+
+    // 索引管理服务
+    private IndexManagementService indexManagementService;
 
     private void createUIComponents() {
         bindMap = new HashMap<>();
@@ -58,6 +70,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         setupFileTypes();
         setupResolveSymlink();
         setupPreserveAnsiColors();
+        setupIndexManagement();
     }
 
     private void setupRestore(@NotNull JComponent component, ActionListener listener) {
@@ -156,37 +169,25 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
     private void setupLineLimit() {
         limitLineMatchingByCheckBox = new JCheckBox("limitLineMatchingByCheckBox");
-        limitLineMatchingByCheckBox.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(final ActionEvent e) {
-                final boolean selected = limitLineMatchingByCheckBox.isSelected();
-                maxLengthTextField.setEnabled(selected);
-                maxLengthTextField.setEditable(selected);
-                matchLinesLongerThanCheckBox.setEnabled(selected);
-            }
+        limitLineMatchingByCheckBox.addActionListener(e -> {
+            final boolean selected = limitLineMatchingByCheckBox.isSelected();
+            maxLengthSpinner.setEnabled(selected);
+            matchLinesLongerThanCheckBox.setEnabled(selected);
         });
 
-        final DecimalFormat decimalFormat = new DecimalFormat("#####");
-        final NumberFormatter formatter = new NumberFormatter(decimalFormat);
-        formatter.setMinimum(0);
-        formatter.setValueClass(Integer.class);
-        maxLengthTextField = new JFormattedTextField(formatter);
-        maxLengthTextField.setColumns(5);
+        maxLengthSpinner = initSpinner(DEFAULT_LINE_MAX_LENGTH);
+        maxLengthSpinner.setModel(new SpinnerNumberModel(DEFAULT_LINE_MAX_LENGTH, 1, Integer.MAX_VALUE, 10));
 
         JPopupMenu popup = new JPopupMenu("Defaults");
-        maxLengthTextField.setComponentPopupMenu(popup);
+        maxLengthSpinner.setComponentPopupMenu(popup);
 
         final JMenuItem itm = popup.add("Restore defaults");
         itm.setMnemonic(KeyEvent.VK_R);
-        itm.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(final ActionEvent e) {
-                maxLengthTextField.setText(String.valueOf(DEFAULT_LINE_MAX_LENGTH));
-                maxLengthTextField.setEnabled(true);
-                maxLengthTextField.setEditable(true);
-                limitLineMatchingByCheckBox.setSelected(DEFAULT_LIMIT_LINE_LENGTH);
-                matchLinesLongerThanCheckBox.setEnabled(true);
-            }
+        itm.addActionListener(e -> {
+            maxLengthSpinner.setValue(DEFAULT_LINE_MAX_LENGTH);
+            maxLengthSpinner.setEnabled(true);
+            limitLineMatchingByCheckBox.setSelected(DEFAULT_LIMIT_LINE_LENGTH);
+            matchLinesLongerThanCheckBox.setEnabled(true);
         });
     }
 
@@ -198,12 +199,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         final JMenuItem itm = popup.add("Restore defaults");
         itm.setMnemonic(KeyEvent.VK_R);
-        itm.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(final ActionEvent e) {
-                matchLinesLongerThanCheckBox.setSelected(DEFAULT_SPLIT_ON_LIMIT);
-            }
-        });
+        itm.addActionListener(e -> matchLinesLongerThanCheckBox.setSelected(DEFAULT_SPLIT_ON_LIMIT));
     }
 
     private void setupMatchURLs() {
@@ -227,7 +223,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         filePatternTextArea.setLineWrap(true);
         final String groupExample = FILE_PATTERN_REQUIRED_GROUPS[0];
         filePatternLabel = new JLabel(String.format(
-                "      * Required regex group names: [%s], where %s,%s1...%s%d all correspond to the group %s.",
+                "* Required regex group names: [%s], where %s,%s1...%s%d all correspond to the group %s.",
                 StringUtil.join(FILE_PATTERN_REQUIRED_GROUPS, ", "),
                 groupExample, groupExample, groupExample, DEFAULT_GROUP_RETRIES, groupExample
         ));
@@ -288,91 +284,375 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         preserveAnsiColorsCheckBox.setToolTipText("Preserve ANSI color codes and formatting in console output. Useful for modern shell prompts (oh-my-posh, starship).");
     }
 
-    {
-// GUI initializer generated by IntelliJ IDEA GUI Designer
-// >>> IMPORTANT!! <<<
-// DO NOT EDIT OR ADD ANY CODE HERE!
-        $$$setupUI$$$();
+    /**
+     * 设置索引管理组件
+     */
+    private void setupIndexManagement() {
+        indexStatusLabel = new JLabel("Index Status: Not initialized");
+        indexStatusLabel.setForeground(JBColor.GRAY);
+
+        indexProgressBar = new JProgressBar(0, 100);
+        indexProgressBar.setStringPainted(true);
+        indexProgressBar.setIndeterminate(false);
+        indexProgressBar.setVisible(true);
+        indexProgressBar.setValue(0);
+        indexProgressBar.setString("0%");
+        updateProgressBarColor(0);
+
+        rebuildIndexButton = new JButton("Rebuild");
+        rebuildIndexButton.addActionListener(e -> rebuildIndex());
+
+        clearIndexButton = new JButton("Clear");
+        clearIndexButton.addActionListener(e -> clearIndex());
+
+        // 创建索引管理服务
+        indexManagementService = new IndexManagementService();
     }
 
     /**
-     * Method generated by IntelliJ IDEA GUI Designer
-     * >>> IMPORTANT!! <<<
-     * DO NOT edit this method OR call it in your code!
-     *
-     * @noinspection ALL
+     * 获取当前活动项目
      */
-    private void $$$setupUI$$$() {
-        createUIComponents();
-        mainPanel = new JPanel();
-        mainPanel.setLayout(new GridLayoutManager(1, 2, new Insets(0, 0, 0, 0), -1, -1));
-        final JPanel panel1 = new JPanel();
-        panel1.setLayout(new GridLayoutManager(15, 4, new Insets(0, 0, 0, 0), -1, -1));
-        mainPanel.add(panel1, new GridConstraints(0, 0, 1, 2, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, null, null, null, 0, false));
-        debugModeCheckBox.setText("Debug Mode");
-        panel1.add(debugModeCheckBox, new GridConstraints(0, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        limitLineMatchingByCheckBox.setText("Limit line matching by");
-        panel1.add(limitLineMatchingByCheckBox, new GridConstraints(1, 0, 1, 2, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final Spacer spacer1 = new Spacer();
-        panel1.add(spacer1, new GridConstraints(14, 0, 1, 2, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_VERTICAL, 1, GridConstraints.SIZEPOLICY_WANT_GROW, null, null, null, 0, false));
-        final JLabel label1 = new JLabel();
-        label1.setText("chars.");
-        panel1.add(label1, new GridConstraints(1, 3, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        maxLengthTextField.setText("");
-        panel1.add(maxLengthTextField, new GridConstraints(1, 2, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, new Dimension(150, -1), null, 0, false));
-        matchLinesLongerThanCheckBox.setText("Match lines longer than the limit chunk by chunk.");
-        panel1.add(matchLinesLongerThanCheckBox, new GridConstraints(2, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        searchForURLsCheckBox.setText("Match URLs (file, ftp, http(s)).");
-        panel1.add(searchForURLsCheckBox, new GridConstraints(3, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        searchForFilesCheckBox.setText("Match file paths.");
-        panel1.add(searchForFilesCheckBox, new GridConstraints(4, 0, 1, 2, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        searchForClassesCheckBox.setText("Match Java-like Classes.");
-        panel1.add(searchForClassesCheckBox, new GridConstraints(4, 2, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final JPanel panel2 = new JPanel();
-        panel2.setLayout(new GridLayoutManager(1, 4, new Insets(0, 0, 0, 0), -1, -1));
-        panel1.add(panel2, new GridConstraints(5, 0, 1, 3, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, null, null, null, 0, false));
-        limitResultCheckBox.setText("Each hyperlink matches at most");
-        panel2.add(limitResultCheckBox, new GridConstraints(0, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        panel2.add(limitResultSpinner, new GridConstraints(0, 1, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final JLabel label2 = new JLabel();
-        label2.setText("results.");
-        panel2.add(label2, new GridConstraints(0, 2, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final Spacer spacer2 = new Spacer();
-        panel2.add(spacer2, new GridConstraints(0, 3, 1, 1, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, 1, null, null, null, 0, false));
-        filePatternCheckBox.setText("Files matching pattern:");
-        panel1.add(filePatternCheckBox, new GridConstraints(6, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        final JScrollPane scrollPane1 = new JScrollPane();
-        panel1.add(scrollPane1, new GridConstraints(6, 2, 1, 1, GridConstraints.ANCHOR_CENTER, GridConstraints.FILL_BOTH, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_WANT_GROW, null, new Dimension(150, 50), null, 0, false));
-        filePatternTextArea.setMargin(new Insets(4, 4, 4, 4));
-        scrollPane1.setViewportView(filePatternTextArea);
-        panel1.add(filePatternLabel, new GridConstraints(7, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        ignorePatternCheckBox.setText("Ignore matches:");
-        panel1.add(ignorePatternCheckBox, new GridConstraints(8, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        ignorePatternTextField.setText("");
-        panel1.add(ignorePatternTextField, new GridConstraints(8, 2, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, new Dimension(150, -1), null, 0, false));
-        final JLabel label3 = new JLabel();
-        label3.setText("Use regex pattern");
-        panel1.add(label3, new GridConstraints(8, 3, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_FIXED, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        ignoreStyleCheckBox.setText("Use ignore style.");
-        panel1.add(ignoreStyleCheckBox, new GridConstraints(9, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        fixChooseTargetFileCheckBox.setText("Fix \"Choose Target File\" popup. (Verified in 2021.2.1 ~ 2023.2.3)");
-        panel1.add(fixChooseTargetFileCheckBox, new GridConstraints(10, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        fileTypesCheckBox.setText("Non-text file types:");
-        panel1.add(fileTypesCheckBox, new GridConstraints(11, 0, 1, 2, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        fileTypesTextField.setText("");
-        panel1.add(fileTypesTextField, new GridConstraints(11, 2, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_HORIZONTAL, GridConstraints.SIZEPOLICY_WANT_GROW, GridConstraints.SIZEPOLICY_FIXED, null, new Dimension(150, -1), null, 0, false));
-        resolveSymlinkCheckBox.setText("Resolve Symlinks (compatible with IDEA Resolve Symlinks plugin).");
-        panel1.add(resolveSymlinkCheckBox, new GridConstraints(12, 0, 1, 3, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
-        preserveAnsiColorsCheckBox.setText("Preserve ANSI color.");
-        preserveAnsiColorsCheckBox.setToolTipText("Preserve ANSI color codes and formatting in console output.");
-        panel1.add(preserveAnsiColorsCheckBox, new GridConstraints(13, 0, 1, 1, GridConstraints.ANCHOR_WEST, GridConstraints.FILL_NONE, GridConstraints.SIZEPOLICY_CAN_SHRINK | GridConstraints.SIZEPOLICY_CAN_GROW, GridConstraints.SIZEPOLICY_FIXED, null, null, null, 0, false));
+    private Project getCurrentProject() {
+        Project[] openProjects = ProjectManager.getInstance().getOpenProjects();
+        if (openProjects.length == 0) {
+            return null;
+        }
+        return openProjects[0];
     }
 
     /**
-     * @noinspection ALL
+     * 更新索引状态显示
      */
-    public JComponent $$$getRootComponent$$$() {
-        return mainPanel;
+    public void updateIndexStatus() {
+        Project project = getCurrentProject();
+        if (project == null) {
+            indexStatusLabel.setText("Index Status: No project opened");
+            indexStatusLabel.setForeground(JBColor.GRAY);
+            rebuildIndexButton.setEnabled(false);
+            clearIndexButton.setEnabled(false);
+            return;
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            try {
+                AwesomeLinkFilter.IndexStatistics stats = indexManagementService.getIndexStatistics(project);
+                if (stats != null) {
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        updateIndexStatusUI(project.getName(), stats);
+                        rebuildIndexButton.setEnabled(true);
+                        clearIndexButton.setEnabled(true);
+                    }, ModalityState.any());
+                } else {
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        indexStatusLabel.setText("Index Status: Service not available");
+                        indexStatusLabel.setForeground(JBColor.RED);
+                        rebuildIndexButton.setEnabled(false);
+                        clearIndexButton.setEnabled(false);
+                    }, ModalityState.any());
+                }
+            } catch (Exception e) {
+                logger.error("Failed to update index status: " + e.getMessage(), e);
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    indexStatusLabel.setText("Index Status: Error - " + e.getMessage());
+                    indexStatusLabel.setForeground(JBColor.RED);
+                }, ModalityState.any());
+            }
+        });
     }
 
+    /**
+     * 更新索引状态 UI
+     */
+    private void updateIndexStatusUI(String projectName, AwesomeLinkFilter.IndexStatistics stats) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("Index Status [%s]: %d files indexed (%d filenames, %d basenames)",
+                projectName, stats.getTotalFiles(), stats.getFileCacheSize(), stats.getFileBaseCacheSize()));
+
+        if (stats.hasIgnoreStatistics()) {
+            sb.append(String.format(" - Matched: %d, Ignored: %d",
+                    stats.getMatchedFiles(), stats.getIgnoredFiles()));
+        }
+
+        if (stats.getLastRebuildTime() > 0) {
+            long elapsed = System.currentTimeMillis() - stats.getLastRebuildTime();
+            sb.append(String.format(" - Last rebuild: %s ago", indexManagementService.formatDuration(elapsed)));
+
+            if (stats.getLastRebuildDuration() > 0) {
+                sb.append(String.format(" (took %s)", indexManagementService.formatDuration(stats.getLastRebuildDuration())));
+            }
+        }
+
+        indexStatusLabel.setText(sb.toString());
+        indexStatusLabel.setForeground(new Color(76, 175, 80));
+
+        // 更新进度条
+        updateProgressBarFromStats(stats);
+    }
+
+    /**
+     * 重建索引
+     */
+    private void rebuildIndex() {
+        Project project = getCurrentProject();
+        if (project == null) {
+            return;
+        }
+
+        indexManagementService.rebuildIndex(project, mainPanel, new IndexManagementService.ProgressCallback() {
+            @Override
+            public void onStart(String operationType) {
+                // 检查 UI 组件是否已销毁
+                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                    return;
+                }
+                rebuildIndexButton.setEnabled(false);
+                clearIndexButton.setEnabled(false);
+                rebuildIndexButton.setText("Rebuilding...");
+                indexStatusLabel.setText(String.format("Rebuilding index [%s]...", project.getName()));
+                indexStatusLabel.setForeground(new Color(33, 150, 243));
+            }
+
+            @Override
+            public void onProgress(int current, int total, AwesomeLinkFilter.IndexStatistics stats) {
+                // 检查 UI 组件是否已销毁
+                if (indexStatusLabel == null || indexProgressBar == null) {
+                    return;
+                }
+
+                int totalFiles = stats.getTotalFiles();
+                int ignoredFiles = stats.getIgnoredFiles();
+                int matchedFiles = Math.max(0, current - ignoredFiles);
+                int estimatedTotalFiles = indexManagementService.getEstimatedTotalFiles();
+                long rebuildStartTime = indexManagementService.getRebuildStartTime();
+
+                // 判断是否完成
+                boolean isComplete = (totalFiles > 0 && current >= totalFiles);
+                int progress = isComplete ? 100 : Math.min(95, (current * 95) / Math.max(estimatedTotalFiles, 1));
+
+                // 更新状态文本
+                long currentTime = System.currentTimeMillis();
+                String statusText = isComplete
+                        ? String.format("Rebuild completed [%s]: %d files indexed in %s",
+                        project.getName(), current, indexManagementService.formatDuration(currentTime - rebuildStartTime))
+                        : String.format("Rebuilding index [%s]... %d files processed", project.getName(), current);
+
+                if (ignoredFiles > 0) {
+                    statusText += String.format(" (Matched: %d, Ignored: %d)", matchedFiles, ignoredFiles);
+                }
+                indexStatusLabel.setText(statusText);
+
+                // 更新进度条
+                indexProgressBar.setValue(progress);
+                if (ignoredFiles > 0 && totalFiles > 0) {
+                    int matchedPercentage = (matchedFiles * 100) / totalFiles;
+                    int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+                    indexProgressBar.setString(String.format("%d%% (✓%d%% ⚠%d%%)",
+                            progress, matchedPercentage, ignoredPercentage));
+                    updateProgressBarWithIgnoreStats(totalFiles, matchedFiles, ignoredFiles);
+                } else {
+                    indexProgressBar.setString(progress + "%");
+                    updateProgressBarColor(progress);
+                }
+            }
+
+            @Override
+            public void onComplete(String operationType, AwesomeLinkFilter.IndexStatistics stats, long duration) {
+                // 检查 UI 组件是否已销毁
+                if (rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
+                    logger.info("Rebuild completed in background (UI already disposed)");
+                    return;
+                }
+                rebuildIndexButton.setEnabled(true);
+                clearIndexButton.setEnabled(true);
+                rebuildIndexButton.setText("Rebuild");
+                indexProgressBar.setValue(100);
+                indexProgressBar.setString("100%");
+                updateProgressBarColor(100);
+                updateIndexStatus();
+            }
+
+            @Override
+            public void onError(String operationType, String error) {
+                // 检查 UI 组件是否已销毁
+                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                    logger.error("Rebuild failed in background (UI already disposed): " + error);
+                    return;
+                }
+                rebuildIndexButton.setEnabled(true);
+                clearIndexButton.setEnabled(true);
+                rebuildIndexButton.setText("Rebuild");
+                indexStatusLabel.setText("Index Status: Error");
+                indexStatusLabel.setForeground(JBColor.RED);
+                indexProgressBar.setValue(0);
+                indexProgressBar.setString("0%");
+                updateProgressBarColor(0);
+            }
+        });
+    }
+
+    /**
+     * 清除索引
+     */
+    private void clearIndex() {
+        Project project = getCurrentProject();
+        if (project == null) {
+            return;
+        }
+
+        // 确认对话框
+        int result = JOptionPane.showConfirmDialog(mainPanel,
+                "Are you sure you want to clear the file index?\nIt will be automatically rebuilt when needed.",
+                "Confirm Clear", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
+        if (result != JOptionPane.YES_OPTION) {
+            return;
+        }
+
+        indexManagementService.clearIndex(project, mainPanel, new IndexManagementService.ProgressCallback() {
+            @Override
+            public void onStart(String operationType) {
+                // 检查 UI 组件是否已销毁
+                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                    return;
+                }
+                rebuildIndexButton.setEnabled(false);
+                clearIndexButton.setEnabled(false);
+                clearIndexButton.setText("Clearing...");
+                indexStatusLabel.setText(String.format("Clearing index [%s]...", project.getName()));
+                indexStatusLabel.setForeground(new Color(244, 67, 54));
+            }
+
+            @Override
+            public void onProgress(int current, int total, AwesomeLinkFilter.IndexStatistics stats) {
+                // 清除操作不需要进度更新
+            }
+
+            @Override
+            public void onComplete(String operationType, AwesomeLinkFilter.IndexStatistics stats, long duration) {
+                // 检查 UI 组件是否已销毁
+                if (rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
+                    logger.info("Clear completed in background (UI already disposed)");
+                    return;
+                }
+                rebuildIndexButton.setEnabled(true);
+                clearIndexButton.setEnabled(true);
+                clearIndexButton.setText("Clear");
+                // 清除完成后，索引为空，进度条应该显示 0%
+                indexProgressBar.setValue(0);
+                indexProgressBar.setString("0%");
+                updateProgressBarColor(0);
+                updateIndexStatus();
+            }
+
+            @Override
+            public void onError(String operationType, String error) {
+                // 检查 UI 组件是否已销毁
+                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                    logger.error("Clear failed in background (UI already disposed): " + error);
+                    return;
+                }
+                rebuildIndexButton.setEnabled(true);
+                clearIndexButton.setEnabled(true);
+                clearIndexButton.setText("Clear");
+                indexStatusLabel.setText("Index Status: Error");
+                indexStatusLabel.setForeground(JBColor.RED);
+                indexProgressBar.setValue(0);
+                indexProgressBar.setString("0%");
+                updateProgressBarColor(0);
+            }
+        });
+    }
+
+    /**
+     * 根据进度百分比更新进度条颜色
+     */
+    private void updateProgressBarColor(int percentage) {
+        Color color;
+        if (percentage == 0) {
+            color = new Color(158, 158, 158);
+        } else if (percentage == 100) {
+            color = new Color(76, 175, 80);
+        } else {
+            color = new Color(255, 193, 7);
+        }
+        indexProgressBar.setForeground(color);
+    }
+
+    /**
+     * 更新进度条颜色（双色模式，支持忽略文件统计）
+     */
+    private void updateProgressBarWithIgnoreStats(int totalFiles, int matchedFiles, int ignoredFiles) {
+        if (totalFiles == 0) {
+            indexProgressBar.setForeground(new Color(158, 158, 158));
+            return;
+        }
+
+        int matchedPercentage = (matchedFiles * 100) / totalFiles;
+        int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+        int totalPercentage = matchedPercentage + ignoredPercentage;
+
+        if (ignoredFiles == 0) {
+            updateProgressBarColor(totalPercentage);
+            return;
+        }
+
+        if (totalPercentage == 100) {
+            indexProgressBar.setForeground(new Color(76, 175, 80));
+        } else if (totalPercentage > 0) {
+            indexProgressBar.setForeground(new Color(76, 175, 80));
+        } else {
+            indexProgressBar.setForeground(new Color(158, 158, 158));
+        }
+    }
+
+    /**
+     * 根据索引统计信息更新进度条
+     */
+    private void updateProgressBarFromStats(AwesomeLinkFilter.IndexStatistics stats) {
+        if (stats == null) {
+            indexProgressBar.setValue(0);
+            indexProgressBar.setString("0%");
+            updateProgressBarColor(0);
+            return;
+        }
+
+        int totalFiles = stats.getTotalFiles();
+        if (totalFiles == 0) {
+            indexProgressBar.setValue(0);
+            indexProgressBar.setString("0%");
+            updateProgressBarColor(0);
+        } else {
+            indexProgressBar.setValue(100);
+
+            if (stats.hasIgnoreStatistics()) {
+                int matchedFiles = stats.getMatchedFiles();
+                int ignoredFiles = stats.getIgnoredFiles();
+                int matchedPercentage = (matchedFiles * 100) / totalFiles;
+                int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+
+                indexProgressBar.setString(String.format("100%% (✓%d%% ⚠%d%%)",
+                        matchedPercentage, ignoredPercentage));
+                updateProgressBarWithIgnoreStats(totalFiles, matchedFiles, ignoredFiles);
+            } else {
+                indexProgressBar.setString("100%");
+                updateProgressBarColor(100);
+            }
+        }
+    }
+
+
+    /**
+     * 清理资源（由 AwesomeConsoleConfig.disposeUIResources() 调用）
+     * <p>
+     * 注意：
+     * 1. 此方法必须保留，即使方法体为空，因为 AwesomeConsoleConfig 会显式调用它
+     * 2. 索引操作会在后台继续完成，不会被中断
+     * 3. UI 组件由 IntelliJ 平台自动清理
+     * 4. 回调方法中已有空指针检查，确保 UI 销毁后不会出错
+     */
+    public void dispose() {
+        // 方法体为空是正确的设计：
+        // - 不取消后台索引操作
+        // - 不手动清理 UI 引用（由平台管理）
+        // - 回调中的空指针检查已足够保证安全性
+    }
 }

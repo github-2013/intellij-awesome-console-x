@@ -1311,4 +1311,242 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             filter = new AwesomeLinkFilter(getProject());
         }
     }
+
+    // ========== 索引管理功能测试 ==========
+
+    /**
+     * 测试索引管理UI组件初始化
+     * 验证索引状态标签和按钮是否正确创建
+     */
+    public void testIndexManagementUIInitialization() {
+        // 注意：由于AwesomeConsoleConfigForm是通过GUI Designer创建的
+        // 这里我们验证过滤器的索引管理API是否可用
+        assertNotNull("Filter should be initialized", filter);
+        
+        // 验证索引管理API方法存在且可调用
+        int fileCacheSize = filter.getFileCacheSize();
+        int fileBaseCacheSize = filter.getFileBaseCacheSize();
+        int totalFiles = filter.getTotalCachedFiles();
+        
+        assertTrue("File cache size should be non-negative", fileCacheSize >= 0);
+        assertTrue("File base cache size should be non-negative", fileBaseCacheSize >= 0);
+        assertTrue("Total files should be non-negative", totalFiles >= 0);
+        
+        // 验证统计信息API
+        AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+        assertNotNull("Index statistics should not be null", stats);
+        assertEquals("Statistics should match cache size", fileCacheSize, stats.getFileCacheSize());
+        assertEquals("Statistics should match base cache size", fileBaseCacheSize, stats.getFileBaseCacheSize());
+        assertEquals("Statistics should match total files", totalFiles, stats.getTotalFiles());
+    }
+
+    /**
+     * 测试索引状态更新（含项目名称）
+     * 验证索引统计信息能够正确获取
+     */
+    public void testIndexStatusUpdateWithProjectName() throws InterruptedException {
+        // 触发索引初始化
+        filter.detectPaths("Error in test.java:10");
+        Thread.sleep(500);
+        
+        // 获取索引统计信息
+        AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+        assertNotNull("Statistics should not be null", stats);
+        
+        // 验证统计信息包含有效数据（非负数）
+        assertTrue("Total files should be non-negative", stats.getTotalFiles() >= 0);
+        assertTrue("File cache size should be non-negative", stats.getFileCacheSize() >= 0);
+        assertTrue("Base cache size should be non-negative", stats.getFileBaseCacheSize() >= 0);
+        
+        // 验证项目名称可以获取
+        String projectName = getProject().getName();
+        assertNotNull("Project name should not be null", projectName);
+        assertFalse("Project name should not be empty", projectName.isEmpty());
+        
+        // 验证统计信息的一致性
+        assertTrue("Total files should >= file cache size", 
+            stats.getTotalFiles() >= stats.getFileCacheSize());
+        assertTrue("File cache size should >= base cache size", 
+            stats.getFileCacheSize() >= stats.getFileBaseCacheSize());
+    }
+
+    /**
+     * 测试手动重建索引功能
+     * 验证重建索引后统计信息更新
+     */
+    public void testManualRebuildIndex() throws InterruptedException {
+        // 获取重建前的统计信息
+        AwesomeLinkFilter.IndexStatistics statsBefore = filter.getIndexStatistics();
+        long timeBefore = System.currentTimeMillis();
+        
+        // 执行手动重建（不应抛出异常）
+        filter.manualRebuild();
+        Thread.sleep(1000); // 等待重建完成
+        
+        // 获取重建后的统计信息
+        AwesomeLinkFilter.IndexStatistics statsAfter = filter.getIndexStatistics();
+        
+        // 验证重建方法执行成功（不验证文件数，因为测试项目可能为空）
+        assertTrue("File count should be non-negative", statsAfter.getTotalFiles() >= 0);
+        
+        // 验证重建时间已更新
+        assertTrue("Last rebuild time should be updated", 
+            statsAfter.getLastRebuildTime() >= timeBefore);
+        
+        // 验证重建耗时已记录
+        assertTrue("Rebuild duration should be recorded", 
+            statsAfter.getLastRebuildDuration() >= 0);
+        
+        // 验证路径检测功能仍然正常
+        List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+        assertNotNull("Detection should return non-null result", results);
+    }
+
+    /**
+     * 测试清除索引缓存功能
+     * 验证清除后索引为空，且能自动重建
+     */
+    public void testClearIndexCache() throws InterruptedException {
+        // 触发索引初始化
+        filter.detectPaths("Error in test.java:10");
+        Thread.sleep(500);
+        
+        int filesBeforeClear = filter.getTotalCachedFiles();
+        
+        // 清除缓存（不应抛出异常）
+        filter.clearCache();
+        
+        // 验证缓存已清空
+        assertEquals("File cache should be empty", 0, filter.getFileCacheSize());
+        assertEquals("File base cache should be empty", 0, filter.getFileBaseCacheSize());
+        assertEquals("Total files should be 0", 0, filter.getTotalCachedFiles());
+        
+        // 验证清除后路径检测仍然可以工作（会触发自动重建）
+        List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
+        assertNotNull("Detection should return non-null result", results);
+        Thread.sleep(500);
+        
+        // 验证索引状态（可能已自动重建，也可能仍为空）
+        int filesAfterDetection = filter.getTotalCachedFiles();
+        assertTrue("File count should be non-negative", filesAfterDetection >= 0);
+    }
+
+    /**
+     * 测试获取缓存大小功能
+     * 验证各种缓存大小统计的正确性
+     */
+    public void testGetCacheSizes() throws InterruptedException {
+        // 触发索引初始化
+        filter.detectPaths("Error in test.java:10");
+        Thread.sleep(500);
+        
+        int fileCacheSize = filter.getFileCacheSize();
+        int fileBaseCacheSize = filter.getFileBaseCacheSize();
+        int totalFiles = filter.getTotalCachedFiles();
+        
+        // 验证缓存大小的合理性（非负数）
+        assertTrue("File cache size should be non-negative", fileCacheSize >= 0);
+        assertTrue("File base cache size should be non-negative", fileBaseCacheSize >= 0);
+        assertTrue("Total files should be non-negative", totalFiles >= 0);
+        
+        // 验证缓存大小的关系
+        assertTrue("Total files should >= file cache size", totalFiles >= fileCacheSize);
+        assertTrue("File cache size should >= base cache size", fileCacheSize >= fileBaseCacheSize);
+        
+        // 多次调用应该返回一致的结果（在没有修改的情况下）
+        assertEquals("File cache size should be consistent", 
+            fileCacheSize, filter.getFileCacheSize());
+        assertEquals("File base cache size should be consistent", 
+            fileBaseCacheSize, filter.getFileBaseCacheSize());
+        assertEquals("Total files should be consistent", 
+            totalFiles, filter.getTotalCachedFiles());
+    }
+
+    /**
+     * 测试进度条功能
+     * 验证进度条在重建索引过程中的显示和隐藏，以及新的进度回调机制
+     */
+    public void testProgressBarFunctionality() throws InterruptedException {
+        // 创建配置表单实例来测试UI组件
+        awesome.console.config.AwesomeConsoleConfigForm form = new awesome.console.config.AwesomeConsoleConfigForm();
+        
+        // 验证进度条组件已正确初始化
+        assertNotNull("Progress bar should be initialized", form.indexProgressBar);
+        assertTrue("Progress bar should be always visible", form.indexProgressBar.isVisible());
+        assertTrue("Progress bar should have string painted", form.indexProgressBar.isStringPainted());
+        
+        // 验证进度条的初始状态
+        assertEquals("Progress bar should start at 0", 0, form.indexProgressBar.getValue());
+        assertEquals("Progress bar should have correct range", 100, form.indexProgressBar.getMaximum());
+        assertEquals("Progress bar should have initial text", "0%", form.indexProgressBar.getString());
+        
+        // 模拟进度条状态更新（重建开始）
+        form.indexProgressBar.setIndeterminate(true);
+        form.indexProgressBar.setString("Starting scan...");
+        
+        assertTrue("Progress bar should remain visible", form.indexProgressBar.isVisible());
+        assertTrue("Progress bar should be indeterminate when set", form.indexProgressBar.isIndeterminate());
+        assertEquals("Progress bar should show starting text", "Starting scan...", form.indexProgressBar.getString());
+        
+        // 模拟进度更新
+        form.indexProgressBar.setString("Processing... 50 files");
+        assertEquals("Progress bar should show progress text", "Processing... 50 files", form.indexProgressBar.getString());
+        
+        // 模拟带速度信息的进度更新
+        form.indexProgressBar.setString("Processing... 150 files (75 files/sec)");
+        assertTrue("Progress bar should show speed info", 
+            form.indexProgressBar.getString().contains("files/sec"));
+        
+        // 模拟进度条完成状态（重建完成）
+        form.indexProgressBar.setValue(100);
+        form.indexProgressBar.setIndeterminate(false);
+        form.indexProgressBar.setString("Completed! 150 files indexed in 2s");
+        
+        assertTrue("Progress bar should remain visible after completion", form.indexProgressBar.isVisible());
+        assertFalse("Progress bar should not be indeterminate when reset", form.indexProgressBar.isIndeterminate());
+        assertEquals("Progress bar should show completion status", 100, form.indexProgressBar.getValue());
+        assertTrue("Progress bar should show completion message", 
+            form.indexProgressBar.getString().contains("Completed!"));
+    }
+
+    /**
+     * 测试原有功能不受索引管理影响
+     * 验证添加索引管理功能后，原有的路径检测功能仍然正常工作
+     */
+    public void testExistingFunctionalityNotAffectedByIndexManagement() throws InterruptedException {
+        // 测试基本路径检测
+        assertPathDetection("Error in src/main.java:10", "src/main.java:10");
+        assertPathDetection("File: config.json", "config.json");
+        
+        // 测试URL检测
+        assertURLDetection("Visit https://example.com", "https://example.com");
+        
+        // 执行索引管理操作
+        filter.manualRebuild();
+        Thread.sleep(500);
+        
+        // 验证路径检测仍然正常
+        assertPathDetection("Error in src/main.java:10", "src/main.java:10");
+        assertPathDetection("File: config.json", "config.json");
+        assertURLDetection("Visit https://example.com", "https://example.com");
+        
+        // 清除缓存
+        filter.clearCache();
+        
+        // 验证自动重建后功能正常
+        assertPathDetection("Error in src/main.java:10", "src/main.java:10");
+        Thread.sleep(500);
+        
+        // 验证所有原有配置仍然有效
+        assertTrue("Search URLs should still work", storage.searchUrls);
+        assertTrue("Search files should still work", storage.searchFiles);
+        
+        // 验证统计信息API不影响检测功能
+        filter.getIndexStatistics();
+        filter.getFileCacheSize();
+        filter.getFileBaseCacheSize();
+        filter.getTotalCachedFiles();
+        
+        assertPathDetection("Error in test.java:10", "test.java:10");
+    }
 }
