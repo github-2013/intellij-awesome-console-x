@@ -454,6 +454,79 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         }
     }
 
+    /**
+     * 测试空忽略模式的处理
+     * 验证当设置空字符串或null作为忽略模式时，系统会回退到默认值
+     * 这是一个边界测试，确保配置的健壮性
+     */
+    public void testEmptyIgnorePatternHandling() {
+        // 保存原始配置
+        boolean originalUseIgnorePattern = storage.useIgnorePattern;
+        String originalIgnorePattern = storage.getIgnorePatternText();
+        
+        try {
+            // 测试设置空字符串
+            storage.useIgnorePattern = true;
+            storage.setIgnorePatternText("");
+            
+            // 验证空字符串会导致回退到默认值
+            // 在AwesomeConsoleStorage.setIgnorePatternText()中，
+            // 如果Pattern.compile()抛出异常，会回退到默认值
+            String currentPattern = storage.getIgnorePatternText();
+            assertNotNull("Pattern should not be null after setting empty string", currentPattern);
+            
+            // 空字符串虽然是合法的正则表达式，但在UI层面会被checkRegex()拒绝
+            // 这里测试的是Storage层的行为
+            // 注意：Pattern.compile("")是合法的，会匹配空字符串
+            // 但在实际使用中，AwesomeConsoleConfig.checkRegex()会检测pattern.isEmpty()
+            
+            // 测试设置null值
+            storage.setIgnorePatternText(null);
+            String patternAfterNull = storage.getIgnorePatternText();
+            assertNotNull("Pattern should not be null after setting null", patternAfterNull);
+            
+            // 验证设置null后会回退到默认值
+            // 在setIgnorePatternText中，如果发生异常会设置为默认值
+            assertEquals("Should fallback to default pattern after null", 
+                AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT, 
+                patternAfterNull);
+            
+            // 测试设置无效的正则表达式
+            String invalidPattern = "[unclosed";
+            storage.setIgnorePatternText(invalidPattern);
+            String patternAfterInvalid = storage.getIgnorePatternText();
+            
+            // 无效的正则表达式会导致PatternSyntaxException，应该回退到默认值
+            assertNotNull("Pattern should not be null after invalid regex", patternAfterInvalid);
+            assertEquals("Should fallback to default pattern after invalid regex", 
+                AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT, 
+                patternAfterInvalid);
+            
+            // 验证过滤器在回退到默认值后仍然正常工作
+            filter = new AwesomeLinkFilter(getProject());
+            assertPathDetection("Error in src/main.java:10", "src/main.java:10");
+            
+            // 测试设置有效的自定义模式后再设置空字符串
+            storage.setIgnorePatternText("^test$");
+            assertEquals("Should accept valid pattern", "^test$", storage.getIgnorePatternText());
+            
+            storage.setIgnorePatternText("");
+            String patternAfterEmpty = storage.getIgnorePatternText();
+            assertNotNull("Pattern should not be null after empty string", patternAfterEmpty);
+            
+            // 验证过滤器仍然正常工作
+            filter = new AwesomeLinkFilter(getProject());
+            assertPathDetection("Error in test.java:20", "test.java:20");
+            
+        } finally {
+            // 恢复原始配置
+            storage.useIgnorePattern = originalUseIgnorePattern;
+            storage.setIgnorePatternText(originalIgnorePattern);
+            // 重新创建过滤器以恢复原始配置
+            filter = new AwesomeLinkFilter(getProject());
+        }
+    }
+
     // ========== 七、文件类型配置测试 ==========
 
     /**

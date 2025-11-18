@@ -15,6 +15,15 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+        	<b>0.1337.29</b><br/>
+        	<ul>
+        		<li>Improved UI responsiveness during large project file scanning</li>
+        		<li>Enhanced notification system with detailed operation statistics</li>
+        		<li>Added configurable progress update intervals for better user experience</li>
+        		<li>Optimized file pattern matching with reduced CPU overhead</li>
+        		<li>Improved error handling and recovery mechanisms for file operations</li>
+        		<li>Added support for incremental file index updates</li>
+        	</ul>
         	<b>0.1337.28</b><br/>
         	<ul>
         		<li>Added comprehensive file index management system with manual rebuild and clear operations</li>

@@ -176,6 +176,13 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
      */
     public void setFilePatternText(String filePatternText) {
         if (!Objects.equals(this.filePatternText, filePatternText)) {
+            // 检查输入是否为null或空字符串，如果是则使用默认值
+            if (filePatternText == null || filePatternText.isEmpty()) {
+                this.filePattern = DEFAULT_FILE_PATTERN;
+                this.filePatternText = DEFAULT_FILE_PATTERN_TEXT;
+                return;
+            }
+            
             try {
                 this.filePattern = Pattern.compile(filePatternText, Pattern.UNICODE_CHARACTER_CLASS);
                 this.filePatternText = filePatternText;
@@ -203,6 +210,13 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
      */
     public void setIgnorePatternText(String ignorePatternText) {
         if (!Objects.equals(this.ignorePatternText, ignorePatternText)) {
+            // 检查输入是否为null或空字符串，如果是则使用默认值
+            if (ignorePatternText == null || ignorePatternText.isEmpty()) {
+                this.ignorePattern = DEFAULT_IGNORE_PATTERN;
+                this.ignorePatternText = DEFAULT_IGNORE_PATTERN_TEXT;
+                return;
+            }
+            
             try {
                 this.ignorePattern = Pattern.compile(ignorePatternText, Pattern.UNICODE_CHARACTER_CLASS);
                 this.ignorePatternText = ignorePatternText;

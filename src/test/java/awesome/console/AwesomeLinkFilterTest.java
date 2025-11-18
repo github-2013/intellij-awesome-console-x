@@ -1892,6 +1892,75 @@ assertPathDetection("rename packages/frontend/core/src/blocksuite/ai/{chat-panel
 	}
 
 	/**
+	 * 测试空忽略模式
+	 * 验证当忽略模式复选框被选中但表达式为空时的行为
+	 * 空字符串会被setIgnorePatternText方法捕获并回退到默认值
+	 */
+	public void testEmptyIgnorePattern() {
+		System.out.println("Test empty ignore pattern:");
+		
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		
+		// 保存原始配置
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		
+		try {
+			// 启用忽略模式
+			storage.useIgnorePattern = true;
+			
+			// 尝试设置空字符串作为忽略模式
+			storage.setIgnorePatternText("");
+			
+			// 验证空字符串会导致回退到默认值
+			// 因为Pattern.compile("")虽然合法，但在AwesomeConsoleConfig.checkRegex()中
+			// 会检测到pattern.isEmpty()并显示错误对话框
+			// 而在AwesomeConsoleStorage.setIgnorePatternText()中，
+			// 如果发生PatternSyntaxException会回退到默认值
+			String currentPattern = storage.getIgnorePatternText();
+			assertNotNull("Pattern should not be null", currentPattern);
+			
+			// 验证当前模式不是空字符串（应该是默认值或原始值）
+			assertFalse("Pattern should not be empty string", currentPattern.isEmpty());
+			
+			// 重新创建过滤器以应用配置
+			filter = new AwesomeLinkFilter(getProject());
+			
+			// 验证过滤器仍然正常工作
+			// 使用默认忽略模式，常见命令应该被忽略
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "start");
+			
+			// 正常的文件路径应该能被识别
+			assertPathDetection(
+				"Error in src/main.java:10",
+				"src/main.java:10"
+			);
+			
+			// 测试设置null值的情况
+			storage.setIgnorePatternText(null);
+			String patternAfterNull = storage.getIgnorePatternText();
+			assertNotNull("Pattern should not be null after setting null", patternAfterNull);
+			assertFalse("Pattern should not be empty after setting null", patternAfterNull.isEmpty());
+			
+			// 验证过滤器在null值后仍然正常工作
+			filter = new AwesomeLinkFilter(getProject());
+			assertPathDetection(
+				"Error in test.java:20",
+				"test.java:20"
+			);
+			
+		} finally {
+			// 恢复原始配置
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
 	 * 测试构建工具输出中的常见词汇
 	 * 验证类似 "Building..."、"Starting..." 等带省略号或大写的词不会被误识别为文件
 	 */
