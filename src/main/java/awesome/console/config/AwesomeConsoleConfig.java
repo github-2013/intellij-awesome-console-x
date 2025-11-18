@@ -65,9 +65,8 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.initMatchFiles(storage.searchFiles, storage.searchClasses, storage.useFilePattern, storage.getFilePatternText());
 		form.initLimitResult(storage.useResultLimit, storage.getResultLimit());
 
-		form.maxLengthTextField.setText(String.valueOf(storage.LINE_MAX_LENGTH));
-		form.maxLengthTextField.setEnabled(storage.LIMIT_LINE_LENGTH);
-		form.maxLengthTextField.setEditable(storage.LIMIT_LINE_LENGTH);
+		form.maxLengthSpinner.setValue(storage.LINE_MAX_LENGTH);
+		form.maxLengthSpinner.setEnabled(storage.LIMIT_LINE_LENGTH);
 
 		form.initIgnorePattern(storage.useIgnorePattern, storage.getIgnorePatternText(), storage.useIgnoreStyle);
 
@@ -195,19 +194,9 @@ public class AwesomeConsoleConfig implements Configurable {
 	 */
 	@Override
 	public boolean isModified() {
-		final String text = form.maxLengthTextField.getText().trim();
-		if (text.isEmpty()) {
-			return true;
-		}
-		final int len;
-		try {
-			len = Integer.parseInt(text);
-		} catch (final NumberFormatException nfe) {
-			return true;
-		}
 		return form.debugModeCheckBox.isSelected() != storage.DEBUG_MODE
 				|| form.limitLineMatchingByCheckBox.isSelected() != storage.LIMIT_LINE_LENGTH
-				|| len != storage.LINE_MAX_LENGTH
+			|| !Objects.equals(form.maxLengthSpinner.getValue(), storage.LINE_MAX_LENGTH)
 				|| form.matchLinesLongerThanCheckBox.isSelected() != storage.SPLIT_ON_LIMIT
 				|| form.searchForURLsCheckBox.isSelected() != storage.searchUrls
 				|| form.searchForFilesCheckBox.isSelected() != storage.searchFiles
@@ -234,18 +223,7 @@ public class AwesomeConsoleConfig implements Configurable {
 	 */
 	@Override
 	public void apply() {
-		final String text = form.maxLengthTextField.getText().trim();
-		if (text.isEmpty()) {
-			showErrorDialog();
-			return;
-		}
-		final int maxLength;
-		try {
-			maxLength = Integer.parseInt(text);
-		} catch (final NumberFormatException nfe) {
-			showErrorDialog();
-			return;
-		}
+		final int maxLength = (int) form.maxLengthSpinner.getValue();
 		if (maxLength < 1) {
 			showErrorDialog();
 			return;
