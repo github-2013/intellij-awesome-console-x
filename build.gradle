@@ -49,7 +49,7 @@ dependencies {
         // 代码插桩工具：用于处理 IntelliJ Platform 的特殊注解和字节码增强
         // 例如 @NotNull、@Nullable 等注解的运行时检查
         // 这个配置启用了 GUI Designer 的字节码增强
-        instrumentationTools()
+        // instrumentationTools()
 
         // 测试框架：提供 IntelliJ Platform 的测试基础设施
         // Platform.INSTANCE 表示使用平台级别的测试框架
