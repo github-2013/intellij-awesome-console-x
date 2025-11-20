@@ -2874,4 +2874,433 @@ assertPathDetection("rename packages/frontend/core/src/blocksuite/ai/{chat-panel
 		// 验证索引状态
 		assertTrue("File count should be non-negative", filter.getTotalCachedFiles() >= 0);
 	}
+
+	// ========== Go语言测试用例 ==========
+
+	/**
+	 * 测试Go语言的panic堆栈跟踪格式
+	 * Go的panic堆栈格式：文件路径:行号 +偏移量
+	 */
+	public void testGoPanicStackTrace() {
+		System.out.println("Go panic stack trace format:");
+		
+		// 测试Go堆栈跟踪中的文件路径和行号
+		assertPathDetection(
+			"	/usr/local/go/src/runtime/panic.go:969 +0x166",
+			"/usr/local/go/src/runtime/panic.go:969",
+			969
+		);
+		
+		assertPathDetection(
+			"	/home/user/project/main.go:42 +0x1a5",
+			"/home/user/project/main.go:42",
+			42
+		);
+		
+		// 测试相对路径的Go文件
+		assertPathDetection(
+			"	src/handlers/user.go:156 +0x2b",
+			"src/handlers/user.go:156",
+			156
+		);
+		
+		// 测试Windows路径的Go文件
+		assertPathDetection(
+			"	C:\\Users\\dev\\project\\main.go:25 +0x45",
+			"C:\\Users\\dev\\project\\main.go:25",
+			25
+		);
+	}
+
+	/**
+	 * 测试Go编译器错误格式
+	 * Go编译器错误格式：文件路径:行号:列号: 错误信息
+	 */
+	public void testGoCompilerError() {
+		System.out.println("Go compiler error format:");
+		
+		// 测试标准的Go编译错误格式（带行号和列号）
+		assertPathDetection(
+			"./main.go:15:2: undefined: fmt",
+			"./main.go:15:2",
+			15, 2
+		);
+		
+		assertPathDetection(
+			"src/handlers/user.go:42:10: syntax error: unexpected newline, expecting comma or }",
+			"src/handlers/user.go:42:10",
+			42, 10
+		);
+		
+		// 测试绝对路径的Go编译错误
+		assertPathDetection(
+			"/home/user/project/main.go:100:5: cannot use x (type int) as type string",
+			"/home/user/project/main.go:100:5",
+			100, 5
+		);
+		
+		// 测试Windows路径的Go编译错误
+		assertPathDetection(
+			"C:\\project\\src\\main.go:20:15: missing return at end of function",
+			"C:\\project\\src\\main.go:20:15",
+			20, 15
+		);
+	}
+
+	/**
+	 * 测试Go测试框架输出格式
+	 * Go test输出格式：--- FAIL: TestName (0.00s) 文件路径:行号: 错误信息
+	 */
+	public void testGoTestOutput() {
+		System.out.println("Go test output format:");
+		
+		// 测试Go test失败输出
+		assertPathDetection(
+			"--- FAIL: TestUserHandler (0.01s)",
+			"TestUserHandler"
+		);
+		
+		assertPathDetection(
+			"    user_test.go:45: Expected 200, got 404",
+			"user_test.go:45",
+			45
+		);
+		
+		assertPathDetection(
+			"    /home/user/project/handlers/user_test.go:78: assertion failed",
+			"/home/user/project/handlers/user_test.go:78",
+			78
+		);
+		
+		// 测试相对路径的测试文件
+		assertPathDetection(
+			"    ./tests/integration_test.go:123: connection timeout",
+			"./tests/integration_test.go:123",
+			123
+		);
+	}
+
+	/**
+	 * 测试Go模块路径格式
+	 * Go模块路径格式：包路径/文件名:行号
+	 */
+	public void testGoModulePath() {
+		System.out.println("Go module path format:");
+		
+		// 测试Go模块路径
+		assertPathDetection(
+			"github.com/user/project/handlers/user.go:42",
+			"github.com/user/project/handlers/user.go:42",
+			42
+		);
+		
+		assertPathDetection(
+			"internal/database/connection.go:156:10",
+			"internal/database/connection.go:156:10",
+			156, 10
+		);
+		
+		// 测试pkg目录下的文件
+		assertPathDetection(
+			"pkg/utils/helper.go:89",
+			"pkg/utils/helper.go:89",
+			89
+		);
+		
+		// 测试cmd目录下的文件
+		assertPathDetection(
+			"cmd/server/main.go:25:5",
+			"cmd/server/main.go:25:5",
+			25, 5
+		);
+	}
+
+	// ========== Ruby语言测试用例 ==========
+
+	/**
+	 * 测试Ruby异常堆栈跟踪格式
+	 * Ruby堆栈格式：文件路径:行号:in `方法名'
+	 */
+	public void testRubyExceptionStackTrace() {
+		System.out.println("Ruby exception stack trace format:");
+		
+		// 测试标准的Ruby异常堆栈格式
+		assertPathDetection(
+			"app/controllers/users_controller.rb:42:in `create'",
+			"app/controllers/users_controller.rb:42",
+			42
+		);
+		
+		assertPathDetection(
+			"/home/user/project/lib/helper.rb:156:in `process_data'",
+			"/home/user/project/lib/helper.rb:156",
+			156
+		);
+		
+		// 测试相对路径的Ruby文件
+		assertPathDetection(
+			"./config/initializers/setup.rb:10:in `<top (required)>'",
+			"./config/initializers/setup.rb:10",
+			10
+		);
+		
+		// 测试Windows路径的Ruby文件
+		assertPathDetection(
+			"C:\\Ruby\\project\\app\\models\\user.rb:89:in `validate'",
+			"C:\\Ruby\\project\\app\\models\\user.rb:89",
+			89
+		);
+	}
+
+	/**
+	 * 测试Ruby错误信息格式
+	 * Ruby错误格式：文件路径:行号: 错误类型: 错误信息
+	 */
+	public void testRubyErrorMessage() {
+		System.out.println("Ruby error message format:");
+		
+		// 测试Ruby语法错误
+		assertPathDetection(
+			"app/models/user.rb:25: syntax error, unexpected end-of-input",
+			"app/models/user.rb:25",
+			25
+		);
+		
+		assertPathDetection(
+			"/home/user/project/config/routes.rb:100: undefined method `resources'",
+			"/home/user/project/config/routes.rb:100",
+			100
+		);
+		
+		// 测试Ruby运行时错误
+		assertPathDetection(
+			"lib/utils/parser.rb:45: warning: already initialized constant",
+			"lib/utils/parser.rb:45",
+			45
+		);
+		
+		// 测试带列号的Ruby错误（较少见，但有些工具会输出）
+		assertPathDetection(
+			"app/controllers/api_controller.rb:78:10: error: undefined local variable",
+			"app/controllers/api_controller.rb:78:10",
+			78, 10
+		);
+	}
+
+	/**
+	 * 测试Ruby测试框架输出格式
+	 * RSpec和Minitest的输出格式
+	 */
+	public void testRubyTestOutput() {
+		System.out.println("Ruby test framework output format:");
+		
+		assertPathDetection(
+			"# ./spec/models/user_spec.rb:42:in `block (3 levels) in <top (required)>'",
+			"./spec/models/user_spec.rb:42",
+			42
+		);
+		
+		// 测试Minitest输出格式
+		assertPathDetection(
+			"test/models/user_test.rb:25:in `test_user_validation'",
+			"test/models/user_test.rb:25",
+			25
+		);
+		
+		assertPathDetection(
+			"test/integration/api_test.rb:156: Expected response to be a <200>, but was <404>",
+			"test/integration/api_test.rb:156",
+			156
+		);
+	}
+
+	/**
+	 * 测试Ruby Gem路径格式
+	 * Ruby Gem中的文件路径格式
+	 */
+	public void testRubyGemPath() {
+		System.out.println("Ruby Gem path format:");
+		
+		// 测试Gem路径
+		assertPathDetection(
+			"/usr/local/lib/ruby/gems/3.0.0/gems/rails-7.0.0/lib/action_controller.rb:100",
+			"/usr/local/lib/ruby/gems/3.0.0/gems/rails-7.0.0/lib/action_controller.rb:100",
+			100
+		);
+		
+		assertPathDetection(
+			"~/.rbenv/versions/3.0.0/lib/ruby/gems/3.0.0/gems/rspec-3.10.0/lib/rspec/core.rb:45",
+			"~/.rbenv/versions/3.0.0/lib/ruby/gems/3.0.0/gems/rspec-3.10.0/lib/rspec/core.rb:45",
+			45
+		);
+		
+		// 测试bundler路径
+		assertPathDetection(
+			"vendor/bundle/ruby/3.0.0/gems/devise-4.8.0/lib/devise.rb:200",
+			"vendor/bundle/ruby/3.0.0/gems/devise-4.8.0/lib/devise.rb:200",
+			200
+		);
+	}
+
+	// ========== PHP语言测试用例 ==========
+
+	/**
+	 * 测试PHP错误堆栈跟踪格式
+	 * PHP堆栈格式：#序号 文件路径(行号): 方法调用
+	 */
+	public void testPhpErrorStackTrace() {
+		System.out.println("PHP error stack trace format:");
+		
+		// 测试标准的PHP堆栈格式
+		assertPathDetection(
+			"#0 /var/www/html/index.php(42): Database->connect()",
+			"/var/www/html/index.php(42)",
+			42
+		);
+		
+		assertPathDetection(
+			"#1 /home/user/project/src/Controller/UserController.php(156): UserService->create()",
+			"/home/user/project/src/Controller/UserController.php(156)",
+			156
+		);
+		
+		// 测试相对路径的PHP文件
+		assertPathDetection(
+			"#2 ./app/Models/User.php(89): validate()",
+			"./app/Models/User.php(89)",
+			89
+		);
+		
+		// 测试Windows路径的PHP文件
+		assertPathDetection(
+			"#3 C:\\xampp\\htdocs\\project\\index.php(25): main()",
+			"C:\\xampp\\htdocs\\project\\index.php(25)",
+			25
+		);
+	}
+
+	/**
+	 * 测试PHP错误信息格式
+	 * PHP错误格式：错误类型: 错误信息 in 文件路径 on line 行号
+	 */
+	public void testPhpErrorMessage() {
+		System.out.println("PHP error message format:");
+		
+		// 测试PHP Fatal Error
+		assertPathDetection(
+			"Fatal error: Uncaught Error: Call to undefined function in /var/www/html/index.php on line 42",
+			"/var/www/html/index.php"
+		);
+		
+		assertPathDetection(
+			"Fatal error: Class 'Database' not found in /home/user/project/src/Database.php on line 10",
+			"/home/user/project/src/Database.php"
+		);
+		
+		// 测试PHP Warning
+		assertPathDetection(
+			"Warning: Division by zero in /var/www/html/calculator.php on line 156",
+			"/var/www/html/calculator.php"
+		);
+		
+		// 测试PHP Notice
+		assertPathDetection(
+			"Notice: Undefined variable: user in /home/user/project/app/Controllers/UserController.php on line 89",
+			"/home/user/project/app/Controllers/UserController.php"
+		);
+		
+		// 测试PHP Parse Error
+		assertPathDetection(
+			"Parse error: syntax error, unexpected '}' in /var/www/html/config.php on line 25",
+			"/var/www/html/config.php"
+		);
+	}
+
+	/**
+	 * 测试PHP异常格式
+	 * PHP异常格式：Exception: 错误信息 in 文件路径:行号
+	 */
+	public void testPhpException() {
+		System.out.println("PHP exception format:");
+		
+		// 测试标准的PHP异常格式
+		assertPathDetection(
+			"Exception: Database connection failed in /var/www/html/Database.php:42",
+			"/var/www/html/Database.php:42",
+			42
+		);
+		
+		assertPathDetection(
+			"RuntimeException: File not found in /home/user/project/src/FileHandler.php:156",
+			"/home/user/project/src/FileHandler.php:156",
+			156
+		);
+		
+		// 测试自定义异常
+		assertPathDetection(
+			"InvalidArgumentException: Invalid user ID in ./app/Services/UserService.php:89",
+			"./app/Services/UserService.php:89",
+			89
+		);
+		
+		// 测试PDOException
+		assertPathDetection(
+			"PDOException: SQLSTATE[42S02]: Base table or view not found in /var/www/html/models/User.php:200",
+			"/var/www/html/models/User.php:200",
+			200
+		);
+	}
+
+	/**
+	 * 测试PHP测试框架输出格式
+	 * PHPUnit的输出格式
+	 */
+	public void testPhpTestOutput() {
+		System.out.println("PHP test framework output format:");
+
+		assertPathDetection(
+			"/home/user/project/tests/UserTest.php:42",
+			"/home/user/project/tests/UserTest.php:42",
+			42
+		);
+		
+		assertPathDetection(
+			"/var/www/html/tests/DatabaseTest.php:156",
+			"/var/www/html/tests/DatabaseTest.php:156",
+			156
+		);
+	}
+
+	/**
+	 * 测试PHP Composer路径格式
+	 * Composer vendor目录中的文件路径
+	 */
+	public void testPhpComposerPath() {
+		System.out.println("PHP Composer path format:");
+		
+		// 测试vendor路径
+		assertPathDetection(
+			"Fatal error in /var/www/html/vendor/symfony/http-foundation/Response.php on line 100",
+			"/var/www/html/vendor/symfony/http-foundation/Response.php"
+		);
+		
+		assertPathDetection(
+			"#0 /home/user/project/vendor/laravel/framework/src/Illuminate/Database/Connection.php(42): query()",
+			"/home/user/project/vendor/laravel/framework/src/Illuminate/Database/Connection.php(42)",
+			42
+		);
+		
+		// 测试PSR-4自动加载路径
+		assertPathDetection(
+			"Exception in vendor/monolog/monolog/src/Monolog/Logger.php:200",
+			"vendor/monolog/monolog/src/Monolog/Logger.php:200",
+			200
+		);
+		
+		// 测试Windows Composer路径
+		assertPathDetection(
+			"Warning in C:\\xampp\\htdocs\\project\\vendor\\guzzlehttp\\guzzle\\src\\Client.php on line 89",
+			"C:\\xampp\\htdocs\\project\\vendor\\guzzlehttp\\guzzle\\src\\Client.php"
+		);
+	}
 }
