@@ -15,6 +15,15 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+        	<b>0.1337.30</b><br/>
+        	<ul>
+        		<li>Refactored notification system with lazy initialization pattern</li>
+        		<li>Enhanced error handling for notification group registration</li>
+        		<li>Added comprehensive logging for notification failures</li>
+        		<li>Improved plugin stability with graceful degradation when notification group is unavailable</li>
+        		<li>Fixed potential NPE issues in notification system initialization</li>
+        		<li>Better alignment with IntelliJ Platform best practices for service initialization</li>
+        	</ul>
         	<b>0.1337.29</b><br/>
         	<ul>
         		<li>Improved UI responsiveness during large project file scanning</li>
