@@ -782,7 +782,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"https://github.com/anthraxx/intellij-awesome-console.git/"
 		);
 		assertPathDetection("rename packages/frontend/core/src/modules/pdf/renderer/{worker.ts => pdf.worker.ts}", "packages/frontend/core/src/modules/pdf/renderer/{worker.ts => pdf.worker.ts}");
-assertPathDetection("rename packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts", "packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts");
+        assertPathDetection("rename packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts", "packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts");
 		assertPathDetection("rename packages/frontend/admin/src/modules/{config => about}/index.tsx ", "packages/frontend/admin/src/modules/{config => about}/index.tsx");
 		assertPathDetection("rename blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json", "blocksuite/affine/widgets/{widget-slash-menu => slash-menu}/tsconfig.json");
 		assertPathDetection("rename app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}", "app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}");

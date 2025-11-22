@@ -76,28 +76,28 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/** 定义公共静态final常量，用于匹配文件路径后的行号和列号（如 :10 或 :10:5）*/
 	public static final String REGEX_ROW_COL = String.format(
-			// 整体模式：可选的行号和列号部分，不区分大小写
-			"(?i:\\s*+(?:%s)%s(?:%s%s%s)?)?",
-			// start of the row - 行号开始的各种格式
-			// 使用 RegexUtils.join 连接多种可能的行号起始格式
-			RegexUtils.join(
-					// 格式1：冒号或逗号后跟 "line"（如 ":line 10"）
-					"[:,]\\s*line",
-					// 格式2：单引号后跟 "line:"（如 "'line:10"）
-					"'\\s*line:",
-					// 格式3：冒号后可选方括号（如 ":10" 或 ":[10"）
-					":(?:\\s*\\[)?",
-					// 格式4：左括号后跟数字（如 "(10)" 或 "(10:5)"）
-					"\\((?=\\s*\\d+\\s*(?:[:,]\\s*\\d+)?\\s*\\))"
-			),
-			// row - 捕获行号（一个或多个数字）
-			"\\s*(?<row>\\d+)",
-			// start of the col - 列号开始的格式（冒号或逗号，可选 "col" 或 "column"）
-			"\\s*[:,](?:\\s*col(?:umn)?)?",
-			// col - 捕获列号（一个或多个数字）
-			"\\s*(?<col>\\d+)",
-			// end of the col - 列号结束的可选右括号或右方括号
-			"(?:\\s*[)\\]])?"
+        // 整体模式：可选的行号和列号部分，不区分大小写
+        "(?i:\\s*+(?:%s)%s(?:%s%s%s)?)?",
+        // start of the row - 行号开始的各种格式
+        // 使用 RegexUtils.join 连接多种可能的行号起始格式
+        RegexUtils.join(
+            // 格式1：冒号或逗号后跟 "line"（如 ":line 10"）
+            "[:,]\\s*line",
+            // 格式2：单引号后跟 "line:"（如 "'line:10"）
+            "'\\s*line:",
+            // 格式3：冒号后可选方括号（如 ":10" 或 ":[10"）
+            ":(?:\\s*\\[)?",
+            // 格式4：左括号后跟数字（如 "(10)" 或 "(10:5)"）
+            "\\((?=\\s*\\d+\\s*(?:[:,]\\s*\\d+)?\\s*\\))"
+        ),
+        // row - 捕获行号（一个或多个数字）
+        "\\s*(?<row>\\d+)",
+        // start of the col - 列号开始的格式（冒号或逗号，可选 "col" 或 "column"）
+        "\\s*[:,](?:\\s*col(?:umn)?)?",
+        // col - 捕获列号（一个或多个数字）
+        "\\s*(?<col>\\d+)",
+        // end of the col - 列号结束的可选右括号或右方括号
+        "(?:\\s*[)\\]])?"
 	);
 
 	/**
@@ -142,38 +142,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	public static final String REGEX_DRIVE = String.format("(?i:~|/?[a-z]:)(?=%s)", REGEX_SEPARATOR);
 
 	/**
-	 * <b>URI = scheme ":" ["//" authority] path ["?" query] ["#" fragment]</b>
-	 *
-	 * <p>ref: <a href="https://en.wikipedia.org/wiki/Uniform_Resource_Identifier#Syntax">Uniform Resource Identifier - Syntax</a>
-	 *
-	 * <br><br>
-	 * Note: The optional <b>authority component</b> in {@code URI} can be empty {@code `//`}.
-	 *
-	 * <pre>{@code
-	 * - file:C:/         - no authority component
-	 * - file:/C:/        - leading slash added by slashify
-	 * - file://C:/       - empty authority component `//`
-	 * - file:///C:/      - leading slash added by slashify
-	 * }</pre>
-	 *
-	 * <p>The syntax of a JAR URL is:
-	 *
-	 * <pre>
-	 * {@code jar:<url>!/{entry}}
-	 * </pre>
-	 *
-	 * <p>for example:
-	 *
-	 * <pre>{@code
-	 * - jar:http://www.foo.com/bar/baz.jar!/COM/foo/Quux.class
-	 * - jar:file:/home/duke/duke.jar!/
-	 * }</pre>
-	 *
-	 * @see java.net.URI
-	 * @see java.net.URI
-	 * @see java.net.JarURLConnection
-	 */
-	/**
 	 * URI 协议正则表达式
 	 * 定义公共静态final常量，匹配 URI 协议（如 http:、file:、jar:file: 等）
 	 * 协议由2个或更多字母后跟冒号组成，可选的双斜杠，支持嵌套协议（如 jar:file:）
@@ -189,18 +157,18 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	// 定义公共静态final常量，匹配文件名（不包含路径分隔符）
 	// 排除特定的停止模式（如括号中的行号、驱动器号等）
 	public static final String REGEX_FILE_NAME = String.format(
-			"((?!%s)(?:%s))+(?<!%s)",
-			// stop with
-			RegexUtils.join(
-					"\\(\\d+(?:,\\d+)?\\)",
-					"\\(\\S+\\.(java|kts?):\\d+\\)",
-					"[,;]\\w+[/\\\\:]",
-					// drive or protocol
-					String.format("(?<!%s)%s+:%s", REGEX_LETTER, REGEX_LETTER, REGEX_SEPARATOR)
-			),
-			REGEX_CHAR,
-			// not end with
-			"['(),.;\\[\\]]"
+        "((?!%s)(?:%s))+(?<!%s)",
+        // stop with
+        RegexUtils.join(
+            "\\(\\d+(?:,\\d+)?\\)",
+            "\\(\\S+\\.(java|kts?):\\d+\\)",
+            "[,;]\\w+[/\\\\:]",
+            // drive or protocol
+            String.format("(?<!%s)%s+:%s", REGEX_LETTER, REGEX_LETTER, REGEX_SEPARATOR)
+        ),
+        REGEX_CHAR,
+        // not end with
+        "['(),.;\\[\\]]"
 	);
 
 	/** 包含空格的文件名正则表达式 */
@@ -212,16 +180,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	// 定义公共静态final常量，匹配用双引号包裹的路径（用于处理包含空格的路径）
 	// 捕获组 path1 和 protocol1 用于提取路径和协议
 	public static final String REGEX_PATH_WITH_SPACE = String.format(
-			"\"(?<path1>(?<protocol1>%s)?+(%s)?+((%s|%s)++))\"",
-			REGEX_PROTOCOL, REGEX_DRIVE, REGEX_FILE_NAME_WITH_SPACE, REGEX_SEPARATOR
+        "\"(?<path1>(?<protocol1>%s)?+(%s)?+((%s|%s)++))\"",
+        REGEX_PROTOCOL, REGEX_DRIVE, REGEX_FILE_NAME_WITH_SPACE, REGEX_SEPARATOR
 	);
 
 	/** 路径正则表达式 */
 	// 定义公共静态final常量，匹配不带引号的路径（相对路径或绝对路径）
 	// 捕获组 path2 和 protocol2 用于提取路径和协议
 	public static final String REGEX_PATH = String.format(
-			"(?!\")(?<path2>(?<protocol2>%s)?+(%s)?+((%s|(?:%s|%s))+))",
-			REGEX_PROTOCOL, REGEX_DRIVE, REGEX_SEPARATOR, REGEX_FILE_NAME, REGEX_DOTS_PATH
+		"(?!\")(?<path2>(?<protocol2>%s)?+(%s)?+((%s|(?:%s|%s))+))",
+		REGEX_PROTOCOL, REGEX_DRIVE, REGEX_SEPARATOR, REGEX_FILE_NAME, REGEX_DOTS_PATH
 	);
 
 	/** Git重命名格式路径正则表达式 */
@@ -237,16 +205,18 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	// 同时支持Git重命名格式（如 {old => new}），Git重命名格式优先匹配
 	// 使用 UNICODE_CHARACTER_CLASS 标志支持 Unicode 字符
 	public static final Pattern FILE_PATTERN = Pattern.compile(
-			String.format("(?![\\s,;\\]])(?<link>['(\\[]?(?:%s|%s|%s)%s[')\\]]?)", REGEX_GIT_RENAME, REGEX_PATH_WITH_SPACE, REGEX_PATH, REGEX_ROW_COL),
-			Pattern.UNICODE_CHARACTER_CLASS);
+		String.format("(?![\\s,;\\]])(?<link>['(\\[]?(?:%s|%s|%s)%s[')\\]]?)", REGEX_GIT_RENAME, REGEX_PATH_WITH_SPACE, REGEX_PATH, REGEX_ROW_COL),
+		Pattern.UNICODE_CHARACTER_CLASS
+    );
 
 	/** URL 匹配模式 */
 	// 定义公共静态final模式，编译 URL 正则表达式
 	// 匹配各种协议的 URL（http、https、ftp、file、jar 等）
 	// 捕获组 protocol 和 path 用于提取协议和路径部分
 	public static final Pattern URL_PATTERN = Pattern.compile(
-			"(?<link>[(']?(?<protocol>((jar:)?([a-zA-Z]+):)([/\\\\~]))(?<path>([-.!~*\\\\()\\w;/?:@&=+$,%#]" + DWC + "?)+))",
-			Pattern.UNICODE_CHARACTER_CLASS);
+		"(?<link>[(']?(?<protocol>((jar:)?([a-zA-Z]+):)([/\\\\~]))(?<path>([-.!~*\\\\()\\w;/?:@&=+$,%#]" + DWC + "?)+))",
+		Pattern.UNICODE_CHARACTER_CLASS
+    );
 
 	/** 堆栈跟踪元素匹配模式 */
 	// 定义公共静态final模式，匹配 Java 堆栈跟踪中的一行（如 "at com.example.MyClass.method(MyClass.java:10)"）
@@ -1125,26 +1095,26 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				}
 			}
 
-		String state = cacheInitialized ? "reload" : "init";
-		if (!cacheInitialized) {
-			String notificationMessage = String.format("fileCache[%d], fileBaseCache[%d]", fileCache.size(), fileBaseCache.size());
-			if (config.useIgnorePattern && ignoredFilesCount > 0) {
-				notificationMessage += String.format(", ignored[%d]", ignoredFilesCount);
-			}
-			notifyUser(
-					String.format("%s file cache ( %s )", state, reason),
-					notificationMessage
-			);
-			cacheInitialized = true;
-		}
+		    String state = cacheInitialized ? "reload" : "init";
+            if (!cacheInitialized) {
+                String notificationMessage = String.format("fileCache[%d], fileBaseCache[%d]", fileCache.size(), fileBaseCache.size());
+                if (config.useIgnorePattern && ignoredFilesCount > 0) {
+                    notificationMessage += String.format(", ignored[%d]", ignoredFilesCount);
+                }
+                notifyUser(
+                    String.format("%s file cache ( %s )", state, reason),
+                    notificationMessage
+                );
+                cacheInitialized = true;
+            }
 
 			// 记录重建时间和耗时
 			lastRebuildTime = System.currentTimeMillis();
 			lastRebuildDuration = lastRebuildTime - startTime;
 
 			String logMessage = String.format(
-					"project[%s]: %s file cache ( %s ): fileCache[%d], fileBaseCache[%d], duration[%dms]",
-					project.getName(), state, reason, fileCache.size(), fileBaseCache.size(), lastRebuildDuration
+                "project[%s]: %s file cache ( %s ): fileCache[%d], fileBaseCache[%d], duration[%dms]",
+                project.getName(), state, reason, fileCache.size(), fileBaseCache.size(), lastRebuildDuration
 			);
 			if (config.useIgnorePattern && ignoredFilesCount > 0) {
 				logMessage += String.format(", ignored[%d]", ignoredFilesCount);
@@ -1157,6 +1127,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/**
 	 * 创建文件缓存并设置监听器
+     *
 	 * 在项目打开时初始化文件缓存，并设置以下监听器：
 	 * 1. DumbMode 监听器：当索引更新完成后重新加载缓存
 	 * 2. VFS 监听器：监听文件的创建、删除、移动、重命名等事件，增量更新缓存
@@ -1164,15 +1135,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 这样可以确保缓存始终与项目文件系统保持同步
 	 */
 	private void createFileCache() {
+		// 初始化文件缓存，传入原因为"打开项目"
 		reloadFileCache("open project");
 
+		// 获取项目消息总线连接，用于订阅各种项目事件
 		MessageBusConnection connection = project.getMessageBus().connect();
 
-		// DumbService.smartInvokeLater() is executed only once,
-		// but exitDumbMode will be executed every time the mode changes.
+		// 订阅 DumbMode 事件，当 IntelliJ 退出"愚蠢模式"（索引完成）时触发
 		connection.subscribe(DumbService.DUMB_MODE, new DumbService.DumbModeListener() {
 			@Override
 			public void exitDumbMode() {
+				// 当索引更新完成后，重新加载文件缓存以确保数据最新
 				reloadFileCache("indices are updated");
 			}
 		});
@@ -1182,54 +1155,78 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		// relevant to your task (e.g., via ProjectFileIndex.isInContent()).
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file-system.html#virtual-file-system-events
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file.html#how-do-i-get-notified-when-vfs-changes
+		// 订阅虚拟文件系统变化事件，监听文件的创建、删除、移动、重命名等操作
 		connection.subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
 			@Override
 			public void after(@NotNull List<? extends @NotNull VFileEvent> events) {
-				List<VirtualFile> newFiles = new ArrayList<>();
-				boolean deleteFile = false;
+			    // 创建新文件列表，用于存储需要添加到缓存的文件
+			    List<VirtualFile> newFiles = new ArrayList<>();
+			    // 标记是否有文件被删除，用于决定是否需要清理缓存
+			    boolean deleteFile = false;
 
-				for (VFileEvent event : events) {
-					final VirtualFile file = event.getFile();
-					if (null == file || !isInContent(file, event instanceof VFileDeleteEvent)) {
-						continue;
-					}
+                // 遍历所有文件系统事件
+                for (VFileEvent event : events) {
+                    // 获取事件关联的文件对象
+                    final VirtualFile file = event.getFile();
+                    // 如果文件为空或不在项目内容中，跳过处理
+                    if (null == file || !isInContent(file, event instanceof VFileDeleteEvent)) {
+                        continue;
+                    }
+                    // 根据事件类型进行不同的处理
                     switch (event) {
+                        // 文件复制事件：将复制后的新文件添加到新文件列表
                         case VFileCopyEvent vFileCopyEvent -> newFiles.add(vFileCopyEvent.findCreatedFile());
+                        // 文件创建事件：将新创建的文件添加到新文件列表
                         case VFileCreateEvent vFileCreateEvent -> newFiles.add(file);
+                        // 文件删除事件：标记有文件被删除
                         case VFileDeleteEvent vFileDeleteEvent -> deleteFile = true;
+                        // 文件移动事件：无需处理，因为文件名未改变，虚拟文件路径会自动更新
                         case VFileMoveEvent vFileMoveEvent -> {
                             // No processing is required since the file name has not changed and
                             // the path to the virtual file will be updated automatically
                         }
+                        // 文件属性变化事件：主要处理文件重命名
                         case VFilePropertyChangeEvent pce -> {
                             // Rename file
+                            // 如果是文件名属性变化且新旧值不同（即重命名操作）
                             if (VirtualFile.PROP_NAME.equals(pce.getPropertyName())
                                     && !Objects.equals(pce.getNewValue(), pce.getOldValue())) {
+                                // 标记有文件被删除（旧名称）
                                 deleteFile = true;
+                                // 将重命名后的文件添加到新文件列表（新名称）
                                 newFiles.add(file);
                             }
                         }
+                        // 其他事件类型：无需处理
                         default -> {
                         }
                     }
-				}
+                }
 
-				if (newFiles.isEmpty() && !deleteFile) {
-					return;
-				}
+                // 如果没有新文件且没有删除操作，直接返回无需更新缓存
+                if (newFiles.isEmpty() && !deleteFile) {
+                    return;
+                }
 
-				cacheWriteLock.lock();
-				try {
-					// Since there is only one event for deleting a directory, simply clean up all the invalid files
-					if (deleteFile) {
-						fileCache.forEach((key, value) -> value.removeIf(it -> !it.isValid() || !key.equals(it.getName())));
-						fileBaseCache.forEach((key, value) -> value.removeIf(it -> !it.isValid() || !key.equals(it.getNameWithoutExtension())));
-					}
-					newFiles.forEach(indexIterator::processFile);
-					logger.info(String.format("project[%s]: flush file cache", project.getName()));
-				} finally {
-					cacheWriteLock.unlock();
-				}
+                // 获取缓存写锁，确保线程安全地修改缓存
+                cacheWriteLock.lock();
+                try {
+                    // Since there is only one event for deleting a directory, simply clean up all the invalid files
+                    // 如果有文件被删除，清理缓存中的无效文件
+                    if (deleteFile) {
+                        // 清理文件名缓存：移除无效文件或文件名不匹配的条目
+                        fileCache.forEach((key, value) -> value.removeIf(it -> !it.isValid() || !key.equals(it.getName())));
+                        // 清理文件基础名缓存：移除无效文件或基础名不匹配的条目
+                        fileBaseCache.forEach((key, value) -> value.removeIf(it -> !it.isValid() || !key.equals(it.getNameWithoutExtension())));
+                    }
+                    // 将所有新文件添加到缓存中
+                    newFiles.forEach(indexIterator::processFile);
+                    // 记录缓存刷新日志
+                    logger.info(String.format("project[%s]: flush file cache", project.getName()));
+                } finally {
+                    // 释放缓存写锁
+                    cacheWriteLock.unlock();
+                }
 			}
 		});
 	}
@@ -1370,91 +1367,121 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * @return 文件路径匹配结果列表，包含匹配的路径、位置、行号、列号等信息
 	 */
 	@NotNull
-public List<FileLinkMatch> detectPaths(@NotNull String line) {
-		// 检查文件搜索配置
+    public List<FileLinkMatch> detectPaths(@NotNull String line) {
+		// 检查文件搜索配置，如果未启用文件搜索则直接返回空列表
 		if (!config.searchFiles) {
 			return Collections.emptyList();
 		}
 
+		// 创建结果列表，用于存储所有检测到的文件路径匹配项
 		List<FileLinkMatch> results = new LinkedList<>();
 
 		// 准备过滤器，初始化自定义匹配器和忽略匹配器
 		prepareFilter();
 
-		// 预处理：根据配置决定是否移除ANSI转义序列
+		// 预处理：根据配置决定是否移除ANSI转义序列（终端颜色控制字符）
+		// ANSI转义序列会干扰路径识别，移除后可以更准确地匹配路径
 		line = preprocessLine(line);
 
+		// 获取当前线程的文件路径匹配器
 		final Matcher fileMatcher = this.fileMatcher.get();
+		// 重置匹配器并设置要匹配的文本
 		fileMatcher.reset(line);
+		// 循环查找所有匹配的文件路径
 		while (fileMatcher.find()) {
+			// 提取完整的匹配内容（包括可能的括号、引号等包围字符）
 			String match = RegexUtils.tryMatchGroup(fileMatcher, "link");
 			if (null == match) {
+				// 如果没有匹配到link组，跳过本次循环
 				continue;
 			}
 
+			// 提取路径部分（不包括行号、列号等）
 			String path = RegexUtils.tryMatchGroup(fileMatcher, "path");
 			if (null == path) {
+				// 如果路径为空，记录错误日志并跳过
 				logger.error("Regex group 'path' was NULL while trying to match path line: " + line + "\nfor match: " + match);
 				continue;
 			}
 
-			String protocol = RegexUtils.tryMatchGroup(fileMatcher, "protocol");
+		    // 提取协议部分（如 file:、jar:file: 等）
+		    String protocol = RegexUtils.tryMatchGroup(fileMatcher, "protocol");
+            if (null != protocol) {
+                // fixme: 正则表达式捕获组的特殊行为
+                // 与组关联的捕获输入始终是该组最近匹配的子序列
+                // 如果由于量词导致组被第二次评估，则如果第二次评估失败，将保留其先前捕获的值（如果有）
+                // 例如：将字符串 "aba" 与表达式 (a(b)?)+ 匹配，会将第二组设置为 "b"
+                // 所有捕获的输入在每次匹配开始时都会被丢弃
+                // 例如：`file:` -> match == `e` , protocol == 'le:'
+                // 因此需要验证 protocol 是否真的在 match 的开头
+                if (!match.startsWith(protocol)) {
+                    // 如果 protocol 不在 match 开头，说明是错误捕获，将其置为 null
+                    protocol = null;
+                }
+            }
+			// 如果存在有效的协议
 			if (null != protocol) {
-				// fixme
-				//   The captured input associated with a group is always the subsequence that the group most recently matched.
-				//   If a group is evaluated a second time because of quantification then its previously-captured value, if any, will be retained if the second evaluation fails.
-				//   Matching the string `"aba"` against the expression `(a(b)?)+`, for example, leaves group two set to `"b"`.
-				//   All captured input is discarded at the beginning of each match.
-				//   e.g. `file:` -> match == `e` , protocol == 'le:'
-				if (!match.contains(protocol)) {
-					protocol = null;
-				}
-			}
-			if (null != protocol) {
+				// 将协议转换为小写，便于统一处理
 				protocol = protocol.toLowerCase();
+				// 检查是否是文件协议（file: 或 jar:file:）
 				if (Stream.of("file:", JAR_PROTOCOL).anyMatch(protocol::startsWith)) {
-					// TODO not support `jar:http(s)://`
+					// TODO: 暂不支持 `jar:http(s)://` 格式
 					// match = match.replace(protocol, "");
+					// 从路径中移除协议前缀，得到实际的文件路径
 					path = path.substring(protocol.length());
 				} else {
-					// ignore url
+					// 如果是其他协议（如 http:、https:），则忽略（这些应该由 URL 检测处理）
 					continue;
 				}
 			}
 
-			// Resolve '~' to user's home directory
+			// 处理用户主目录符号 '~'
 			if ("~".equals(path)) {
+				// 如果路径就是 '~'，替换为用户主目录的完整路径
 				path = SystemUtils.getUserHome();
 			} else if (path.startsWith("~/") || path.startsWith("~\\")) {
+				// 如果路径以 '~/' 或 '~\' 开头，替换 '~' 为用户主目录
 				path = SystemUtils.getUserHome() + path.substring(1);
 			} else if (isUnixAbsolutePath(path) && isWindowsAbsolutePath(path)) {
-				// Remove leading slash, to transform "/c:/foo" into "c:/foo".
+				// 处理特殊情况：路径同时满足 Unix 和 Windows 绝对路径格式
+				// 例如 "/c:/foo"，这种情况下移除前导斜杠，转换为 "c:/foo"
 				path = path.substring(1);
 			}
 
+			// 提取行号（如果存在），默认为 0
 			final int row = IntegerUtil.parseInt(RegexUtils.tryMatchGroup(fileMatcher, "row")).orElse(0);
+			// 提取列号（如果存在），默认为 0
 			final int col = IntegerUtil.parseInt(RegexUtils.tryMatchGroup(fileMatcher, "col")).orElse(0);
+			// 解码双宽字符（DWC），移除 JediTerm 使用的特殊标记字符
 			match = decodeDwc(match);
+			// 初始化偏移量数组，用于存储需要移除的左右包围字符的数量
 			int[] offsets = new int[]{0, 0};
+			// 检查匹配内容是否被括号、方括号或引号包围
 			if (isSurroundedBy(match, new String[]{"()", "[]", "''"}, offsets)) {
+				// 如果被包围，移除包围字符（根据 offsets 中的偏移量）
 				match = match.substring(offsets[0], match.length() - offsets[1]);
 			}
+			// 获取匹配内容在原始行中的位置范围
 			int[] groupRange = RegexUtils.tryGetGroupRange(fileMatcher, "link");
 
 			// 在处理完 match 后，检查是否应该被忽略
-			// 先检查 ignorePattern，再检查其他忽略条件（省略号、反斜杠、句子末尾点号等）
+			// 先检查用户配置的 ignorePattern，再检查其他忽略条件（省略号、反斜杠、句子末尾点号等）
 			if (shouldIgnore(match) || shouldIgnoreMatch(line, new FileLinkMatch(match, decodeDwc(path), groupRange[0] + offsets[0], groupRange[1] - offsets[1], row, col))) {
+				// 如果应该被忽略，跳过本次匹配
 				continue;
 			}
 
+			// 创建文件链接匹配对象并添加到结果列表
+			// 包含：匹配内容、路径、起始位置、结束位置、行号、列号
 			results.add(new FileLinkMatch(
 					match, decodeDwc(path),
-					groupRange[0] + offsets[0],
-					groupRange[1] - offsets[1],
+					groupRange[0] + offsets[0],  // 起始位置（考虑移除的包围字符）
+					groupRange[1] - offsets[1],  // 结束位置（考虑移除的包围字符）
 					row, col
 			));
 		}
 
+		// 返回所有检测到的文件路径匹配结果
 		return results;
 	}
 
@@ -1761,14 +1788,6 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 		} finally {
 			cacheReadLock.unlock();
 		}
-	}
-
-	/**
-	 * 获取忽略的文件数量
-	 * @return 忽略的文件数量
-	 */
-	public int getIgnoredFilesCount() {
-		return ignoredFilesCount;
 	}
 
 	/**
