@@ -1,15 +1,9 @@
 package awesome.console.config;
 
-import static awesome.console.config.AwesomeConsoleDefaults.DEFAULT_GROUP_RETRIES;
-import static awesome.console.config.AwesomeConsoleDefaults.FILE_PATTERN_REQUIRED_GROUPS;
-
 import awesome.console.util.RegexUtils;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.util.text.StringUtil;
 import java.util.Objects;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-import java.util.regex.PatternSyntaxException;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -54,15 +48,13 @@ public class AwesomeConsoleConfig implements Configurable {
 	 * 将存储中的配置值设置到对应的UI组件中
 	 */
 	private void initFromConfig() {
-		form.debugModeCheckBox.setSelected(storage.DEBUG_MODE);
-
 		form.limitLineMatchingByCheckBox.setSelected(storage.LIMIT_LINE_LENGTH);
 
 		form.matchLinesLongerThanCheckBox.setEnabled(storage.LIMIT_LINE_LENGTH);
 		form.matchLinesLongerThanCheckBox.setSelected(storage.SPLIT_ON_LIMIT);
 
 		form.searchForURLsCheckBox.setSelected(storage.searchUrls);
-		form.initMatchFiles(storage.searchFiles, storage.searchClasses, storage.useFilePattern, storage.getFilePatternText());
+		form.initMatchFiles(storage.searchFiles, storage.searchClasses);
 		form.initLimitResult(storage.useResultLimit, storage.getResultLimit());
 
 		form.maxLengthSpinner.setValue(storage.LINE_MAX_LENGTH);
@@ -106,42 +98,6 @@ public class AwesomeConsoleConfig implements Configurable {
 		if (pattern.isEmpty() || !RegexUtils.isValidRegex(pattern)) {
 			showErrorDialog("Invalid value", "Invalid pattern: " + StringUtil.trimMiddle(pattern, 150));
 			return false;
-		}
-		return true;
-	}
-
-	/**
-	 * 检查正则表达式是否包含必需的命名捕获组
-	 * 验证指定的命名组是否存在，以及重试次数是否在允许范围内
-	 * 
-	 * @param pattern 要检查的正则表达式字符串
-	 * @param groups 必需的命名捕获组名称列表
-	 * @return 如果所有必需的组都存在且有效则返回true，否则显示错误对话框并返回false
-	 */
-	private boolean checkRegexGroup(@NotNull final String pattern, @NotNull final String... groups) {
-		if (pattern.isEmpty()) {
-			return false;
-		}
-		boolean hasGroup;
-		for (String group : groups) {
-			try {
-				Matcher matcher = Pattern.compile("\\(\\?<" + group + "([1-9][0-9]*)?>").matcher(pattern);
-				if (matcher.find()) {
-					String index = matcher.group(1);
-					hasGroup = StringUtil.isEmpty(index) || Integer.parseInt(index) <= DEFAULT_GROUP_RETRIES;
-				} else {
-					hasGroup = false;
-				}
-			} catch (PatternSyntaxException | NumberFormatException e) {
-				hasGroup = false;
-			}
-			if (!hasGroup) {
-				showErrorDialog("Invalid value", String.format(
-						"Missing required group \"%s\": %s",
-						group, StringUtil.trimMiddle(pattern, 150)
-				));
-				return false;
-			}
 		}
 		return true;
 	}
@@ -194,17 +150,14 @@ public class AwesomeConsoleConfig implements Configurable {
 	 */
 	@Override
 	public boolean isModified() {
-		return form.debugModeCheckBox.isSelected() != storage.DEBUG_MODE
-				|| form.limitLineMatchingByCheckBox.isSelected() != storage.LIMIT_LINE_LENGTH
+		return form.limitLineMatchingByCheckBox.isSelected() != storage.LIMIT_LINE_LENGTH
 			|| !Objects.equals(form.maxLengthSpinner.getValue(), storage.LINE_MAX_LENGTH)
 				|| form.matchLinesLongerThanCheckBox.isSelected() != storage.SPLIT_ON_LIMIT
 				|| form.searchForURLsCheckBox.isSelected() != storage.searchUrls
 				|| form.searchForFilesCheckBox.isSelected() != storage.searchFiles
-				|| form.searchForClassesCheckBox.isSelected() != storage.searchClasses
+			|| form.searchForClassesCheckBox.isSelected() != storage.searchClasses
 				|| form.limitResultCheckBox.isSelected() != storage.useResultLimit
 				|| !Objects.equals(form.limitResultSpinner.getValue(), storage.getResultLimit())
-				|| form.filePatternCheckBox.isSelected() != storage.useFilePattern
-				|| !form.filePatternTextArea.getText().trim().equals(storage.getFilePatternText())
 				|| form.ignorePatternCheckBox.isSelected() != storage.useIgnorePattern
 				|| !form.ignorePatternTextField.getText().trim().equals(storage.getIgnorePatternText())
 				|| form.ignoreStyleCheckBox.isSelected() != storage.useIgnoreStyle
@@ -229,14 +182,6 @@ public class AwesomeConsoleConfig implements Configurable {
 			return;
 		}
 
-		final boolean useFilePattern = form.filePatternCheckBox.isSelected();
-		final String filePatternText = form.filePatternTextArea.getText().trim();
-
-		if (!Objects.equals(filePatternText, storage.getFilePatternText()) &&
-				!(checkRegex(filePatternText) && checkRegexGroup(filePatternText, FILE_PATTERN_REQUIRED_GROUPS))) {
-			return;
-		}
-
 		final boolean useIgnorePattern = form.ignorePatternCheckBox.isSelected();
 		final String ignorePatternText = form.ignorePatternTextField.getText().trim();
 
@@ -245,7 +190,6 @@ public class AwesomeConsoleConfig implements Configurable {
 			return;
 		}
 
-		storage.DEBUG_MODE = form.debugModeCheckBox.isSelected();
 		storage.LIMIT_LINE_LENGTH = form.limitLineMatchingByCheckBox.isSelected();
 		storage.LINE_MAX_LENGTH = maxLength;
 		storage.SPLIT_ON_LIMIT = form.matchLinesLongerThanCheckBox.isSelected();
@@ -256,10 +200,6 @@ public class AwesomeConsoleConfig implements Configurable {
 
 		storage.useResultLimit = form.limitResultCheckBox.isSelected();
 		storage.setResultLimit((int) form.limitResultSpinner.getValue());
-
-		storage.useFilePattern = useFilePattern;
-		storage.setFilePatternText(filePatternText);
-		form.filePatternTextArea.setText(filePatternText);
 
 		storage.useIgnorePattern = useIgnorePattern;
 		storage.setIgnorePatternText(ignorePatternText);

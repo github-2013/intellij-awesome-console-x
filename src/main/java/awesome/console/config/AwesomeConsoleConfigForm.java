@@ -24,19 +24,15 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private static final Logger logger = Logger.getInstance(AwesomeConsoleConfigForm.class);
 
     public JPanel mainPanel;
-    public JCheckBox debugModeCheckBox;
     public JCheckBox limitLineMatchingByCheckBox;
     public JSpinner maxLengthSpinner;
     public JCheckBox matchLinesLongerThanCheckBox;
     public JCheckBox searchForURLsCheckBox;
     public JCheckBox searchForFilesCheckBox;
     public JCheckBox searchForClassesCheckBox;
-    public JCheckBox limitResultCheckBox;
-    public JSpinner limitResultSpinner;
-    public JCheckBox filePatternCheckBox;
-    public JTextArea filePatternTextArea;
-    public JLabel filePatternLabel;
-    public JCheckBox ignorePatternCheckBox;
+	public JCheckBox limitResultCheckBox;
+	public JSpinner limitResultSpinner;
+	public JCheckBox ignorePatternCheckBox;
     public JTextField ignorePatternTextField;
     public JLabel ignorePatternLabel;
     public JCheckBox ignoreStyleCheckBox;
@@ -57,11 +53,12 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
     // 索引管理服务
     private IndexManagementService indexManagementService;
+    // 自定义双色进度条UI
+    private DualColorProgressBarUI dualColorProgressBarUI;
 
     private void createUIComponents() {
         bindMap = new HashMap<>();
         bindMap2 = new HashMap<>();
-        setupDebugMode();
         setupLineLimit();
         setupSplitLineIntoChunk();
         setupMatchURLs();
@@ -164,11 +161,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         return spinner;
     }
 
-    private void setupDebugMode() {
-        debugModeCheckBox = initCheckBox(DEFAULT_DEBUG_MODE);
-        debugModeCheckBox.setToolTipText("Enable debug mode to log detailed information for troubleshooting.");
-    }
-
     private void setupLineLimit() {
         limitLineMatchingByCheckBox = new JCheckBox("limitLineMatchingByCheckBox");
         limitLineMatchingByCheckBox.setToolTipText("Limit the maximum length of lines to be matched. Useful for performance optimization with very long lines.");
@@ -217,35 +209,18 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         searchForClassesCheckBox.setToolTipText("Uncheck if you do not want classes parsed from the console.");
 
         limitResultCheckBox = initCheckBox(DEFAULT_USE_RESULT_LIMIT);
-        limitResultCheckBox.setToolTipText("Limit the maximum number of search results to improve performance when multiple files match.");
-        limitResultSpinner = initSpinner(DEFAULT_RESULT_LIMIT);
-        limitResultSpinner.setModel(new SpinnerNumberModel(DEFAULT_RESULT_LIMIT, DEFAULT_MIN_RESULT_LIMIT, Integer.MAX_VALUE, 10));
+		limitResultCheckBox.setToolTipText("Limit the maximum number of search results to improve performance when multiple files match.");
+		limitResultSpinner = initSpinner(DEFAULT_RESULT_LIMIT);
+		limitResultSpinner.setModel(new SpinnerNumberModel(DEFAULT_RESULT_LIMIT, DEFAULT_MIN_RESULT_LIMIT, Integer.MAX_VALUE, 10));
 
-        filePatternCheckBox = initCheckBox(DEFAULT_USE_FILE_PATTERN);
-        filePatternCheckBox.setToolTipText("Check this to custom File Pattern. (experimental)");
-        filePatternTextArea = initTextArea(DEFAULT_FILE_PATTERN_TEXT);
-        filePatternTextArea.setLineWrap(true);
-        final String groupExample = FILE_PATTERN_REQUIRED_GROUPS[0];
-        filePatternLabel = new JLabel(String.format(
-                "* Required regex group names: [%s], where %s,%s1...%s%d all correspond to the group %s.",
-                StringUtil.join(FILE_PATTERN_REQUIRED_GROUPS, ", "),
-                groupExample, groupExample, groupExample, DEFAULT_GROUP_RETRIES, groupExample
-        ));
-        // 设置小号字体和浅灰色
-        Font currentFont = filePatternLabel.getFont();
-        filePatternLabel.setFont(currentFont.deriveFont(currentFont.getSize() - 2.0f));
-        filePatternLabel.setForeground(JBColor.GRAY);
-
-        bindCheckBoxAndComponents(searchForFilesCheckBox, searchForClassesCheckBox, limitResultCheckBox, filePatternCheckBox);
-        bindComponentToCheckBoxes(limitResultSpinner, searchForFilesCheckBox, limitResultCheckBox);
-        bindComponentToCheckBoxes(filePatternTextArea, searchForFilesCheckBox, filePatternCheckBox);
+		bindCheckBoxAndComponents(searchForFilesCheckBox, searchForClassesCheckBox, limitResultCheckBox);
+		bindComponentToCheckBoxes(limitResultSpinner, searchForFilesCheckBox, limitResultCheckBox);
     }
 
-    public void initMatchFiles(boolean enableFiles, boolean enableClasses, boolean enableFilePattern, String filePattern) {
-        setupCheckBox(searchForFilesCheckBox, enableFiles);
-        setupCheckBox(searchForClassesCheckBox, enableClasses);
-        setupCheckBoxAndText(filePatternCheckBox, enableFilePattern, filePatternTextArea, filePattern);
-    }
+	public void initMatchFiles(boolean enableFiles, boolean enableClasses) {
+		setupCheckBox(searchForFilesCheckBox, enableFiles);
+		setupCheckBox(searchForClassesCheckBox, enableClasses);
+	}
 
     public void initLimitResult(boolean enabled, int value) {
         setupCheckBox(limitResultCheckBox, enabled);
@@ -311,7 +286,10 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         indexProgressBar.setVisible(true);
         indexProgressBar.setValue(0);
         indexProgressBar.setString("0%");
-        updateProgressBarColor(0);
+        
+        // 应用自定义双色进度条UI
+        dualColorProgressBarUI = new DualColorProgressBarUI();
+        indexProgressBar.setUI(dualColorProgressBarUI);
 
         rebuildIndexButton = new JButton("Rebuild");
         rebuildIndexButton.addActionListener(e -> rebuildIndex());
@@ -397,7 +375,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         }
 
         indexStatusLabel.setText(sb.toString());
-        indexStatusLabel.setForeground(new Color(76, 175, 80));
+        indexStatusLabel.setForeground(new JBColor(new Color(76, 175, 80), new Color(129, 199, 132)));
 
         // 更新进度条
         updateProgressBarFromStats(stats);
@@ -423,7 +401,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 clearIndexButton.setEnabled(false);
                 rebuildIndexButton.setText("Rebuilding...");
                 indexStatusLabel.setText(String.format("Rebuilding index [%s]...", project.getName()));
-                indexStatusLabel.setForeground(new Color(33, 150, 243));
+                indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
             }
 
             @Override
@@ -435,7 +413,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
                 int totalFiles = stats.getTotalFiles();
                 int ignoredFiles = stats.getIgnoredFiles();
-                int matchedFiles = Math.max(0, current - ignoredFiles);
+                int matchedFiles = stats.getMatchedFiles();
                 int estimatedTotalFiles = indexManagementService.getEstimatedTotalFiles();
                 long rebuildStartTime = indexManagementService.getRebuildStartTime();
 
@@ -457,15 +435,23 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
                 // 更新进度条
                 indexProgressBar.setValue(progress);
-                if (ignoredFiles > 0 && totalFiles > 0) {
+                
+                // 计算百分比：使用总文件数作为分母
+                if (totalFiles > 0) {
                     int matchedPercentage = (matchedFiles * 100) / totalFiles;
                     int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
-                    indexProgressBar.setString(String.format("%d%% (✓%d%% ⚠%d%%)",
-                            progress, matchedPercentage, ignoredPercentage));
-                    updateProgressBarWithIgnoreStats(totalFiles, matchedFiles, ignoredFiles);
+                    // 进度条文本仅显示匹配文件占比
+                    indexProgressBar.setString(String.format("%d%%", matchedPercentage));
+                    // 使用双色UI更新百分比
+                    if (dualColorProgressBarUI != null) {
+                        dualColorProgressBarUI.updatePercentages(matchedPercentage, ignoredPercentage);
+                    }
                 } else {
+                    // 总文件数为0时，显示进度百分比
                     indexProgressBar.setString(progress + "%");
-                    updateProgressBarColor(progress);
+                    if (dualColorProgressBarUI != null) {
+                        dualColorProgressBarUI.updatePercentages(progress, 0);
+                    }
                 }
             }
 
@@ -480,8 +466,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 clearIndexButton.setEnabled(true);
                 rebuildIndexButton.setText("Rebuild");
                 indexProgressBar.setValue(100);
-                indexProgressBar.setString("100%");
-                updateProgressBarColor(100);
                 updateIndexStatus();
             }
 
@@ -499,7 +483,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 indexStatusLabel.setForeground(JBColor.RED);
                 indexProgressBar.setValue(0);
                 indexProgressBar.setString("0%");
-                updateProgressBarColor(0);
+                if (dualColorProgressBarUI != null) {
+                    dualColorProgressBarUI.updatePercentages(0, 0);
+                }
             }
         });
     }
@@ -532,7 +518,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 clearIndexButton.setEnabled(false);
                 clearIndexButton.setText("Clearing...");
                 indexStatusLabel.setText(String.format("Clearing index [%s]...", project.getName()));
-                indexStatusLabel.setForeground(new Color(244, 67, 54));
+                indexStatusLabel.setForeground(new JBColor(new Color(244, 67, 54), new Color(239, 83, 80)));
             }
 
             @Override
@@ -553,7 +539,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 // 清除完成后，索引为空，进度条应该显示 0%
                 indexProgressBar.setValue(0);
                 indexProgressBar.setString("0%");
-                updateProgressBarColor(0);
+                if (dualColorProgressBarUI != null) {
+                    dualColorProgressBarUI.updatePercentages(0, 0);
+                }
                 updateIndexStatus();
             }
 
@@ -571,7 +559,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 indexStatusLabel.setForeground(JBColor.RED);
                 indexProgressBar.setValue(0);
                 indexProgressBar.setString("0%");
-                updateProgressBarColor(0);
+                if (dualColorProgressBarUI != null) {
+                    dualColorProgressBarUI.updatePercentages(0, 0);
+                }
             }
         });
     }
@@ -582,11 +572,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private void updateProgressBarColor(int percentage) {
         Color color;
         if (percentage == 0) {
-            color = new Color(158, 158, 158);
+            color = new JBColor(new Color(158, 158, 158), new Color(97, 97, 97));
         } else if (percentage == 100) {
-            color = new Color(76, 175, 80);
+            color = new JBColor(new Color(76, 175, 80), new Color(129, 199, 132));
         } else {
-            color = new Color(255, 193, 7);
+            color = new JBColor(new Color(255, 193, 7), new Color(255, 235, 59));
         }
         indexProgressBar.setForeground(color);
     }
@@ -596,7 +586,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
      */
     private void updateProgressBarWithIgnoreStats(int totalFiles, int matchedFiles, int ignoredFiles) {
         if (totalFiles == 0) {
-            indexProgressBar.setForeground(new Color(158, 158, 158));
+            indexProgressBar.setForeground(new JBColor(new Color(158, 158, 158), new Color(97, 97, 97)));
             return;
         }
 
@@ -610,11 +600,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         }
 
         if (totalPercentage == 100) {
-            indexProgressBar.setForeground(new Color(76, 175, 80));
+            indexProgressBar.setForeground(new JBColor(new Color(76, 175, 80), new Color(129, 199, 132)));
         } else if (totalPercentage > 0) {
-            indexProgressBar.setForeground(new Color(76, 175, 80));
+            indexProgressBar.setForeground(new JBColor(new Color(76, 175, 80), new Color(129, 199, 132)));
         } else {
-            indexProgressBar.setForeground(new Color(158, 158, 158));
+            indexProgressBar.setForeground(new JBColor(new Color(158, 158, 158), new Color(97, 97, 97)));
         }
     }
 
@@ -625,7 +615,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         if (stats == null) {
             indexProgressBar.setValue(0);
             indexProgressBar.setString("0%");
-            updateProgressBarColor(0);
+            if (dualColorProgressBarUI != null) {
+                dualColorProgressBarUI.updatePercentages(0, 0);
+            }
             return;
         }
 
@@ -633,22 +625,32 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         if (totalFiles == 0) {
             indexProgressBar.setValue(0);
             indexProgressBar.setString("0%");
-            updateProgressBarColor(0);
+            if (dualColorProgressBarUI != null) {
+                dualColorProgressBarUI.updatePercentages(0, 0);
+            }
         } else {
             indexProgressBar.setValue(100);
 
             if (stats.hasIgnoreStatistics()) {
                 int matchedFiles = stats.getMatchedFiles();
                 int ignoredFiles = stats.getIgnoredFiles();
+                
+                // 计算百分比：使用总文件数作为分母
                 int matchedPercentage = (matchedFiles * 100) / totalFiles;
                 int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
 
-                indexProgressBar.setString(String.format("100%% (✓%d%% ⚠%d%%)",
-                        matchedPercentage, ignoredPercentage));
-                updateProgressBarWithIgnoreStats(totalFiles, matchedFiles, ignoredFiles);
+                // 进度条文本仅显示匹配文件占比
+                indexProgressBar.setString(String.format("%d%%", matchedPercentage));
+                // 使用双色UI更新百分比
+                if (dualColorProgressBarUI != null) {
+                    dualColorProgressBarUI.updatePercentages(matchedPercentage, ignoredPercentage);
+                }
             } else {
+                // 无忽略统计时，显示100%绿色
                 indexProgressBar.setString("100%");
-                updateProgressBarColor(100);
+                if (dualColorProgressBarUI != null) {
+                    dualColorProgressBarUI.updatePercentages(100, 0);
+                }
             }
         }
     }

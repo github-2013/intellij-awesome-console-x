@@ -29,9 +29,6 @@ import org.jetbrains.annotations.NotNull;
 )
 public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeConsoleStorage>, AwesomeConsoleDefaults {
 
-    /** 调试模式开关 */
-    public volatile boolean DEBUG_MODE = DEFAULT_DEBUG_MODE;
-
     /** 是否在达到行长度限制时分割行 */
     public volatile boolean SPLIT_ON_LIMIT = DEFAULT_SPLIT_ON_LIMIT;
 
@@ -50,18 +47,10 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 是否搜索类名（支持完全限定类名） */
     public volatile boolean searchClasses = DEFAULT_SEARCH_CLASSES;
 
-    /** 是否限制搜索结果数量 */
-    public volatile boolean useResultLimit = DEFAULT_USE_RESULT_LIMIT;
+	/** 是否限制搜索结果数量 */
+	public volatile boolean useResultLimit = DEFAULT_USE_RESULT_LIMIT;
 
-    /** 是否使用自定义文件路径正则表达式 */
-    public volatile boolean useFilePattern = DEFAULT_USE_FILE_PATTERN;
-
-    /** 文件路径匹配正则表达式（不序列化） */
-    @NotNull
-    @Transient
-    public volatile Pattern filePattern = DEFAULT_FILE_PATTERN;
-
-    /** 是否使用忽略模式 */
+	/** 是否使用忽略模式 */
     public volatile boolean useIgnorePattern = DEFAULT_USE_IGNORE_PATTERN;
 
     /** 忽略模式正则表达式（不序列化） */
@@ -86,13 +75,10 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 是否解析符号链接 */
     public volatile boolean resolveSymlink = DEFAULT_RESOLVE_SYMLINK;
 
-    /** 搜索结果数量限制 */
-    private volatile int resultLimit = DEFAULT_RESULT_LIMIT;
+	/** 搜索结果数量限制 */
+	private volatile int resultLimit = DEFAULT_RESULT_LIMIT;
 
-    /** 文件路径正则表达式文本 */
-    private volatile String filePatternText = DEFAULT_FILE_PATTERN_TEXT;
-
-    /** 忽略模式正则表达式文本 */
+	/** 忽略模式正则表达式文本 */
     private volatile String ignorePatternText = DEFAULT_IGNORE_PATTERN_TEXT;
 
     /** 是否保留ANSI颜色 */
@@ -150,51 +136,17 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
         return resultLimit;
     }
 
-    /**
-     * 设置搜索结果数量限制
-     * 
-     * @param resultLimit 搜索结果数量限制
-     */
-    public void setResultLimit(int resultLimit) {
-        this.resultLimit = resultLimit;
-    }
+	/**
+	 * 设置搜索结果数量限制
+	 * 
+	 * @param resultLimit 搜索结果数量限制
+	 */
+	public void setResultLimit(int resultLimit) {
+		this.resultLimit = resultLimit;
+	}
 
-    /**
-     * 获取文件路径正则表达式文本
-     * 
-     * @return 正则表达式文本
-     */
-    public String getFilePatternText() {
-        return filePatternText;
-    }
-
-    /**
-     * 设置文件路径正则表达式文本
-     * 如果正则表达式无效，则恢复为默认值
-     * 
-     * @param filePatternText 正则表达式文本
-     */
-    public void setFilePatternText(String filePatternText) {
-        if (!Objects.equals(this.filePatternText, filePatternText)) {
-            // 检查输入是否为null或空字符串，如果是则使用默认值
-            if (filePatternText == null || filePatternText.isEmpty()) {
-                this.filePattern = DEFAULT_FILE_PATTERN;
-                this.filePatternText = DEFAULT_FILE_PATTERN_TEXT;
-                return;
-            }
-            
-            try {
-                this.filePattern = Pattern.compile(filePatternText, Pattern.UNICODE_CHARACTER_CLASS);
-                this.filePatternText = filePatternText;
-            } catch (PatternSyntaxException e) {
-                this.filePattern = DEFAULT_FILE_PATTERN;
-                this.filePatternText = DEFAULT_FILE_PATTERN_TEXT;
-            }
-        }
-    }
-
-    /**
-     * 获取忽略模式正则表达式文本
+	/**
+	 * 获取忽略模式正则表达式文本
      * 
      * @return 正则表达式文本
      */

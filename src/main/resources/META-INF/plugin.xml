@@ -15,6 +15,17 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+        	<b>0.1337.31</b><br/>
+        	<ul>
+        		<li>Removed debug mode configuration option to simplify settings</li>
+        		<li>Removed custom file pattern feature to reduce complexity</li>
+        		<li>Added dual-color progress bar UI with visual distinction between matched and ignored files</li>
+        		<li>Enhanced progress bar display: dark green for matched files, yellow for ignored files</li>
+        		<li>Optimized notification logic by removing redundant debug mode notifications</li>
+        		<li>Simplified configuration form and storage implementation</li>
+        		<li>Reduced codebase by ~345 lines through feature consolidation</li>
+        		<li>Improved user experience with clearer visual feedback during index operations</li>
+        	</ul>
         	<b>0.1337.30</b><br/>
         	<ul>
         		<li>Refactored notification system with lazy initialization pattern</li>

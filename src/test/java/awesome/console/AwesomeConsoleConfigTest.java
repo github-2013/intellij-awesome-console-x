@@ -34,48 +34,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         filter = new AwesomeLinkFilter(getProject());
     }
 
-    // ========== 一、调试模式配置测试 ==========
-
-    /**
-     * 测试调试模式的默认值和修改
-     */
-    public void testDebugModeConfiguration() {
-        // 保存原始配置
-        boolean originalValue = storage.DEBUG_MODE;
-        
-        try {
-            // 测试默认值
-            assertFalse("Debug mode should be disabled by default", 
-                AwesomeConsoleDefaults.DEFAULT_DEBUG_MODE);
-            
-            // 测试开启调试模式
-            storage.DEBUG_MODE = true;
-            // 重新创建过滤器以应用新配置
-            filter = new AwesomeLinkFilter(getProject());
-            assertTrue("Debug mode should be enabled", storage.DEBUG_MODE);
-            
-            // 测试关闭调试模式
-            storage.DEBUG_MODE = false;
-            // 重新创建过滤器以应用新配置
-            filter = new AwesomeLinkFilter(getProject());
-            assertFalse("Debug mode should be disabled", storage.DEBUG_MODE);
-            
-            // 边界测试：快速切换
-            for (int i = 0; i < 100; i++) {
-                storage.DEBUG_MODE = (i % 2 == 0);
-                assertEquals("Debug mode should toggle correctly", 
-                    (i % 2 == 0), storage.DEBUG_MODE);
-            }
-            
-        } finally {
-            // 恢复原始配置
-            storage.DEBUG_MODE = originalValue;
-            // 重新创建过滤器以恢复原始配置
-            filter = new AwesomeLinkFilter(getProject());
-        }
-    }
-
-    // ========== 二、行长度限制配置测试 ==========
+    // ========== 一、行长度限制配置测试 ==========
 
     /**
      * 测试行长度限制的配置
@@ -295,60 +254,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             // 恢复原始配置
             storage.useResultLimit = originalUseLimit;
             storage.setResultLimit(originalLimit);
-            // 重新创建过滤器以恢复原始配置
-            filter = new AwesomeLinkFilter(getProject());
-        }
-    }
-
-    // ========== 五、自定义文件匹配模式配置测试 ==========
-
-    /**
-     * 测试自定义文件匹配正则表达式的配置
-     */
-    public void testFilePatternConfiguration() {
-        // 保存原始配置
-        boolean originalUsePattern = storage.useFilePattern;
-        String originalPattern = storage.getFilePatternText();
-        
-        try {
-            // 测试默认值
-            assertFalse("File pattern should be disabled by default", 
-                AwesomeConsoleDefaults.DEFAULT_USE_FILE_PATTERN);
-            
-            // 测试启用/禁用自定义模式
-            storage.useFilePattern = true;
-            assertTrue("File pattern should be enabled", storage.useFilePattern);
-            
-            storage.useFilePattern = false;
-            assertFalse("File pattern should be disabled", storage.useFilePattern);
-            
-            // 测试设置有效的正则表达式（包含必需的分组）
-            String validPattern = "(?<link>(?<path>[^:]+)(?::(?<row>\\d+))?(?::(?<col>\\d+))?)";
-            storage.setFilePatternText(validPattern);
-            assertEquals("Should accept valid pattern", validPattern, storage.getFilePatternText());
-            
-            // 测试必需的分组名称
-            String[] requiredGroups = {"link", "path", "row", "col"};
-            for (String groupName : requiredGroups) {
-                assertTrue("Pattern should contain required group: " + groupName, 
-                    validPattern.contains("<" + groupName + ">"));
-            }
-            
-            // 边界测试：带有行号重试分组的模式
-            String patternWithRetry = "(?<link>(?<path>[^:]+)(?::(?<row>\\d+)|:line (?<row1>\\d+))?)";
-            try {
-                Pattern.compile(patternWithRetry);
-                storage.setFilePatternText(patternWithRetry);
-                assertNotNull("Should handle pattern with retry groups", storage.getFilePatternText());
-            } catch (PatternSyntaxException e) {
-                // 如果正则表达式无效，应该被优雅地处理
-                assertNotNull("Should handle invalid pattern gracefully", storage.getFilePatternText());
-            }
-            
-        } finally {
-            // 恢复原始配置
-            storage.useFilePattern = originalUsePattern;
-            storage.setFilePatternText(originalPattern);
             // 重新创建过滤器以恢复原始配置
             filter = new AwesomeLinkFilter(getProject());
         }
@@ -685,7 +590,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         
         try {
             // 修改配置
-            storage.DEBUG_MODE = !backup.DEBUG_MODE;
             storage.setResultLimit(50);
             storage.searchUrls = !backup.searchUrls;
             
@@ -697,8 +601,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             newStorage.loadState(savedState);
             
             // 验证状态已正确加载
-            assertEquals("DEBUG_MODE should be persisted", 
-                storage.DEBUG_MODE, newStorage.DEBUG_MODE);
             assertEquals("Result limit should be persisted", 
                 storage.getResultLimit(), newStorage.getResultLimit());
             assertEquals("Search URLs should be persisted", 
@@ -837,38 +739,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
     }
 
     // ========== 配置功能验证测试 ==========
-
-    /**
-     * 测试调试模式配置的功能验证
-     * 验证调试模式开启后，过滤器能够正常工作（主要影响通知显示，不影响核心检测功能）
-     */
-    public void testDebugModeFunctionality() {
-        // 保存原始配置
-        boolean originalValue = storage.DEBUG_MODE;
-        
-        try {
-            // 测试关闭调试模式（默认）
-            storage.DEBUG_MODE = false;
-            filter = new AwesomeLinkFilter(getProject());
-            
-            // 基本功能应该正常工作
-            assertPathDetection("Error in src/main.java:10", "src/main.java:10");
-            
-            // 测试开启调试模式
-            storage.DEBUG_MODE = true;
-            filter = new AwesomeLinkFilter(getProject());
-            
-            // 调试模式主要影响通知显示，不影响核心检测功能
-            assertPathDetection("Error in src/main.java:10", "src/main.java:10");
-            
-            // 注意：调试模式的详细缓存信息会在通知中显示，这里无法直接测试
-            // 但可以确认过滤器在调试模式下仍然正常工作
-            
-        } finally {
-            storage.DEBUG_MODE = originalValue;
-            filter = new AwesomeLinkFilter(getProject());
-        }
-    }
 
     /**
      * 测试行长度限制配置的功能验证
@@ -1173,37 +1043,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
      * 测试自定义文件匹配模式的功能验证
      * 验证自定义正则表达式能够正确匹配指定格式的路径
      */
-    public void testFilePatternFunctionality() {
-        // 保存原始配置
-        boolean originalUsePattern = storage.useFilePattern;
-        String originalPattern = storage.getFilePatternText();
-        
-        try {
-            // 测试使用默认文件匹配模式
-            storage.useFilePattern = false;
-            filter = new AwesomeLinkFilter(getProject());
-            
-            assertPathDetection("Error in file.java:10", "file.java:10");
-            
-            // 测试使用自定义文件匹配模式
-            // 这里使用一个简单的自定义模式（包含必需的分组）
-            String customPattern = "(?<link>(?<path>[a-zA-Z]+\\.txt)(?::(?<row>\\d+))?(?::(?<col>\\d+))?)";
-            storage.useFilePattern = true;
-            storage.setFilePatternText(customPattern);
-            filter = new AwesomeLinkFilter(getProject());
-            
-            // 自定义模式应该只匹配.txt文件
-            assertPathDetection("Error in test.txt:10", "test.txt:10");
-            
-            // 不匹配.java文件
-            assertPathNoMatches("Error in file.java:10");
-            
-        } finally {
-            storage.useFilePattern = originalUsePattern;
-            storage.setFilePatternText(originalPattern);
-            filter = new AwesomeLinkFilter(getProject());
-        }
-    }
 
     /**
      * 测试忽略样式配置的功能验证

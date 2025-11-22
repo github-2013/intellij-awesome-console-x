@@ -132,7 +132,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
 	 * 驱动器路径正则表达式（支持 Windows 驱动器号和 Unix 波浪号）
 	 * 注意：file: URI 中的路径有一个前导斜杠，由 slashify 方法添加
-	 * 
+	 *
 	 * @see java.io.File#toURI()
 	 * @see java.io.File#slashify(String, boolean)
 	 */
@@ -255,10 +255,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/** 只包含点号的匹配模式 */
 	private static final Pattern ONLY_DOTS_PATTERN = Pattern.compile("^\\.+$");
-	
+
 	/** 只包含反斜杠的匹配模式 */
 	private static final Pattern ONLY_BACKSLASHES_PATTERN = Pattern.compile("^\\\\+$");
-	
+
 	/** 只包含字母的匹配模式 */
 	private static final Pattern ONLY_LETTERS_PATTERN = Pattern.compile("^[A-Za-z]+$");
 
@@ -270,50 +270,45 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/** 配置存储实例 */
 	// 声明私有final成员变量，存储插件的配置选项（如是否搜索文件、是否搜索URL、忽略模式等）
 	private final AwesomeConsoleStorage config;
-	
+
 	/** 文件名缓存（key为完整文件名） */
 	// 声明私有final成员变量，存储文件名到虚拟文件列表的映射
 	// key 为完整文件名（包含扩展名，如 "MyClass.java"），value 为匹配该文件名的所有文件
 	private final Map<String, List<VirtualFile>> fileCache;
-	
+
 	/** 文件基础名缓存（key为不含扩展名的文件名） */
 	// 声明私有final成员变量，存储文件基础名到虚拟文件列表的映射
 	// key 为不含扩展名的文件名（如 "MyClass"），用于支持完全限定类名的查找
 	private final Map<String, List<VirtualFile>> fileBaseCache;
-	
+
 	/** 项目实例 */
 	// 声明私有final成员变量，存储当前 IntelliJ IDEA 项目的引用
 	private final Project project;
-	
+
 	/** 源代码根目录列表 */
 	// 声明私有volatile成员变量，存储项目的源代码根目录路径列表（如 src/main/java）
 	// 使用 volatile 确保多线程可见性，初始化为空列表
 	private volatile List<String> srcRoots = Collections.emptyList();
-	
+
 	/** 文件路径匹配器（线程本地） */
 	// 声明私有final线程本地变量，为每个线程创建独立的文件路径匹配器
 	// 使用 ThreadLocal 避免多线程共享 Matcher 导致的线程安全问题
 	private final ThreadLocal<Matcher> fileMatcher = ThreadLocal.withInitial(() -> FILE_PATTERN.matcher(""));
-	
+
 	/** URL 匹配器（线程本地） */
 	// 声明私有final线程本地变量，为每个线程创建独立的 URL 匹配器
 	private final ThreadLocal<Matcher> urlMatcher = ThreadLocal.withInitial(() -> URL_PATTERN.matcher(""));
-	
+
 	/** 堆栈跟踪元素匹配器（线程本地） */
 	// 声明私有final线程本地变量，为每个线程创建独立的堆栈跟踪元素匹配器
 	// 用于识别 Java 堆栈跟踪行，以便跳过处理（由 ExceptionFilter 处理）
 	private final ThreadLocal<Matcher> stackTraceElementMatcher = ThreadLocal.withInitial(() -> STACK_TRACE_ELEMENT_PATTERN.matcher(""));
-	
-	/** 自定义文件路径匹配器（线程本地） */
-	// 声明私有final线程本地变量，存储用户自定义的文件路径匹配器
-	// 如果用户配置了自定义正则表达式，则使用此匹配器而非默认的 fileMatcher
-	private final ThreadLocal<Matcher> fileMatcherConfig = new ThreadLocal<>();
-	
+
 	/** 忽略模式匹配器（线程本地） */
 	// 声明私有final线程本地变量，存储忽略模式匹配器
 	// 用于过滤不需要高亮的路径或 URL（根据用户配置的忽略正则表达式）
 	private final ThreadLocal<Matcher> ignoreMatcher = new ThreadLocal<>();
-	
+
 	/** 项目根管理器 */
 	// 声明私有final成员变量，存储项目根管理器的引用
 	// 用于访问项目的根目录、源代码根目录和文件索引
@@ -360,7 +355,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/**
 	 * 构造 AwesomeLinkFilter 实例
-	 * 
+	 *
 	 * @param project 项目实例
 	 */
 	// 定义公共构造函数，接收项目实例作为参数
@@ -384,7 +379,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/**
 	 * 应用过滤器到控制台输出的一行
-	 * 
+	 *
 	 * @param line 控制台输出的一行文本
 	 * @param endPoint 该行在整个控制台输出中的结束位置
 	 * @return 包含所有匹配结果的Result对象，如果没有匹配则返回null
@@ -441,7 +436,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/**
 	 * 判断是否应该对该行应用过滤器
-	 * 
+	 *
 	 * @param line 控制台输出的一行文本
 	 * @return 如果应该过滤则返回true
 	 */
@@ -464,15 +459,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 */
 	// 定义私有方法，准备过滤器，初始化各种匹配器
 	private void prepareFilter() {
-		// 准备自定义文件匹配器（如果用户配置了自定义正则表达式）
-		prepareMatcher(this.fileMatcherConfig, config.filePattern);
 		// 准备忽略模式匹配器（如果用户配置了忽略正则表达式）
 		prepareMatcher(this.ignoreMatcher, config.ignorePattern);
 	}
 
 	/**
 	 * 准备匹配器，如果模式发生变化则更新
-	 * 
+	 *
 	 * @param threadLocal 线程本地匹配器
 	 * @param pattern 正则表达式模式
 	 */
@@ -491,7 +484,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 解码双宽字符（DWC）
 	 * JediTerm 使用 Unicode 私有使用区字符 U+E000 来标记双宽字符的第二部分
 	 * 这个方法将这些标记字符移除，恢复原始文本
-	 * 
+	 *
 	 * @param s 要解码的字符串
 	 * @return 解码后的字符串，移除了所有 DWC 标记
 	 * @see <a href="https://github.com/JetBrains/jediterm/commit/5a05fe18a1a3475a157dbdda6448f682678f55fb">JediTerm DWC handling</a>
@@ -507,7 +500,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 预处理输入行，根据配置决定是否移除ANSI转义序列
 	 * ANSI 转义序列用于在终端中显示颜色和样式，但会干扰路径识别
 	 * 当 preserveAnsiColors 配置为 false 时，会移除这些序列以便更准确地识别路径
-	 * 
+	 *
 	 * @param line 原始输入行，可能包含 ANSI 转义序列
 	 * @return 处理后的行，根据配置可能已移除 ANSI 转义序列
 	 */
@@ -526,7 +519,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 根据配置的最大行长度分割行
 	 * 当行过长时，可以选择截断或分割成多个块进行处理
 	 * 这样可以避免处理超长行时的性能问题
-	 * 
+	 *
 	 * @param line 要分割的行
 	 * @return 分割后的行列表，如果行长度在限制内则返回包含原行的单元素列表
 	 */
@@ -567,7 +560,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 从行中提取URL链接并生成结果项
 	 * 识别各种协议的 URL（http、https、ftp、git、file 等）
 	 * 为每个识别到的 URL 创建可点击的超链接
-	 * 
+	 *
 	 * @param line 要处理的行
 	 * @param startPoint 该行在整个控制台输出中的起始位置
 	 * @return URL链接结果项列表，每个结果项包含超链接信息和位置
@@ -589,27 +582,28 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 			final String file = getFileFromUrl(url);
 
-		if (null != file && !FileUtils.quickExists(file)) {
-			continue;
-		}
-		TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
-		TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
-		results.add(
+            if (null != file && !FileUtils.quickExists(file)) {
+                continue;
+            }
+		    TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+		    TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		    results.add(
 				new Result(
-						startPoint + match.start,
-						startPoint + match.end,
-						new OpenUrlHyperlinkInfo(url),
-						hyperlinkAttributes, followedHyperlinkAttributes)
-		);
-	}
-	return results;
+                    startPoint + match.start,
+                    startPoint + match.end,
+					new OpenUrlHyperlinkInfo(url),
+					hyperlinkAttributes, followedHyperlinkAttributes
+                )
+		    );
+	    }
+	    return results;
 	}
 
 	/**
 	 * 从URL中提取文件路径
 	 * 处理 file:// 协议的 URL，将其转换为本地文件路径
 	 * 同时也处理已经是绝对路径的情况
-	 * 
+	 *
 	 * @param url URL字符串，可能是 file:// 协议或绝对路径
 	 * @return 文件路径，如果不是文件URL则返回null
 	 */
@@ -634,7 +628,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 处理各种路径格式：相对路径、绝对路径、包含 . 和 .. 的路径
 	 * 对于相对路径，会基于项目根目录进行解析
 	 * 同时处理 Windows 终端调整大小时可能出现的 \0 字符
-	 * 
+	 *
 	 * @param path 文件路径，可以是相对路径或绝对路径
 	 * @return File对象，如果路径无效（如 UNC 路径或解析失败）则返回null
 	 */
@@ -673,7 +667,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
 	 * 判断文件是否在项目外部
 	 * 通过比较文件的绝对路径与项目根路径来判断
-	 * 
+	 *
 	 * @param file 要判断的文件
 	 * @return 如果文件在项目外部则返回true，如果在项目内或无法判断则返回false
 	 */
@@ -702,7 +696,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 4. 支持完全限定类名的识别（如 com.example.MyClass）
 	 * 5. 应用忽略模式过滤不需要的路径
 	 * 6. 为忽略的路径添加占位符超链接（如果配置了忽略样式）
-	 * 
+	 *
 	 * @param line 要处理的行
 	 * @param startPoint 该行在整个控制台输出中的起始位置
 	 * @return 文件路径结果项列表，每个结果项包含超链接信息、位置和样式
@@ -749,23 +743,23 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				String filePath = file.getAbsolutePath();
 				// 检查文件是否存在（如果是符号链接，只要链接本身存在就会返回true）
 				final boolean exists = FileUtils.quickExists(filePath);
-			// 如果文件确实存在
-			if (exists) {
-				// 为存在的文件创建超链接信息对象（包含项目、文件路径、行号、列号）
-				final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
+			    // 如果文件确实存在
+			    if (exists) {
+				    // 为存在的文件创建超链接信息对象（包含项目、文件路径、行号、列号）
+				    final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
 						project, filePath, match.linkedRow, match.linkedCol
-				);
-				// 创建普通超链接的文本属性（蓝色下划线等）
-				TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
-				// 创建已访问超链接的文本属性（紫色等）
-				TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
-				// 添加文件超链接结果项
-				results.add(new Result(
+				    );
+				    // 创建普通超链接的文本属性（蓝色下划线等）
+				    TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+				    // 创建已访问超链接的文本属性（紫色等）
+				    TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+				    // 添加文件超链接结果项
+				    results.add(new Result(
 						startPoint + match.start, startPoint + match.end,
 						linkInfo, hyperlinkAttributes, followedHyperlinkAttributes
-				));
-				// 继续处理下一个匹配项
-				continue;
+				    ));
+				    // 继续处理下一个匹配项
+				    continue;
 				} else if (isExternal) {
 					// 如果文件不存在但是在项目外部，且不是Unix绝对路径
 					if (!isUnixAbsolutePath(matchPath)) {
@@ -827,21 +821,21 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				matchingFiles = bestMatchingFiles;
 			}
 
-		// 为多个匹配文件创建超链接信息对象（显示选择对话框）
-		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
+		    // 为多个匹配文件创建超链接信息对象（显示选择对话框）
+		    final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
 				project, matchingFiles, match.linkedRow, match.linkedCol
-		);
+		    );
 
-		// 创建普通超链接的文本属性
-		TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
-		// 创建已访问超链接的文本属性
-		TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
-		// 添加最终的超链接结果项
-		results.add(new Result(
+		    // 创建普通超链接的文本属性
+		    TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+		    // 创建已访问超链接的文本属性
+		    TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		    // 添加最终的超链接结果项
+		    results.add(new Result(
 				startPoint + match.start,
 				startPoint + match.end,
 				linkInfo, hyperlinkAttributes, followedHyperlinkAttributes)
-		);
+		    );
 		}
 
 		// 返回所有文件超链接结果项列表
@@ -852,7 +846,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 将绝对路径转换为相对于项目根目录的相对路径
 	 * 如果路径在项目根目录下，则移除项目根路径前缀
 	 * 否则返回原路径
-	 * 
+	 *
 	 * @param path 绝对路径
 	 * @return 相对于项目根目录的相对路径，如果不在项目内则返回原路径
 	 */
@@ -883,7 +877,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * - c/file.txt
 	 * - file.txt
 	 * 这样可以处理部分路径匹配的情况
-	 * 
+	 *
 	 * @param generalizedMatchPath 标准化后的匹配路径（使用正斜杠）
 	 * @param matchingFiles 候选文件列表
 	 * @return 最佳匹配的文件列表，如果没有匹配则返回null
@@ -912,7 +906,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 根据路径过滤文件列表
 	 * 从候选文件列表中筛选出路径以指定路径结尾的文件
 	 * 使用并行流提高处理性能
-	 * 
+	 *
 	 * @param generalizedMatchPath 标准化后的匹配路径（使用正斜杠）
 	 * @param matchingFiles 候选文件列表
 	 * @return 路径匹配的文件列表
@@ -921,16 +915,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	private List<VirtualFile> getFilesByPath(final String generalizedMatchPath, final List<VirtualFile> matchingFiles) {
 		// 使用并行流处理文件列表，提高性能
 		return matchingFiles.parallelStream()
-				// 过滤出路径以指定路径结尾的文件
-				.filter(file -> generalizePath(file.getPath()).endsWith(generalizedMatchPath))
-				// 收集为列表
-				.collect(Collectors.toList());
+			// 过滤出路径以指定路径结尾的文件
+			.filter(file -> generalizePath(file.getPath()).endsWith(generalizedMatchPath))
+			// 收集为列表
+			.collect(Collectors.toList());
 	}
 
 	/**
 	 * 从路径中移除最顶层目录
 	 * 例如："a/b/c" -> "b/c"
-	 * 
+	 *
 	 * @param path 路径，使用正斜杠分隔
 	 * @return 移除最顶层目录后的路径，如果没有更多层级（不包含斜杠）则返回null
 	 */
@@ -949,7 +943,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
 	 * 标准化路径，将反斜杠转换为正斜杠
 	 * 统一使用 Unix 风格的路径分隔符，便于跨平台处理
-	 * 
+	 *
 	 * @param path 路径，可能包含反斜杠（Windows风格）
 	 * @return 标准化后的路径，所有反斜杠都被替换为正斜杠
 	 */
@@ -964,7 +958,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 根据基础名搜索文件（用于完全限定类名）
 	 * 处理类似 "com.example.MyClass" 的完全限定类名
 	 * 从初始深度 0 开始搜索
-	 * 
+	 *
 	 * @param match 匹配字符串，通常是完全限定类名
 	 * @return 匹配的文件列表
 	 */
@@ -980,7 +974,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 将完全限定类名拆分为包路径和类名，在源代码根目录下查找匹配的文件
 	 * 例如："com.example.MyClass" -> 查找 "src/com/example/MyClass.java"
 	 * 如果找不到，会递归地尝试更短的类名（深度限制为 maxSearchDepth）
-	 * 
+	 *
 	 * @param match 匹配字符串，通常是完全限定类名（用点分隔）
 	 * @param depth 当前搜索深度，用于限制递归次数
 	 * @return 匹配的文件列表，如果没有找到则返回空列表
@@ -1006,15 +1000,15 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		}
 
 		return fileBaseCache.get(basename).parallelStream()
-				.filter(file -> null != file.getParent())
-				.filter(file -> matchSource(file.getParent().getPath(), path))
-				.collect(Collectors.toList());
+			.filter(file -> null != file.getParent())
+			.filter(file -> matchSource(file.getParent().getPath(), path))
+			.collect(Collectors.toList());
 	}
 
 	/**
 	 * 通知用户
 	 * 显示一个带有操作按钮的通知，用户可以点击按钮手动重新加载文件缓存
-	 * 
+	 *
 	 * @param title 通知标题
 	 * @param message 通知消息
 	 */
@@ -1023,14 +1017,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	private void notifyUser(@NotNull String title, @NotNull String message) {
 		// 调用 Notifier 工具类显示通知
 		Notifier.notify(
-				// 项目实例
-				project, 
-				// 通知标题
-				title, 
-				// 通知消息
-				message,
-				// 创建一个简单的通知操作，标签为 "Reload file cache"，点击时手动重新加载缓存
-				NotificationAction.createSimple("Reload file cache", () -> reloadFileCache("manual"))
+			// 项目实例
+			project,
+			// 通知标题
+			title,
+			// 通知消息
+			message,
+			// 创建一个简单的通知操作，标签为 "Reload file cache"，点击时手动重新加载缓存
+			NotificationAction.createSimple("Reload file cache", () -> reloadFileCache("manual"))
 		);
 	}
 
@@ -1038,7 +1032,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 重新加载文件缓存
 	 * 清空现有缓存并重新遍历项目文件，构建文件名和基础名的索引
 	 * 使用写锁确保线程安全
-	 * 
+	 *
 	 * @param reason 重新加载的原因，用于日志记录和通知（如 "open project"、"indices are updated"、"manual"）
 	 */
 	private void reloadFileCache(String reason) {
@@ -1047,7 +1041,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 
 	/**
 	 * 重建文件缓存（带进度回调）
-	 * 
+	 *
 	 * @param reason 重建原因
 	 * @param progressCallback 进度回调函数，参数为已处理的文件数
 	 */
@@ -1058,10 +1052,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			srcRoots = getSourceRoots();
 			fileCache.clear();
 			fileBaseCache.clear();
-			
+
 			// 重置忽略文件计数
 			ignoredFilesCount = 0;
-			
+
 			// 如果有进度回调，使用带进度的迭代器
 			if (progressCallback != null) {
 				AwesomeProjectFilesIterator progressIterator = new AwesomeProjectFilesIterator(fileCache, fileBaseCache) {
@@ -1069,24 +1063,24 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 					private int localIgnoredCount = 0;
 					private long lastCallbackTime = 0;
 					private static final long CALLBACK_INTERVAL_MS = 50; // 50ms间隔，提高刷新频率
-					
+
 					@Override
 					public boolean processFile(VirtualFile fileOrDir) {
 						boolean result = super.processFile(fileOrDir);
 						if (!fileOrDir.isDirectory()) {
 							processedCount++;
-							
+
 							// 检查文件是否应该被忽略（如果启用了忽略模式）
 							if (config.useIgnorePattern) {
 								String fileName = fileOrDir.getName();
 								String filePath = fileOrDir.getPath();
-								
+
 								// 检查文件名和路径是否匹配忽略模式
 								if (shouldIgnore(fileName) || shouldIgnore(filePath)) {
 									localIgnoredCount++;
 								}
 							}
-							
+
 							long currentTime = System.currentTimeMillis();
 							// 每5个文件或每50ms调用一次回调，提高进度更新频率
 							if (processedCount % 5 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
@@ -1107,14 +1101,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 				if (config.useIgnorePattern) {
 					AwesomeProjectFilesIterator countingIterator = new AwesomeProjectFilesIterator(fileCache, fileBaseCache) {
 						private int localIgnoredCount = 0;
-						
+
 						@Override
 						public boolean processFile(VirtualFile fileOrDir) {
 							boolean result = super.processFile(fileOrDir);
 							if (!fileOrDir.isDirectory()) {
 								String fileName = fileOrDir.getName();
 								String filePath = fileOrDir.getPath();
-								
+
 								// 检查文件名和路径是否匹配忽略模式
 								if (shouldIgnore(fileName) || shouldIgnore(filePath)) {
 									localIgnoredCount++;
@@ -1130,26 +1124,24 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 					projectRootManager.getFileIndex().iterateContent(indexIterator);
 				}
 			}
-			
-			String state = cacheInitialized ? "reload" : "init";
-			if (!cacheInitialized || config.DEBUG_MODE) {
-				String notificationMessage = String.format("fileCache[%d], fileBaseCache[%d]", fileCache.size(), fileBaseCache.size());
-				if (config.useIgnorePattern && ignoredFilesCount > 0) {
-					notificationMessage += String.format(", ignored[%d]", ignoredFilesCount);
-				}
-				notifyUser(
-						String.format("%s file cache ( %s )", state, reason),
-						notificationMessage
-				);
+
+		String state = cacheInitialized ? "reload" : "init";
+		if (!cacheInitialized) {
+			String notificationMessage = String.format("fileCache[%d], fileBaseCache[%d]", fileCache.size(), fileBaseCache.size());
+			if (config.useIgnorePattern && ignoredFilesCount > 0) {
+				notificationMessage += String.format(", ignored[%d]", ignoredFilesCount);
 			}
-			if (!cacheInitialized) {
-				cacheInitialized = true;
-			}
-			
+			notifyUser(
+					String.format("%s file cache ( %s )", state, reason),
+					notificationMessage
+			);
+			cacheInitialized = true;
+		}
+
 			// 记录重建时间和耗时
 			lastRebuildTime = System.currentTimeMillis();
 			lastRebuildDuration = lastRebuildTime - startTime;
-			
+
 			String logMessage = String.format(
 					"project[%s]: %s file cache ( %s ): fileCache[%d], fileBaseCache[%d], duration[%dms]",
 					project.getName(), state, reason, fileCache.size(), fileBaseCache.size(), lastRebuildDuration
@@ -1168,7 +1160,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 在项目打开时初始化文件缓存，并设置以下监听器：
 	 * 1. DumbMode 监听器：当索引更新完成后重新加载缓存
 	 * 2. VFS 监听器：监听文件的创建、删除、移动、重命名等事件，增量更新缓存
-	 * 
+	 *
 	 * 这样可以确保缓存始终与项目文件系统保持同步
 	 */
 	private void createFileCache() {
@@ -1246,7 +1238,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 判断文件是否在项目内容中
 	 * 对于删除操作，由于文件可能已经无效，使用路径前缀匹配
 	 * 对于其他操作，使用 ProjectFileIndex 进行判断
-	 * 
+	 *
 	 * @param file 要判断的文件
 	 * @param isDelete 是否为删除操作
 	 * @return 如果文件在项目内容中则返回true
@@ -1276,7 +1268,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	/**
 	 * 获取项目的源代码根目录列表
 	 * 包括所有配置的源代码根目录（如 src/main/java、src/test/java 等）
-	 * 
+	 *
 	 * @return 源代码根目录路径列表
 	 */
 	// 定义私有方法，获取项目的源代码根目录列表
@@ -1291,7 +1283,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 匹配源代码目录
 	 * 检查给定的父目录路径是否与某个源代码根目录加上相对路径匹配
 	 * 用于完全限定类名的文件查找
-	 * 
+	 *
 	 * @param parent 父目录路径
 	 * @param path 相对路径（通常是包路径）
 	 * @return 如果匹配则返回true
@@ -1315,7 +1307,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 检查字符串是否以某个字符开始并以对应的字符结束
 	 * 支持不完整的包围（只有开始或只有结束）
 	 * 通过 offsets 数组返回需要移除的左右偏移量
-	 * 
+	 *
 	 * @param s 要判断的字符串
 	 * @param pairs 成对字符数组，每个元素是两个字符的字符串（如 "()"、"[]"、"''"）
 	 * @param offsets 输出参数，返回左右偏移量 [左偏移, 右偏移]
@@ -1371,9 +1363,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	 * 4. 带行号和列号的路径
 	 * 5. file: 和 jar: 协议的路径
 	 * 6. 用户主目录路径（~）
-	 * 
+	 *
 	 * 同时处理路径周围的括号、引号等包围字符
-	 * 
+	 *
 	 * @param line 要检测的行
 	 * @return 文件路径匹配结果列表，包含匹配的路径、位置、行号、列号等信息
 	 */
@@ -1388,12 +1380,11 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 
 		// 准备过滤器，初始化自定义匹配器和忽略匹配器
 		prepareFilter();
-		
+
 		// 预处理：根据配置决定是否移除ANSI转义序列
 		line = preprocessLine(line);
-		
-		final Matcher fileMatcherConfig = this.fileMatcherConfig.get();
-		final Matcher fileMatcher = config.useFilePattern && null != fileMatcherConfig ? fileMatcherConfig : this.fileMatcher.get();
+
+		final Matcher fileMatcher = this.fileMatcher.get();
 		fileMatcher.reset(line);
 		while (fileMatcher.find()) {
 			String match = RegexUtils.tryMatchGroup(fileMatcher, "link");
@@ -1449,13 +1440,13 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 				match = match.substring(offsets[0], match.length() - offsets[1]);
 			}
 			int[] groupRange = RegexUtils.tryGetGroupRange(fileMatcher, "link");
-			
+
 			// 在处理完 match 后，检查是否应该被忽略
 			// 先检查 ignorePattern，再检查其他忽略条件（省略号、反斜杠、句子末尾点号等）
 			if (shouldIgnore(match) || shouldIgnoreMatch(line, new FileLinkMatch(match, decodeDwc(path), groupRange[0] + offsets[0], groupRange[1] - offsets[1], row, col))) {
 				continue;
 			}
-			
+
 			results.add(new FileLinkMatch(
 					match, decodeDwc(path),
 					groupRange[0] + offsets[0],
@@ -1463,7 +1454,7 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 					row, col
 			));
 		}
-		
+
 		return results;
 	}
 
@@ -1475,9 +1466,9 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 	 * - git
 	 * - file
 	 * - jar
-	 * 
+	 *
 	 * 同时处理 URL 周围的括号、引号等包围字符
-	 * 
+	 *
 	 * @param line 要检测的行
 	 * @return URL链接匹配结果列表，包含匹配的 URL 和位置信息
 	 */
@@ -1491,7 +1482,7 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 
 		// 预处理：根据配置决定是否移除ANSI转义序列
 		line = preprocessLine(line);
-		
+
 		final Matcher urlMatcher = this.urlMatcher.get();
 		urlMatcher.reset(line);
 		final List<URLLinkMatch> results = new LinkedList<>();
@@ -1528,7 +1519,7 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 	 * 判断是否应该忽略该匹配
 	 * 根据用户配置的忽略模式（正则表达式）判断是否应该忽略某个匹配
 	 * 可用于过滤不需要高亮的路径或 URL
-	 * 
+	 *
 	 * @param match 匹配字符串（文件路径或 URL）
 	 * @return 如果应该忽略则返回true
 	 */
@@ -1553,41 +1544,41 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 		String match = fileLinkMatch.match;
 		int startPos = fileLinkMatch.start;
 		int endPos = fileLinkMatch.end;
-		
+
 		// 检查是否只包含点号
 		boolean isOnlyDots = ONLY_DOTS_PATTERN.matcher(match).matches();
-		
+
 		// 检查是否只包含反斜杠
 		boolean isOnlyBackslashes = ONLY_BACKSLASHES_PATTERN.matcher(match).matches();
-		
+
 		// 如果是反斜杠，直接忽略
 		if (isOnlyBackslashes) {
 			return true;
 		}
-		
+
 		// 如果不是点号，检查是否是单词后紧跟点号的情况
 		if (!isOnlyDots) {
 			return isWordFollowedByDot(line, match, endPos);
 		}
-		
+
 		// 以下处理只包含点号的情况
-		
+
 		// 检查是否是省略号（前面有字母）
 		if (isEllipsisAfterLetter(line, match, startPos)) {
 			return true;
 		}
-		
+
 		// 检查是否是句子末尾的点号
 		if (match.equals(".") && isDotAtSentenceEnd(line, startPos, endPos)) {
 			return true;
 		}
-		
+
 		return false;
 	}
-	
+
 	/**
 	 * 检查是否是单词后紧跟点号的情况（如 "word."）
-	 * 
+	 *
 	 * @param line 完整的行
 	 * @param match 匹配的字符串
 	 * @param endPos 匹配结束位置
@@ -1600,18 +1591,18 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 			boolean nextIsWhitespaceOrEnd = isNextCharWhitespaceOrEnd(line, endPos + 1);
 			// 检查匹配项是否只包含字母（纯单词）
 			boolean isOnlyLetters = ONLY_LETTERS_PATTERN.matcher(match).matches();
-			
+
 			return nextIsWhitespaceOrEnd && isOnlyLetters;
 		}
 		return false;
 	}
-	
+
 	/**
 	 * 检查是否是省略号（前面有字母）
 	 * 包括两种情况：
 	 * 1. "Building." + ".." （前面有字母+点号）
 	 * 2. "Building.." （前面直接是字母）
-	 * 
+	 *
 	 * @param line 完整的行
 	 * @param match 匹配的字符串（只包含点号）
 	 * @param startPos 匹配开始位置
@@ -1622,17 +1613,17 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 		if (match.length() < 2) {
 			return false;
 		}
-		
+
 		// 检查前面是否有字母+点号的模式（如 "Building." + ".."）
 		if (startPos >= 2) {
 			char prevChar1 = line.charAt(startPos - 1);  // 紧前面的字符
 			char prevChar2 = line.charAt(startPos - 2);  // 再前面的字符
-			
+
 			if (prevChar1 == '.' && Character.isLetter(prevChar2)) {
 				return true;
 			}
 		}
-		
+
 		// 检查直接前面是字母的情况（省略号：如 "Building.."）
 		if (startPos > 0) {
 			char prevChar = line.charAt(startPos - 1);
@@ -1640,14 +1631,14 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 				return true;
 			}
 		}
-		
+
 		return false;
 	}
-	
+
 	/**
 	 * 检查是否是句子末尾的点号
 	 * 如果前面是字母、数字或右括号，且后面是空白字符或行尾，则认为是句子末尾
-	 * 
+	 *
 	 * @param line 完整的行
 	 * @param startPos 匹配开始位置
 	 * @param endPos 匹配结束位置
@@ -1657,16 +1648,16 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 		if (startPos <= 0) {
 			return false;
 		}
-		
+
 		char prevChar = line.charAt(startPos - 1);
 		boolean nextIsWhitespaceOrEnd = isNextCharWhitespaceOrEnd(line, endPos);
-		
+
 		return (Character.isLetterOrDigit(prevChar) || prevChar == ')') && nextIsWhitespaceOrEnd;
 	}
-	
+
 	/**
 	 * 检查指定位置的下一个字符是否是空白字符或已到达行尾
-	 * 
+	 *
 	 * @param line 完整的行
 	 * @param pos 要检查的位置
 	 * @return 如果是空白字符或行尾则返回true
@@ -1771,7 +1762,7 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 			cacheReadLock.unlock();
 		}
 	}
-	
+
 	/**
 	 * 获取忽略的文件数量
 	 * @return 忽略的文件数量
@@ -1790,8 +1781,8 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 		private final int ignoredFiles;
 		private final long lastRebuildTime;
 		private final long lastRebuildDuration;
-		
-		public IndexStatistics(int fileCacheSize, int fileBaseCacheSize, 
+
+		public IndexStatistics(int fileCacheSize, int fileBaseCacheSize,
 						  int totalFiles, int ignoredFiles, long lastRebuildTime, long lastRebuildDuration) {
 			this.fileCacheSize = fileCacheSize;
 			this.fileBaseCacheSize = fileBaseCacheSize;
@@ -1800,14 +1791,14 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 			this.lastRebuildTime = lastRebuildTime;
 			this.lastRebuildDuration = lastRebuildDuration;
 		}
-		
+
 		public int getFileCacheSize() { return fileCacheSize; }
 		public int getFileBaseCacheSize() { return fileBaseCacheSize; }
 		public int getTotalFiles() { return totalFiles; }
 		public int getIgnoredFiles() { return ignoredFiles; }
 		public long getLastRebuildTime() { return lastRebuildTime; }
 		public long getLastRebuildDuration() { return lastRebuildDuration; }
-		
+
 		/**
 		 * 获取匹配的文件数量（总文件数减去忽略的文件数）
 		 * @return 匹配的文件数量
@@ -1815,7 +1806,7 @@ public List<FileLinkMatch> detectPaths(@NotNull String line) {
 		public int getMatchedFiles() {
 			return Math.max(0, totalFiles - ignoredFiles);
 		}
-		
+
 		/**
 		 * 检查是否启用了忽略模式
 		 * @return 如果有忽略文件统计则表示启用了忽略模式
