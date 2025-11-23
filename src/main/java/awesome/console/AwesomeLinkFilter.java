@@ -1405,17 +1405,22 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			}
 
 		    // 提取协议部分（如 file:、jar:file: 等）
+		    // RegexUtils.tryMatchGroup 会依次尝试 protocol、protocol1、protocol2 等捕获组
+		    // 这样可以正确处理 FILE_PATTERN 中多个路径匹配选项（REGEX_PATH_WITH_SPACE、REGEX_PATH）的情况
 		    String protocol = RegexUtils.tryMatchGroup(fileMatcher, "protocol");
             if (null != protocol) {
-                // fixme: 正则表达式捕获组的特殊行为
-                // 与组关联的捕获输入始终是该组最近匹配的子序列
-                // 如果由于量词导致组被第二次评估，则如果第二次评估失败，将保留其先前捕获的值（如果有）
-                // 例如：将字符串 "aba" 与表达式 (a(b)?)+ 匹配，会将第二组设置为 "b"
-                // 所有捕获的输入在每次匹配开始时都会被丢弃
-                // 例如：`file:` -> match == `e` , protocol == 'le:'
-                // 因此需要验证 protocol 是否真的在 match 的开头
+                // 防御性验证：确保提取的 protocol 确实在匹配内容的开头
+                // 这是一个额外的安全检查，防止正则表达式引擎在特殊情况下返回错误的捕获组值
+                // 
+                // 背景：Java 正则表达式的捕获组在使用量词（如 +、*）时有特殊行为：
+                // - 捕获组保留的是最近一次成功匹配的子序列
+                // - 如果量词导致组被多次评估，失败的评估会保留之前的捕获值
+                // - 例如：字符串 "aba" 匹配表达式 (a(b)?)+ 时，第二组会被设置为 "b"
+                // 
+                // 虽然 tryMatchGroup 的重试机制（protocol -> protocol1 -> protocol2）已经解决了主要问题，
+                // 但这个验证步骤作为防御性编程措施，可以捕获任何意外情况
                 if (!match.startsWith(protocol)) {
-                    // 如果 protocol 不在 match 开头，说明是错误捕获，将其置为 null
+                    // 如果 protocol 不在 match 开头，说明是异常捕获，将其置为 null
                     protocol = null;
                 }
             }
