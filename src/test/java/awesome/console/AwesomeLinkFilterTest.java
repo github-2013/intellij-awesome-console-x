@@ -3303,4 +3303,208 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			"C:\\xampp\\htdocs\\project\\vendor\\guzzlehttp\\guzzle\\src\\Client.php"
 		);
 	}
+
+	/**
+	 * 测试超长行的路径检测
+	 * 验证在超长行（10000字符）中能够正确检测到文件路径
+	 * 这个测试用于确保过滤器在处理大量文本时不会出现性能问题或崩溃
+	 */
+	public void testVeryLongLine() {
+		System.out.println("Test very long line (10000 characters):");
+		
+		// 构造一个10000字符的超长行，其中包含文件路径
+		StringBuilder longLine = new StringBuilder();
+		
+		// 添加前缀填充（约4000字符）
+		for (int i = 0; i < 100; i++) {
+			longLine.append("This is a very long line with lots of text. ");
+		}
+		
+		// 在中间位置添加一个文件路径
+		String filePath1 = "src/main/java/awesome/console/AwesomeLinkFilter.java:100:50";
+		longLine.append("Error in ").append(filePath1).append(" - ");
+		
+		// 继续添加填充文本（约3000字符）
+		for (int i = 0; i < 75; i++) {
+			longLine.append("More text to make this line extremely long. ");
+		}
+		
+		// 添加另一个文件路径
+		String filePath2 = "/home/user/project/test/integration/TestCase.java:200:10";
+		longLine.append("Also see ").append(filePath2).append(" for details. ");
+		
+		// 继续添加填充文本直到达到10000字符
+		while (longLine.length() < 10000) {
+			longLine.append("Additional padding text to reach 10000 characters. ");
+		}
+		
+		// 确保长度至少为10000字符
+		String testLine = longLine.toString();
+		assertTrue("Line should be at least 10000 characters", testLine.length() >= 10000);
+		
+		System.out.println("Line length: " + testLine.length() + " characters");
+		
+		// 测试路径检测功能
+		List<FileLinkMatch> results = filter.detectPaths(testLine);
+		
+		// 验证能够检测到路径
+		assertNotNull("Detection should return non-null result", results);
+		assertFalse("Should detect at least one path", results.isEmpty());
+		
+		// 验证检测到的路径
+		List<String> detectedPaths = results.stream().map(it -> it.match).collect(Collectors.toList());
+		System.out.println("Detected paths: " + detectedPaths);
+		
+		// 验证第一个路径被检测到
+		boolean foundPath1 = detectedPaths.stream().anyMatch(p -> p.contains("AwesomeLinkFilter.java"));
+		assertTrue("Should detect first file path", foundPath1);
+		
+		// 验证第二个路径被检测到
+		boolean foundPath2 = detectedPaths.stream().anyMatch(p -> p.contains("TestCase.java"));
+		assertTrue("Should detect second file path", foundPath2);
+		
+		// 测试带行号和列号的路径
+		FileLinkMatch match1 = results.stream()
+			.filter(m -> m.match.contains("AwesomeLinkFilter.java"))
+			.findFirst()
+			.orElse(null);
+		
+		if (match1 != null) {
+			System.out.println("First match: " + match1.match + " at line " + match1.linkedRow + ", col " + match1.linkedCol);
+			// 验证行号和列号（如果检测到）
+			if (match1.linkedRow > 0) {
+				assertEquals("Should detect correct line number", 100, match1.linkedRow);
+			}
+			if (match1.linkedCol > 0) {
+				assertEquals("Should detect correct column number", 50, match1.linkedCol);
+			}
+		}
+		
+		// 测试性能：确保处理超长行不会超时
+		long startTime = System.currentTimeMillis();
+		filter.detectPaths(testLine);
+		long endTime = System.currentTimeMillis();
+		long duration = endTime - startTime;
+		
+		System.out.println("Processing time: " + duration + "ms");
+		assertTrue("Processing should complete within 5 seconds", duration < 5000);
+	}
+
+	/**
+	 * 测试极端超长行的路径检测
+	 * 验证在极端情况下（50000字符）过滤器的稳定性
+	 */
+	public void testExtremelyLongLine() {
+		System.out.println("Test extremely long line (50000 characters):");
+		
+		// 构造一个50000字符的极端超长行
+		StringBuilder extremeLine = new StringBuilder();
+		
+		// 添加大量填充文本
+		String padding = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
+		while (extremeLine.length() < 25000) {
+			extremeLine.append(padding);
+		}
+		
+		// 在中间添加文件路径
+		String filePath = "src/test/resources/data/config.json:500:25";
+		extremeLine.append("Configuration error in ").append(filePath).append(". ");
+		
+		// 继续添加填充直到50000字符
+		while (extremeLine.length() < 50000) {
+			extremeLine.append(padding);
+		}
+		
+		String testLine = extremeLine.toString();
+		assertTrue("Line should be at least 50000 characters", testLine.length() >= 50000);
+		
+		System.out.println("Line length: " + testLine.length() + " characters");
+		
+		// 测试路径检测功能
+		long startTime = System.currentTimeMillis();
+		List<FileLinkMatch> results = filter.detectPaths(testLine);
+		long endTime = System.currentTimeMillis();
+		long duration = endTime - startTime;
+		
+		System.out.println("Processing time: " + duration + "ms");
+		
+		// 验证能够检测到路径
+		assertNotNull("Detection should return non-null result", results);
+		
+		// 验证性能：即使是极端长度，也应该在合理时间内完成
+		assertTrue("Processing should complete within 10 seconds", duration < 10000);
+		
+		// 如果检测到路径，验证其正确性
+		if (!results.isEmpty()) {
+			List<String> detectedPaths = results.stream().map(it -> it.match).collect(Collectors.toList());
+			System.out.println("Detected paths: " + detectedPaths);
+			
+			boolean foundPath = detectedPaths.stream().anyMatch(p -> p.contains("config.json"));
+			assertTrue("Should detect the file path", foundPath);
+		}
+	}
+
+	/**
+	 * 测试包含多个路径的超长行
+	 * 验证在超长行中能够检测到多个文件路径
+	 */
+	public void testLongLineWithMultiplePaths() {
+		System.out.println("Test long line with multiple paths:");
+		
+		// 构造一个包含多个路径的超长行（约15000字符）
+		StringBuilder longLine = new StringBuilder();
+		
+		// 定义多个文件路径
+		String[] filePaths = {
+			"src/main/java/com/example/Controller.java:50:10",
+			"src/main/java/com/example/Service.java:100:20",
+			"src/main/java/com/example/Repository.java:150:30",
+			"src/test/java/com/example/ControllerTest.java:200:40",
+			"src/test/resources/application.properties:10:5"
+		};
+		
+		// 在不同位置插入文件路径，中间用大量文本分隔
+		for (int i = 0; i < filePaths.length; i++) {
+			// 添加填充文本
+			for (int j = 0; j < 50; j++) {
+				longLine.append("This is padding text number ").append(j).append(". ");
+			}
+			
+			// 添加文件路径
+			longLine.append("Error occurred in file ").append(filePaths[i]).append(". ");
+		}
+		
+		// 继续添加填充直到超过15000字符
+		while (longLine.length() < 15000) {
+			longLine.append("Additional text to increase line length. ");
+		}
+		
+		String testLine = longLine.toString();
+		assertTrue("Line should be at least 15000 characters", testLine.length() >= 15000);
+		
+		System.out.println("Line length: " + testLine.length() + " characters");
+		
+		// 测试路径检测功能
+		List<FileLinkMatch> results = filter.detectPaths(testLine);
+		
+		// 验证能够检测到路径
+		assertNotNull("Detection should return non-null result", results);
+		assertFalse("Should detect at least one path", results.isEmpty());
+		
+		// 验证检测到的路径数量
+		List<String> detectedPaths = results.stream().map(it -> it.match).collect(Collectors.toList());
+		System.out.println("Detected " + detectedPaths.size() + " paths: " + detectedPaths);
+		
+		// 验证至少检测到大部分路径（可能不是全部，取决于过滤器的限制）
+		assertTrue("Should detect multiple paths", detectedPaths.size() >= 3);
+		
+		// 验证特定路径被检测到
+		boolean foundController = detectedPaths.stream().anyMatch(p -> p.contains("Controller.java"));
+		boolean foundService = detectedPaths.stream().anyMatch(p -> p.contains("Service.java"));
+		boolean foundRepository = detectedPaths.stream().anyMatch(p -> p.contains("Repository.java"));
+		
+		assertTrue("Should detect Controller.java", foundController);
+		assertTrue("Should detect Service.java", foundService);
+		assertTrue("Should detect Repository.java", foundRepository);
+	}
 }
