@@ -15,6 +15,11 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+		    <b>0.1337.32</b><br/>
+        	<ul>
+        		<li>Optimized protocol extraction logic with improved code comments</li>
+        		<li>Refined URL protocol detection and path matching algorithms</li>
+        	</ul>
         	<b>0.1337.31</b><br/>
         	<ul>
         		<li>Removed debug mode configuration option to simplify settings</li>

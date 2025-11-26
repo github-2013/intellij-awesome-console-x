@@ -360,7 +360,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	@Override
 	// 定义公共方法 applyFilter，这是过滤器的核心方法，处理控制台输出的每一行
 	public Result applyFilter(@NotNull final String line, final int endPoint) {
-		// 使用 try-catch 块捕获所有异常，避免过滤器崩溃导致控制台无法正常工作
+		// 使用 try-catch 块捕获业务异常，避免过滤器崩溃导致控制台无法正常工作
+		// 注意：只捕获 Exception，让严重错误（OutOfMemoryError、StackOverflowError 等）能够正常抛出
 		try {
 			// 判断是否应该对该行应用过滤器（检查是否为堆栈跟踪行，以及是否启用了文件或URL搜索）
 			if (!shouldFilter(line)) {
@@ -369,39 +370,90 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 			}
 
 			// 准备过滤器，初始化自定义匹配器和忽略匹配器
-			prepareFilter();
+			try {
+				prepareFilter();
+			} catch (Exception e) {
+				logger.error("Error while preparing filter for line: " + truncateLine(line), e);
+				return null;
+			}
 
 			// 创建结果列表，用于存储所有匹配的超链接
 			final List<ResultItem> results = new ArrayList<>();
 			// 计算该行在整个控制台输出中的起始位置
 			final int startPoint = endPoint - line.length();
+			
 			// 根据配置的最大行长度分割行（如果行过长）
-			final List<String> chunks = splitLine(line);
+			final List<String> chunks;
+			try {
+				chunks = splitLine(line);
+			} catch (Exception e) {
+				logger.error("Error while splitting line (length=" + line.length() + "): " + truncateLine(line), e);
+				return null;
+			}
+			
 			// 初始化偏移量，用于跟踪当前处理的块在原始行中的位置
 			int offset = 0;
 
 			// 遍历所有分割后的块
-			for (final String chunk : chunks) {
+			for (int i = 0; i < chunks.size(); i++) {
+				final String chunk = chunks.get(i);
+				
 				// 如果启用了文件搜索，提取文件路径并生成超链接
 				if (config.searchFiles) {
-					results.addAll(getResultItemsFile(chunk, startPoint + offset));
+					try {
+						results.addAll(getResultItemsFile(chunk, startPoint + offset));
+					} catch (Exception e) {
+						logger.error(String.format(
+							"Error while processing file links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
+							i + 1, chunks.size(), offset, chunk.length(), truncateLine(chunk)
+						), e);
+						// 继续处理其他块，不中断整个过滤流程
+					}
 				}
+				
 				// 如果启用了URL搜索，提取URL并生成超链接
 				if (config.searchUrls) {
-					results.addAll(getResultItemsUrl(chunk, startPoint + offset));
+					try {
+						results.addAll(getResultItemsUrl(chunk, startPoint + offset));
+					} catch (Exception e) {
+						logger.error(String.format(
+							"Error while processing URL links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
+							i + 1, chunks.size(), offset, chunk.length(), truncateLine(chunk)
+						), e);
+						// 继续处理其他块，不中断整个过滤流程
+					}
 				}
+				
 				// 更新偏移量，移动到下一个块
 				offset += chunk.length();
 			}
 
 			// 返回包含所有匹配结果的 Result 对象
 			return new Result(results);
-		} catch (Throwable t) {
-			// avoid crash - 捕获所有异常，记录错误日志但不抛出，避免过滤器崩溃
-			logger.error("Error while applying " + this + " to '" + line + "'", t);
+		} catch (Exception e) {
+			// 捕获未预期的业务异常，记录详细错误日志但不抛出，避免过滤器崩溃
+			logger.error(String.format(
+				"Unexpected error in applyFilter (endPoint=%d, lineLength=%d): %s",
+				endPoint, line.length(), truncateLine(line)
+			), e);
 		}
 		// 如果发生异常，返回 null
 		return null;
+	}
+
+	/**
+	 * 截断行内容用于日志输出
+	 * 避免日志中输出过长的行内容
+	 *
+	 * @param line 原始行内容
+	 * @return 截断后的行内容（最多100个字符）
+	 */
+	private String truncateLine(@NotNull final String line) {
+		final int maxLength = 100;
+		if (line.length() <= maxLength) {
+			return line;
+		}
+		return line.substring(0, maxLength) + "... (truncated, total length: " + line.length() + ")";
 	}
 
 	/**
