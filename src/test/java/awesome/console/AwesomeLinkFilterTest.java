@@ -760,6 +760,26 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		file = "jar:https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-stdlib-common/1.9.23/kotlin-stdlib-common-1.9.23.jar";
 		assertURLDetection("Remote Jar File: " + file, file);
 
+
+		// 测试 jar:http:// 协议（HTTP Maven 仓库）
+		file = "jar:http://repo1.maven.org/maven2/commons-lang/commons-lang/2.6/commons-lang-2.6.jar!/org/apache/commons/lang/StringUtils.class";
+		assertURLDetection("HTTP Jar File: " + file, file);
+
+		// 测试 jar:https:// 协议（带内部路径）
+		file = "jar:https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.12.0/commons-lang3-3.12.0.jar!/org/apache/commons/lang3/StringUtils.class";
+		assertURLDetection("HTTPS Jar File with entry: " + file, file);
+
+		// 测试 jar:///path 格式（隐式 file 协议，三斜杠）
+		desc = "Implicit file protocol (triple slash): ";
+		for (final String path : new String[]{JAVA_HOME + "/lib/src.zip!/java.base/java/io/File.java"}) {
+			assertSimplePathDetection(desc, "jar:///" + path);
+		}
+
+		// 测试 jar:/path 格式（隐式 file 协议，单斜杠）
+		desc = "Implicit file protocol (single slash): ";
+		for (final String path : new String[]{JAVA_HOME + "/lib/src.zip!/java.base/java/lang/String.java"}) {
+			assertSimplePathDetection(desc, "jar:/" + path);
+		}
 		// `!/xxx` is an invalid Jar URL, but is a legal path. Check if the file exists.
 		desc = "Invalid Jar URL: ";
 		assertSimplePathDetection(desc, "gradle/wrapper/!/org/gradle/cli/CommandLineOption.class");
