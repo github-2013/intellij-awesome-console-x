@@ -72,7 +72,7 @@ public class HyperlinkUtils {
                     return buildMultipleFilesHyperlinkInfo(project, List.of(virtualFile), row, col, false);
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
         }
 
         return new SingleFileFileHyperlinkInfo(project, filePath, row, col, () -> config.resolveSymlink);
@@ -155,7 +155,7 @@ public class HyperlinkUtils {
             TextAttributes attr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.INACTIVE_HYPERLINK_ATTRIBUTES).clone();
             attr.setEffectType(EffectType.SEARCH_MATCH);
             return attr;
-        } catch (Throwable e) {
+        } catch (Exception e) {
             return null;
         }
     }
@@ -169,7 +169,7 @@ public class HyperlinkUtils {
     public static TextAttributes createHyperlinkAttributes() {
         try {
             return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
-        } catch (Throwable e) {
+        } catch (Exception e) {
             return null;
         }
     }
@@ -183,7 +183,7 @@ public class HyperlinkUtils {
     public static TextAttributes createFollowedHyperlinkAttributes() {
         try {
             return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES);
-        } catch (Throwable e) {
+        } catch (Exception e) {
             return null;
         }
     }

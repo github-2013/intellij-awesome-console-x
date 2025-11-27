@@ -64,7 +64,7 @@ public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase impleme
                 return null;
             }
             return RelativePoint.getCenterOf(rootPane);
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
         }
         return null;
     }

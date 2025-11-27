@@ -24,6 +24,7 @@ import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.openapi.project.DumbAware;
 import com.intellij.openapi.project.DumbService;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.Disposable;
 import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -63,8 +64,8 @@ import java.util.stream.Collectors;
  * 4. 支持完全限定类名的识别
  * 5. 支持自定义忽略模式
  * */
-// 定义公共类 AwesomeLinkFilter，实现 Filter 接口（控制台过滤器）和 DumbAware 接口（支持在索引更新期间运行）
-public class AwesomeLinkFilter implements Filter, DumbAware {
+// 定义公共类 AwesomeLinkFilter，实现 Filter 接口（控制台过滤器）、DumbAware 接口（支持在索引更新期间运行）和 Disposable 接口（资源管理）
+public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 	/**
 	 * 日志记录器
 	 * 声明私有静态final日志记录器，用于记录此类的调试和错误信息
@@ -322,6 +323,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	// 声明公共final线程本地变量，标记当前线程是否在终端环境中运行
 	// 终端和控制台视图的行为有所不同，需要区别处理，默认为 false
 	public final ThreadLocal<Boolean> isTerminal = ThreadLocal.withInitial(() -> false);
+
+	/** MessageBus 连接，用于订阅项目事件 */
+	// 声明私有volatile成员变量，存储 MessageBus 连接的引用
+	// 使用 volatile 确保多线程可见性，在 dispose() 时需要断开连接
+	private volatile MessageBusConnection messageBusConnection;
 
 	/**
 	 * 构造 AwesomeLinkFilter 实例
@@ -1229,10 +1235,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 	private void createFileCache() {
 		reloadFileCache("open project");
 
-		MessageBusConnection connection = project.getMessageBus().connect();
+		// 创建 MessageBus 连接并传入 this 作为父 Disposable，确保在 dispose() 时自动断开连接
+		messageBusConnection = project.getMessageBus().connect(this);
 
 		// 订阅 DumbMode 事件
-		connection.subscribe(DumbService.DUMB_MODE, new DumbService.DumbModeListener() {
+		messageBusConnection.subscribe(DumbService.DUMB_MODE, new DumbService.DumbModeListener() {
 			@Override
 			public void exitDumbMode() {
 				reloadFileCache("indices are updated");
@@ -1245,7 +1252,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		// relevant to your task (e.g., via ProjectFileIndex.isInContent()).
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file-system.html#virtual-file-system-events
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file.html#how-do-i-get-notified-when-vfs-changes
-		connection.subscribe(VirtualFileManager.VFS_CHANGES, new FileCacheUpdateListener());
+		messageBusConnection.subscribe(VirtualFileManager.VFS_CHANGES, new FileCacheUpdateListener());
 	}
 
 	/**
@@ -1814,6 +1821,56 @@ public class AwesomeLinkFilter implements Filter, DumbAware {
 		} finally {
 			cacheReadLock.unlock();
 		}
+	}
+
+	// ==================== Disposable 接口实现 ====================
+
+	/**
+	 * 释放资源，清理所有持有的资源以防止内存泄漏
+	 * 此方法在项目关闭或 Filter 不再使用时被调用
+	 * 
+	 * 清理内容包括：
+	 * 1. ThreadLocal 变量 - 防止在线程池环境中累积泄漏
+	 * 2. 文件缓存 - 释放大型数据结构占用的内存
+	 * 3. MessageBusConnection - 断开消息总线连接（如果未自动断开）
+	 */
+	@Override
+	public void dispose() {
+		// 1. 清理 ThreadLocal 变量，防止在线程池环境中的内存泄漏
+		try {
+			fileMatcher.remove();
+			urlMatcher.remove();
+			stackTraceElementMatcher.remove();
+			ignoreMatcher.remove();
+			isTerminal.remove();
+		} catch (Exception e) {
+			logger.warn(String.format("project[%s]: Error while cleaning up ThreadLocal variables", project.getName()), e);
+		}
+
+		// 2. 清理缓存，释放内存
+		cacheWriteLock.lock();
+		try {
+			fileCache.clear();
+			fileBaseCache.clear();
+			cacheInitialized = false;
+			logger.info(String.format("project[%s]: File cache cleared in dispose()", project.getName()));
+		} catch (Exception e) {
+			logger.warn(String.format("project[%s]: Error while clearing cache", project.getName()), e);
+		} finally {
+			cacheWriteLock.unlock();
+		}
+
+		// 3. 断开 MessageBusConnection（虽然传入了 this 作为父 Disposable 会自动断开，但为了明确性也手动调用）
+		if (messageBusConnection != null) {
+			try {
+				messageBusConnection.disconnect();
+				logger.info(String.format("project[%s]: MessageBusConnection disconnected", project.getName()));
+			} catch (Exception e) {
+				logger.warn(String.format("project[%s]: Error while disconnecting MessageBusConnection", project.getName()), e);
+			}
+		}
+
+		logger.info(String.format("project[%s]: AwesomeLinkFilter disposed successfully", project.getName()));
 	}
 
 	/**

@@ -132,7 +132,7 @@ public class FileUtils {
                 // is junction or symlink
                 return ((Integer) attribute & 0x400) != 0;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
         }
         return false;
     }
@@ -207,11 +207,11 @@ public class FileUtils {
      */
     public static String resolveSymlink(@NotNull final String filePath, final boolean resolveSymlink) {
         if (resolveSymlink) {
-            try {
-                // 避免由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
-                return Paths.get(filePath).toRealPath().toString();
-            } catch (Throwable ignored) {
-            }
+        try {
+            // 避免由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
+            return Paths.get(filePath).toRealPath().toString();
+        } catch (Exception ignored) {
+        }
         }
         return filePath;
     }
@@ -232,7 +232,7 @@ public class FileUtils {
                             .map(it -> VfsUtil.findFile(Paths.get(it), false))
                             .filter(Objects::nonNull)
                             .collect(Collectors.toList());
-            } catch (Throwable ignored) {
+            } catch (Exception ignored) {
             }
         }
         return files;
