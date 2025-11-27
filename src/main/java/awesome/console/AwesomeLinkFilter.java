@@ -1700,8 +1700,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 	@NotNull
 	public List<URLLinkMatch> detectURLs(@NotNull String line) {
 		// 检查配置：如果禁用URL搜索，直接返回空列表
-		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
-		if (!storage.searchUrls) {
+		if (!config.searchUrls) {
 			return Collections.emptyList();
 		}
 
