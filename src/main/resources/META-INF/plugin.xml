@@ -15,19 +15,19 @@
 	<change-notes>
 		<![CDATA[
 		<p>
-		    <b>0.1337.33</b><br/>
+		    <b>0.1337.32</b><br/>
         	<ul>
+        		<li>Optimized protocol extraction logic with improved code comments</li>
+        		<li>Refined URL protocol detection and path matching algorithms</li>
         		<li>Added URL protocol handling method and refactored protocol processing logic</li>
         		<li>Enhanced Jar file URL and path protocol detection with comprehensive test coverage</li>
         		<li>Narrowed exception catching scope and optimized resource management</li>
         		<li>Refactored file link processing logic with improved method naming and responsibilities</li>
         		<li>Added test cases for long line path detection functionality</li>
         		<li>Improved exception handling and resource cleanup mechanisms</li>
-        	</ul>
-		    <b>0.1337.32</b><br/>
-        	<ul>
-        		<li>Optimized protocol extraction logic with improved code comments</li>
-        		<li>Refined URL protocol detection and path matching algorithms</li>
+        		<li>Updated change-notes section with comprehensive version history</li>
+        		<li>Improved documentation structure and formatting</li>
+        		<li>Enhanced version tracking and release notes organization</li>
         	</ul>
         	<b>0.1337.31</b><br/>
         	<ul>

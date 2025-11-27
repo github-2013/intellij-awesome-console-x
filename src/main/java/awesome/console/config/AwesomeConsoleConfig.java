@@ -1,6 +1,7 @@
 package awesome.console.config;
 
 import awesome.console.util.RegexUtils;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.util.text.StringUtil;
 import java.util.Objects;
@@ -29,6 +30,9 @@ import javax.swing.*;
  */
 @SuppressWarnings({"unused", "SameParameterValue"})
 public class AwesomeConsoleConfig implements Configurable {
+
+	/** 日志记录器 */
+	private static final Logger logger = Logger.getInstance(AwesomeConsoleConfig.class);
 
 	/** 配置表单界面 */
 	private AwesomeConsoleConfigForm form;
@@ -190,6 +194,9 @@ public class AwesomeConsoleConfig implements Configurable {
 			return;
 		}
 
+		// 检测配置变更，用于决定是否需要通知监听器
+		AwesomeConsoleConfigListener.ConfigChangeType changeType = detectConfigChanges(useIgnorePattern, ignorePatternText);
+
 		storage.LIMIT_LINE_LENGTH = form.limitLineMatchingByCheckBox.isSelected();
 		storage.LINE_MAX_LENGTH = maxLength;
 		storage.SPLIT_ON_LIMIT = form.matchLinesLongerThanCheckBox.isSelected();
@@ -214,6 +221,86 @@ public class AwesomeConsoleConfig implements Configurable {
 
 		storage.resolveSymlink = form.resolveSymlinkCheckBox.isSelected();
 		storage.preserveAnsiColors = form.preserveAnsiColorsCheckBox.isSelected();
+
+		// 发布配置变更事件（包括需要重建缓存的变更和其他配置变更）
+		if (changeType != null) {
+			notifyConfigChanged(changeType);
+		}
+	}
+
+	/**
+	 * 检测配置变更，判断是否需要重建缓存，并返回具体的变更类型
+	 * 
+	 * @param useIgnorePattern 新的忽略模式启用状态
+	 * @param ignorePatternText 新的忽略模式正则表达式
+	 * @return 配置变更类型，如果没有任何变更则返回null
+	 */
+	private AwesomeConsoleConfigListener.ConfigChangeType detectConfigChanges(boolean useIgnorePattern, String ignorePatternText) {
+		// 1. 文件搜索功能变更（开启或关闭都需要重建，因为关闭时需要清理缓存）
+		if (storage.searchFiles != form.searchForFilesCheckBox.isSelected()) {
+			logger.debug(String.format("Config change detected: searchFiles %b -> %b", 
+					storage.searchFiles, form.searchForFilesCheckBox.isSelected()));
+			return AwesomeConsoleConfigListener.ConfigChangeType.SEARCH_FILES_CHANGED;
+		}
+
+		// 2. 类搜索功能变更（开启或关闭都需要重建，因为关闭时需要清理 fileBaseCache）
+		if (storage.searchClasses != form.searchForClassesCheckBox.isSelected()) {
+			logger.debug(String.format("Config change detected: searchClasses %b -> %b", 
+					storage.searchClasses, form.searchForClassesCheckBox.isSelected()));
+			return AwesomeConsoleConfigListener.ConfigChangeType.SEARCH_CLASSES_CHANGED;
+		}
+
+		// 3. 忽略模式变更（启用状态变化或正则表达式内容变化）
+		if (storage.useIgnorePattern != useIgnorePattern ||
+				!Objects.equals(storage.getIgnorePatternText(), ignorePatternText)) {
+			logger.debug(String.format("Config change detected: ignorePattern enabled=%b, pattern='%s' -> enabled=%b, pattern='%s'",
+					storage.useIgnorePattern, storage.getIgnorePatternText(),
+					useIgnorePattern, ignorePatternText));
+			return AwesomeConsoleConfigListener.ConfigChangeType.IGNORE_PATTERN_CHANGED;
+		}
+
+		// 4. 文件类型过滤变更（启用状态变化或文件类型列表变化）
+		String newFileTypes = form.fileTypesTextField.getText().trim();
+		if (storage.useFileTypes != form.fileTypesCheckBox.isSelected() ||
+				!Objects.equals(storage.getFileTypes(), newFileTypes)) {
+			logger.debug(String.format("Config change detected: fileTypes enabled=%b, types='%s' -> enabled=%b, types='%s'",
+					storage.useFileTypes, storage.getFileTypes(),
+					form.fileTypesCheckBox.isSelected(), newFileTypes));
+			return AwesomeConsoleConfigListener.ConfigChangeType.FILE_TYPES_CHANGED;
+		}
+
+		// 5. 检测其他配置变更（不需要重建缓存）
+		if (storage.LIMIT_LINE_LENGTH != form.limitLineMatchingByCheckBox.isSelected() ||
+				!Objects.equals(form.maxLengthSpinner.getValue(), storage.LINE_MAX_LENGTH) ||
+				storage.SPLIT_ON_LIMIT != form.matchLinesLongerThanCheckBox.isSelected() ||
+				storage.searchUrls != form.searchForURLsCheckBox.isSelected() ||
+				storage.useResultLimit != form.limitResultCheckBox.isSelected() ||
+				!Objects.equals(form.limitResultSpinner.getValue(), storage.getResultLimit()) ||
+				storage.useIgnoreStyle != form.ignoreStyleCheckBox.isSelected() ||
+				storage.fixChooseTargetFile != form.fixChooseTargetFileCheckBox.isSelected() ||
+				storage.resolveSymlink != form.resolveSymlinkCheckBox.isSelected() ||
+				storage.preserveAnsiColors != form.preserveAnsiColorsCheckBox.isSelected()) {
+			logger.debug("Config change detected: other settings changed (no cache rebuild needed)");
+			return AwesomeConsoleConfigListener.ConfigChangeType.OTHER_CHANGED;
+		}
+
+		return null;
+	}
+
+	/**
+	 * 通知配置变更
+	 * 通过 MessageBus 发布配置变更事件，通知所有监听器
+	 * 
+	 * @param changeType 配置变更类型
+	 * 
+	 * 注意：使用 ApplicationManager 而非项目级别的 MessageBus，
+	 * 因为配置是全局的（存储在 awesomeconsole.xml 中），需要通知所有打开的项目
+	 */
+	private void notifyConfigChanged(AwesomeConsoleConfigListener.ConfigChangeType changeType) {
+		com.intellij.openapi.application.ApplicationManager.getApplication()
+				.getMessageBus()
+				.syncPublisher(AwesomeConsoleConfigListener.TOPIC)
+				.configChanged(changeType);
 	}
 
 	/**

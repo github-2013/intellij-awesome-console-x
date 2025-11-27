@@ -4,6 +4,7 @@ import static awesome.console.util.FileUtils.isAbsolutePath;
 import static awesome.console.util.FileUtils.isUnixAbsolutePath;
 import static awesome.console.util.FileUtils.isWindowsAbsolutePath;
 
+import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
@@ -37,6 +38,7 @@ import com.intellij.openapi.vfs.newvfs.events.VFileMoveEvent;
 import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent;
 import com.intellij.util.PathUtil;
 import com.intellij.util.messages.MessageBusConnection;
+import com.intellij.openapi.application.ApplicationManager;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -62,8 +64,8 @@ import java.util.stream.Collectors;
  * 4. 支持完全限定类名的识别
  * 5. 支持自定义忽略模式
  * */
-// 定义公共类 AwesomeLinkFilter，实现 Filter 接口（控制台过滤器）、DumbAware 接口（支持在索引更新期间运行）和 Disposable 接口（资源管理）
-public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
+// 定义公共类 AwesomeLinkFilter，实现 Filter 接口（控制台过滤器）、DumbAware 接口（支持在索引更新期间运行）、Disposable 接口（资源管理）和 AwesomeConsoleConfigListener 接口（配置变更监听）
+public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, AwesomeConsoleConfigListener {
 	/**
 	 * 日志记录器
 	 * 声明私有静态final日志记录器，用于记录此类的调试和错误信息
@@ -330,10 +332,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 	// 终端和控制台视图的行为有所不同，需要区别处理，默认为 false
 	public final ThreadLocal<Boolean> isTerminal = ThreadLocal.withInitial(() -> false);
 
-	/** MessageBus 连接，用于订阅项目事件 */
-	// 声明私有volatile成员变量，存储 MessageBus 连接的引用
+	/** MessageBus 连接，用于订阅项目级别事件（DumbMode、VFS） */
+	// 声明私有volatile成员变量，存储 Project 级别的 MessageBus 连接引用
 	// 使用 volatile 确保多线程可见性，在 dispose() 时需要断开连接
 	private volatile MessageBusConnection messageBusConnection;
+
+	/** Application 级别的 MessageBus 连接，用于订阅配置变更事件 */
+	// 声明私有volatile成员变量，存储 Application 级别的 MessageBus 连接引用
+	// 配置是全局的，所以需要使用 Application 级别的 MessageBus
+	// 使用 volatile 确保多线程可见性，在 dispose() 时需要断开连接
+	private volatile MessageBusConnection appMessageBusConnection;
 
 	/**
 	 * 构造 AwesomeLinkFilter 实例
@@ -1288,7 +1296,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 		// 创建 MessageBus 连接并传入 this 作为父 Disposable，确保在 dispose() 时自动断开连接
 		messageBusConnection = project.getMessageBus().connect(this);
 
-		// 订阅 DumbMode 事件
+		// 订阅 DumbMode 事件（Project 级别）
 		messageBusConnection.subscribe(DumbService.DUMB_MODE, new DumbService.DumbModeListener() {
 			@Override
 			public void exitDumbMode() {
@@ -1296,13 +1304,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 			}
 		});
 
-		// 订阅虚拟文件系统变化事件
+		// 订阅虚拟文件系统变化事件（Application 级别，但通过 Project 的 MessageBus 订阅）
 		// VFS listeners are application level and will receive events for changes happening in
 		// all the projects opened by the user. You may need to filter out events that aren't
 		// relevant to your task (e.g., via ProjectFileIndex.isInContent()).
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file-system.html#virtual-file-system-events
 		// ref: https://plugins.jetbrains.com/docs/intellij/virtual-file.html#how-do-i-get-notified-when-vfs-changes
 		messageBusConnection.subscribe(VirtualFileManager.VFS_CHANGES, new FileCacheUpdateListener());
+
+		// 订阅配置变更事件（Application 级别）
+		// 配置是全局的，所以需要使用 Application 级别的 MessageBus
+		// 当用户在设置页面修改配置并点击 Apply/OK 时，会收到通知并重新加载缓存
+		appMessageBusConnection = ApplicationManager.getApplication().getMessageBus().connect(this);
+		appMessageBusConnection.subscribe(AwesomeConsoleConfigListener.TOPIC, this);
 	}
 
 	/**
@@ -1912,6 +1926,43 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 		}
 	}
 
+	// ==================== AwesomeConsoleConfigListener 接口实现 ====================
+
+	/**
+	 * 配置变更回调方法
+	 * 当配置发生变更时调用，根据变更类型决定是否需要重建缓存
+	 *
+	 * @param changeType 变更类型，指示哪些配置发生了变化
+	 */
+	@Override
+	public void configChanged(AwesomeConsoleConfigListener.ConfigChangeType changeType) {
+		try {
+			switch (changeType) {
+				case SEARCH_FILES_CHANGED:
+				case SEARCH_CLASSES_CHANGED:
+				case IGNORE_PATTERN_CHANGED:
+				case FILE_TYPES_CHANGED:
+					// 这些变更需要重建缓存
+					logger.info(String.format("project[%s]: Config changed (%s), rebuilding cache", 
+						project.getName(), changeType.name().toLowerCase()));
+					reloadFileCache("config changed: " + changeType.name().toLowerCase());
+					break;
+				case OTHER_CHANGED:
+					// 其他变更不需要重建缓存，只记录日志
+					logger.info(String.format("project[%s]: Config changed (%s), no cache rebuild needed", 
+						project.getName(), changeType.name().toLowerCase()));
+					break;
+				default:
+					logger.warn(String.format("project[%s]: Unknown config change type: %s", 
+						project.getName(), changeType));
+					break;
+			}
+		} catch (Exception e) {
+			logger.error(String.format("project[%s]: Error handling config change (%s)", 
+				project.getName(), changeType), e);
+		}
+	}
+
 	// ==================== Disposable 接口实现 ====================
 
 	/**
@@ -1953,9 +2004,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 		if (messageBusConnection != null) {
 			try {
 				messageBusConnection.disconnect();
-				logger.info(String.format("project[%s]: MessageBusConnection disconnected", project.getName()));
+				logger.info(String.format("project[%s]: Project MessageBusConnection disconnected", project.getName()));
 			} catch (Exception e) {
-				logger.warn(String.format("project[%s]: Error while disconnecting MessageBusConnection", project.getName()), e);
+				logger.warn(String.format("project[%s]: Error while disconnecting project MessageBusConnection", project.getName()), e);
+			}
+		}
+
+		// 4. 断开 Application 级别的 MessageBusConnection
+		if (appMessageBusConnection != null) {
+			try {
+				appMessageBusConnection.disconnect();
+				logger.info(String.format("project[%s]: Application MessageBusConnection disconnected", project.getName()));
+			} catch (Exception e) {
+				logger.warn(String.format("project[%s]: Error while disconnecting application MessageBusConnection", project.getName()), e);
 			}
 		}
 
