@@ -1,6 +1,5 @@
 package awesome.console;
 
-import static awesome.console.util.FileUtils.JAR_PROTOCOL;
 import static awesome.console.util.FileUtils.isAbsolutePath;
 import static awesome.console.util.FileUtils.isUnixAbsolutePath;
 import static awesome.console.util.FileUtils.isWindowsAbsolutePath;
@@ -41,7 +40,6 @@ import com.intellij.util.messages.MessageBusConnection;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.stream.Stream;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -237,6 +235,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 	// 定义私有静态final常量，限制完全限定类名搜索的递归深度
 	// 当无法找到完整类名对应的文件时，会递归地尝试更短的类名
 	private static final int maxSearchDepth = 1;
+
+	/** 支持的文件协议列表 */
+	private static final Set<String> FILE_PROTOCOLS = Set.of("file:", "jar:");
+
+	/** 支持的URL协议列表 */
+	private static final Set<String> URL_PROTOCOLS = Set.of(
+			"http:", "https:", "ftp:", "ftps:", "git:", "file:"
+	);
 
 	/** 配置存储实例 */
 	// 声明私有final成员变量，存储插件的配置选项（如是否搜索文件、是否搜索URL、忽略模式等）
@@ -585,6 +591,49 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 	}
 
 	/**
+	 * 标准化URL协议
+	 * 处理嵌套协议（如 jar:http://）并验证协议有效性
+	 *
+	 * @param url 原始URL
+	 * @return 标准化后的URL，如果协议无效则返回null
+	 */
+	private String normalizeUrlProtocol(String url) {
+		String lowerUrl = url.toLowerCase();
+
+		// 处理 jar:http(s):// 或 jar:file:// 格式
+		if (lowerUrl.startsWith("jar:")) {
+			String innerPart = lowerUrl.substring(4);
+			if (innerPart.startsWith("http://") || innerPart.startsWith("https://")) {
+				// 移除 jar: 前缀，返回内部的 http(s) URL
+				return url.substring(4);
+			} else if (innerPart.startsWith("file:")) {
+				// 保留 jar:file: 格式
+				return url;
+			}
+			// 不支持的 jar: 嵌套协议
+			return null;
+		}
+
+		// 验证是否为支持的协议（使用更严格的匹配）
+		for (String protocol : URL_PROTOCOLS) {
+			// 确保协议后面跟着 // 或者是 file: 这种特殊情况
+			if (lowerUrl.startsWith(protocol)) {
+				// 检查协议后面的字符，确保是完整的协议而非前缀匹配
+				int protocolEndIndex = protocol.length();
+				if (protocolEndIndex < lowerUrl.length()) {
+					char nextChar = lowerUrl.charAt(protocolEndIndex);
+					// 协议后面应该是 / 或 ~ (file:~ 的情况)
+					if (nextChar == '/' || nextChar == '~') {
+						return url;
+					}
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * 从行中提取URL链接并生成结果项
 	 * 识别各种协议的 URL（http、https、ftp、git、file 等）
 	 * 为每个识别到的 URL 创建可点击的超链接
@@ -603,17 +652,18 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 				continue;
 			}
 
-			// jar:http(s)://
-			if (url.startsWith(JAR_PROTOCOL)) {
-				url = url.substring(JAR_PROTOCOL.length());
+			// 标准化协议处理
+			String normalizedUrl = normalizeUrlProtocol(url);
+			if (normalizedUrl == null) {
+				continue; // 不支持的协议
 			}
 
-			final String file = getFileFromUrl(url);
+			final String file = getFileFromUrl(normalizedUrl);
 
             if (null != file && !FileUtils.quickExists(file)) {
                 continue;
             }
-		    addHyperlinkResult(results, startPoint + match.start, startPoint + match.end, new OpenUrlHyperlinkInfo(url));
+		    addHyperlinkResult(results, startPoint + match.start, startPoint + match.end, new OpenUrlHyperlinkInfo(normalizedUrl));
 	    }
 	    return results;
 	}
@@ -1543,6 +1593,46 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 	}
 
 	/**
+	 * 验证并标准化协议
+	 * 将协议转换为小写并验证是否在允许的协议集合中
+	 *
+	 * @param protocol 原始协议字符串
+	 * @param allowedProtocols 允许的协议集合
+	 * @return 标准化后的协议，如果无效则返回null
+	 */
+	private String validateAndNormalizeProtocol(String protocol, Set<String> allowedProtocols) {
+		if (protocol == null || protocol.isEmpty()) {
+			return null;
+		}
+
+		String normalized = protocol.toLowerCase();
+
+		// 处理嵌套协议（如 jar:file: 或 jar:http(s):）
+		if (normalized.startsWith("jar:")) {
+			String innerProtocol = normalized.substring(4);
+			// jar: 后面可以是 file:、http:、https:，或者直接是路径（如 jar:/path 或 jar:///path）
+			if (innerProtocol.isEmpty() || 
+					innerProtocol.startsWith("/") ||
+					innerProtocol.startsWith("file:") ||
+					innerProtocol.startsWith("http:") ||
+					innerProtocol.startsWith("https:")) {
+				return normalized;
+			}
+			// 不支持的嵌套协议
+			return null;
+		}
+
+		// 使用前缀匹配而非精确匹配，因为协议后面可能跟着 //
+		for (String allowedProtocol : allowedProtocols) {
+			if (normalized.startsWith(allowedProtocol)) {
+				return normalized;
+			}
+		}
+		
+		return null;
+	}
+
+	/**
 	 * 处理协议前缀，移除文件协议并过滤非文件协议
 	 *
 	 * @param fileMatcher 文件路径匹配器
@@ -1560,14 +1650,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable {
 		}
 
 		if (null != protocol) {
-			protocol = protocol.toLowerCase();
-			if (Stream.of("file:", JAR_PROTOCOL).anyMatch(protocol::startsWith)) {
-				// 移除文件协议前缀
-				path = path.substring(protocol.length());
-			} else {
+			// 验证并标准化协议
+			String validatedProtocol = validateAndNormalizeProtocol(protocol, FILE_PROTOCOLS);
+			if (validatedProtocol == null) {
 				// 非文件协议，忽略
 				return null;
 			}
+			// 移除文件协议前缀
+			path = path.substring(validatedProtocol.length());
 		}
 
 		return path;
