@@ -4,6 +4,7 @@ import awesome.console.util.RegexUtils;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.openapi.application.ApplicationManager;
 import java.util.Objects;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.NotNull;
@@ -297,10 +298,10 @@ public class AwesomeConsoleConfig implements Configurable {
 	 * 因为配置是全局的（存储在 awesomeconsole.xml 中），需要通知所有打开的项目
 	 */
 	private void notifyConfigChanged(AwesomeConsoleConfigListener.ConfigChangeType changeType) {
-		com.intellij.openapi.application.ApplicationManager.getApplication()
-				.getMessageBus()
-				.syncPublisher(AwesomeConsoleConfigListener.TOPIC)
-				.configChanged(changeType);
+		ApplicationManager.getApplication()
+			.getMessageBus()
+			.syncPublisher(AwesomeConsoleConfigListener.TOPIC)
+			.configChanged(changeType);
 	}
 
 	/**
