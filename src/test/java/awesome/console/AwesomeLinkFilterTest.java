@@ -369,6 +369,123 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 
 
 	/**
+	 * 测试IntelliJ IDEA的URL scheme协议
+	 */
+	public void testURLIntelliJIDEA() {
+		assertURLDetection("Open file: idea://open?file=/path/to/MyClass.java&line=25 here", "idea://open?file=/path/to/MyClass.java&line=25");
+		assertURLDetection("Navigate: idea://open?file=/src/main/java/App.java&line=10&column=5", "idea://open?file=/src/main/java/App.java&line=10&column=5");
+	}
+
+
+	/**
+	 * 测试PhpStorm的URL scheme协议
+	 */
+	public void testURLPhpStorm() {
+		assertURLDetection("Debug here: phpstorm://open?file=/var/www/index.php&line=130 now", "phpstorm://open?file=/var/www/index.php&line=130");
+		assertURLDetection("Error at phpstorm://open?file=/app/src/Controller.php&line=45", "phpstorm://open?file=/app/src/Controller.php&line=45");
+	}
+
+
+	/**
+	 * 测试WebStorm的URL scheme协议
+	 */
+	public void testURLWebStorm() {
+		assertURLDetection("Check: webstorm://open?file=/project/src/app.js&line=50 please", "webstorm://open?file=/project/src/app.js&line=50");
+		assertURLDetection("TypeScript error: webstorm://open?file=/src/components/Button.tsx&line=15&column=8", "webstorm://open?file=/src/components/Button.tsx&line=15&column=8");
+	}
+
+
+	/**
+	 * 测试PyCharm的URL scheme协议
+	 */
+	public void testURLPyCharm() {
+		assertURLDetection("Python error: pycharm://open?file=/home/user/script.py&line=10 check it", "pycharm://open?file=/home/user/script.py&line=10");
+		assertURLDetection("Traceback: pycharm://open?file=/app/main.py&line=25&column=12", "pycharm://open?file=/app/main.py&line=25&column=12");
+	}
+
+
+	/**
+	 * 测试RubyMine的URL scheme协议
+	 */
+	public void testURLRubyMine() {
+		assertURLDetection("Ruby error: rubymine://open?file=/app/controllers/user.rb&line=15 fix", "rubymine://open?file=/app/controllers/user.rb&line=15");
+		assertURLDetection("Check rubymine://open?file=/lib/helper.rb&line=8", "rubymine://open?file=/lib/helper.rb&line=8");
+	}
+
+
+	/**
+	 * 测试GoLand的URL scheme协议
+	 */
+	public void testURLGoLand() {
+		assertURLDetection("Go panic: goland://open?file=/src/main.go&line=15 here", "goland://open?file=/src/main.go&line=15");
+		assertURLDetection("Error at goland://open?file=/pkg/service/handler.go&line=42&column=20", "goland://open?file=/pkg/service/handler.go&line=42&column=20");
+	}
+
+
+	/**
+	 * 测试CLion的URL scheme协议
+	 */
+	public void testURLCLion() {
+		assertURLDetection("C++ error: clion://open?file=/src/main.cpp&line=25 check", "clion://open?file=/src/main.cpp&line=25");
+		assertURLDetection("Segfault at clion://open?file=/include/utils.h&line=18", "clion://open?file=/include/utils.h&line=18");
+	}
+
+
+	/**
+	 * 测试Rider的URL scheme协议
+	 */
+	public void testURLRider() {
+		assertURLDetection("C# error: rider://open?file=/src/Program.cs&line=12 fix", "rider://open?file=/src/Program.cs&line=12");
+		assertURLDetection("Exception: rider://open?file=/Controllers/HomeController.cs&line=35&column=16", "rider://open?file=/Controllers/HomeController.cs&line=35&column=16");
+	}
+
+
+	/**
+	 * 测试DataGrip的URL scheme协议
+	 */
+	public void testURLDataGrip() {
+		assertURLDetection("SQL error: datagrip://open?file=/queries/select.sql&line=3 check", "datagrip://open?file=/queries/select.sql&line=3");
+		assertURLDetection("Query: datagrip://open?file=/scripts/migration.sql&line=20", "datagrip://open?file=/scripts/migration.sql&line=20");
+	}
+
+
+	/**
+	 * 测试AppCode的URL scheme协议
+	 */
+	public void testURLAppCode() {
+		assertURLDetection("Swift error: appcode://open?file=/src/ViewController.swift&line=18 fix", "appcode://open?file=/src/ViewController.swift&line=18");
+		assertURLDetection("iOS crash: appcode://open?file=/Models/User.swift&line=42", "appcode://open?file=/Models/User.swift&line=42");
+	}
+
+
+	/**
+	 * 测试Fleet的URL scheme协议
+	 */
+	public void testURLFleet() {
+		assertURLDetection("Fleet editor: fleet://open?file=/project/src/index.ts&line=7 here", "fleet://open?file=/project/src/index.ts&line=7");
+		assertURLDetection("Open: fleet://open?file=/app/main.kt&line=30", "fleet://open?file=/app/main.kt&line=30");
+	}
+
+
+	/**
+	 * 测试JetBrains通用URL scheme协议
+	 */
+	public void testURLJetBrainsGeneric() {
+		assertURLDetection("Navigate: jetbrains://idea/navigate/reference?project=MyProject&fqn=com.example.Class here", "jetbrains://idea/navigate/reference?project=MyProject&fqn=com.example.Class");
+		assertURLDetection("Open: jetbrains://pycharm/checkout/git?checkout.repo=https://github.com/user/repo", "jetbrains://pycharm/checkout/git?checkout.repo=https://github.com/user/repo");
+	}
+
+
+	/**
+	 * 测试JetBrains IDE URL scheme的Windows路径格式
+	 */
+	public void testURLJetBrainsIDEWindowsPath() {
+		assertURLDetection("Windows: idea://open?file=C:/Users/dev/project/Main.java&line=20 check", "idea://open?file=C:/Users/dev/project/Main.java&line=20");
+		assertURLDetection("Error: phpstorm://open?file=C:\\xampp\\htdocs\\app\\index.php&line=50", "phpstorm://open?file=C:\\xampp\\htdocs\\app\\index.php&line=50");
+	}
+
+
+	/**
 	 * 测试不带协议的Unix风格文件路径
 	 */
 	public void testURLFILEWithoutSchemeUnixStyle() {

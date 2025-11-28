@@ -243,7 +243,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/** 支持的URL协议列表 */
 	private static final Set<String> URL_PROTOCOLS = Set.of(
-			"http:", "https:", "ftp:", "ftps:", "git:", "file:"
+			"http:", "https:", "ftp:", "ftps:", "git:", "file:",
+			// JetBrains IDE URL schemes
+			"idea:", "phpstorm:", "webstorm:", "pycharm:", "rubymine:",
+			"goland:", "clion:", "rider:", "datagrip:", "appcode:",
+			"fleet:", "jetbrains:"
 	);
 
 	/** 配置存储实例 */

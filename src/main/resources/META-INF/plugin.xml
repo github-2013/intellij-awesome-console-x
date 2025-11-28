@@ -15,6 +15,11 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    <b>0.1337.33</b><br/>
+        	<ul>
+        		<li>Fixed issue #13</li>
+        		<li>Added test cases for support Intellij IDE URL Schema</li>
+        	</ul>
 		    <b>0.1337.32</b><br/>
         	<ul>
         		<li>Optimized protocol extraction logic with improved code comments</li>
