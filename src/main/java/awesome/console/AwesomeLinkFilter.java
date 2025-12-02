@@ -957,8 +957,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				matchingFiles = getResultItemsFileFromBasename(fileName);
 			}
 			if (null != matchingFiles) {
+				// 方案三（惰性验证）：读取时过滤无效文件，作为兜底机制
 				// 不能使用并行流，因为 shouldIgnore 方法使用了 ThreadLocal
 				matchingFiles = matchingFiles.stream()
+						.filter(VirtualFile::isValid)  // 惰性验证：过滤已失效的文件
 						.filter(f -> !shouldIgnore(getRelativePath(f.getPath())))
 						.limit(config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
 						.collect(Collectors.toList());
@@ -1325,92 +1327,152 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 文件缓存更新监听器，处理文件系统事件并增量更新缓存
+	 * 
+	 * 优化策略（三种方案结合）：
+	 * - 方案一（精准删除）：单文件删除时，O(1) 复杂度精准移除
+	 * - 方案二（异步清理）：目录删除时，使用后台线程处理，不阻塞UI
+	 * - 方案三（惰性验证）：在 findMatchingFilesInCache 中读取时过滤无效文件，作为兜底机制
 	 */
 	private class FileCacheUpdateListener implements BulkFileListener {
+		/** 事件分类结果 */
+		private record EventClassification(
+				List<VirtualFile> newFiles,
+				List<VirtualFile> filesToDelete,
+				boolean directoryDeleted
+		) {
+			boolean hasChanges() {
+				return !newFiles.isEmpty() || !filesToDelete.isEmpty() || directoryDeleted;
+			}
+		}
+
 		@Override
 		public void after(@NotNull List<? extends @NotNull VFileEvent> events) {
-			List<VirtualFile> newFiles = new ArrayList<>();
-			boolean deleteFile = false;
+			EventClassification result = classifyEvents(events);
+			if (!result.hasChanges()) return;
 
-			// 分类处理所有事件
+			processDeletions(result.filesToDelete);
+			if (result.directoryDeleted) cleanupInvalidFilesAsync();
+			processAdditions(result.newFiles);
+		}
+
+		/** 分类处理所有VFS事件 */
+		private EventClassification classifyEvents(List<? extends VFileEvent> events) {
+			List<VirtualFile> newFiles = new ArrayList<>();
+			List<VirtualFile> filesToDelete = new ArrayList<>();
+			boolean directoryDeleted = false;
+
 			for (VFileEvent event : events) {
 				final VirtualFile file = event.getFile();
-				if (null == file || !isInContent(file, event instanceof VFileDeleteEvent)) {
-					continue;
-				}
+				if (file == null || !this.isInContent(file, event instanceof VFileDeleteEvent)) continue;
 
 				switch (event) {
-					case VFileCopyEvent vFileCopyEvent -> newFiles.add(vFileCopyEvent.findCreatedFile());
-					case VFileCreateEvent vFileCreateEvent -> newFiles.add(file);
-					case VFileDeleteEvent vFileDeleteEvent -> deleteFile = true;
-					case VFileMoveEvent vFileMoveEvent -> {
-						// 文件移动无需处理，文件名未变，路径自动更新
+					case VFileCopyEvent e -> newFiles.add(e.findCreatedFile());
+					case VFileCreateEvent e -> newFiles.add(file);
+					case VFileDeleteEvent e -> {
+						if (file.isDirectory()) directoryDeleted = true;
+						else filesToDelete.add(file);
 					}
-					case VFilePropertyChangeEvent pce -> {
-						// 判断是否为文件重命名事件
-						if (VirtualFile.PROP_NAME.equals(pce.getPropertyName())
-								&& !Objects.equals(pce.getNewValue(), pce.getOldValue())) {
-							deleteFile = true;
-							newFiles.add(file);
+					case VFileMoveEvent e -> { /* 文件移动无需处理，路径自动更新 */ }
+					case VFilePropertyChangeEvent e -> {
+						if (isRenameEvent(e)) {
+							filesToDelete.add(file);  // 删除旧名
+							newFiles.add(file);       // 添加新名
 						}
 					}
-					default -> {
-					}
+					default -> { }
 				}
 			}
+			return new EventClassification(newFiles, filesToDelete, directoryDeleted);
+		}
 
-			// 如果没有变化，直接返回
-			if (newFiles.isEmpty() && !deleteFile) {
-				return;
-			}
+		/** 判断是否为重命名事件 */
+		private boolean isRenameEvent(VFilePropertyChangeEvent e) {
+			return VirtualFile.PROP_NAME.equals(e.getPropertyName())
+					&& !Objects.equals(e.getNewValue(), e.getOldValue())
+					&& e.getOldValue() != null;
+		}
 
-			// 更新缓存，处理删除和新增文件
+		/** 方案一：精准删除单文件（同步，O(1)复杂度） */
+		private void processDeletions(List<VirtualFile> filesToDelete) {
+			if (filesToDelete.isEmpty()) return;
 			cacheWriteLock.lock();
 			try {
-				if (deleteFile) {
-					// Since there is only one event for deleting a directory, simply clean up all the invalid files
-					fileCache.forEach((key, value) -> 
-							value.removeIf(it -> !it.isValid() || !key.equals(it.getName())));
-					fileBaseCache.forEach((key, value) -> 
-							value.removeIf(it -> !it.isValid() || !key.equals(it.getNameWithoutExtension())));
-				}
-				newFiles.forEach(indexIterator::processFile);
-				logger.info(String.format("project[%s]: flush file cache", project.getName()));
+				filesToDelete.forEach(this::removeFileFromCache);
+				logger.info(String.format("project[%s]: precise delete %d file(s)", 
+						project.getName(), filesToDelete.size()));
 			} finally {
 				cacheWriteLock.unlock();
 			}
 		}
-	}
 
-	/**
-	 * 判断文件是否在项目内容中
-	 * 对于删除操作，由于文件可能已经无效，使用路径前缀匹配
-	 * 对于其他操作，使用 ProjectFileIndex 进行判断
-	 *
-	 * @param file 要判断的文件
-	 * @param isDelete 是否为删除操作
-	 * @return 如果文件在项目内容中则返回true
-	 */
-	// 定义私有方法，判断文件是否在项目内容中
-	private boolean isInContent(@NotNull VirtualFile file, boolean isDelete) {
-		// 对于删除操作，由于文件可能已经无效，使用路径前缀匹配
-		if (isDelete) {
-			// 获取项目根目录路径
-			String basePath = project.getBasePath();
-			if (null == basePath) {
-				// Default project. Unlikely to happen.
-				// 默认项目，不太可能发生
-				return false;
+		/** 处理新增文件 */
+		private void processAdditions(List<VirtualFile> newFiles) {
+			if (newFiles.isEmpty()) return;
+			cacheWriteLock.lock();
+			try {
+				newFiles.forEach(indexIterator::processFile);
+				logger.info(String.format("project[%s]: add %d file(s)", 
+						project.getName(), newFiles.size()));
+			} finally {
+				cacheWriteLock.unlock();
 			}
-			// 确保基础路径以斜杠结尾
-			if (!basePath.endsWith("/")) {
-				basePath += "/";
-			}
-			// 判断文件路径是否以项目根目录开头
-			return file.getPath().startsWith(basePath);
 		}
-		// 对于非删除操作，使用 ProjectFileIndex 进行判断
-		return projectRootManager.getFileIndex().isInContent(file);
+
+		/** 方案一：从缓存中精准删除单个文件，O(1)复杂度 */
+		private void removeFileFromCache(@NotNull VirtualFile file) {
+			removeFromCacheMap(fileCache, file.getName(), file);
+			removeFromCacheMap(fileBaseCache, file.getNameWithoutExtension(), file);
+		}
+
+		/** 从指定缓存Map中移除文件 */
+		private void removeFromCacheMap(Map<String, List<VirtualFile>> cache, String key, VirtualFile file) {
+			List<VirtualFile> list = cache.get(key);
+			if (list != null) {
+				list.remove(file);
+				if (list.isEmpty()) cache.remove(key);
+			}
+		}
+
+		/** 方案二：异步清理所有无效文件，不阻塞UI线程 */
+		private void cleanupInvalidFilesAsync() {
+			ApplicationManager.getApplication().executeOnPooledThread(() -> {
+				cacheWriteLock.lock();
+				try {
+					int removedCount = cleanupCacheMap(fileCache, VirtualFile::getName)
+							+ cleanupCacheMap(fileBaseCache, VirtualFile::getNameWithoutExtension);
+					logger.info(String.format("project[%s]: async cleanup removed %d invalid file(s)", 
+							project.getName(), removedCount));
+				} finally {
+					cacheWriteLock.unlock();
+				}
+			});
+		}
+
+		/** 清理缓存Map中的无效文件，返回移除数量 */
+		private int cleanupCacheMap(Map<String, List<VirtualFile>> cache, 
+									 java.util.function.Function<VirtualFile, String> keyExtractor) {
+			int removedCount = 0;
+			for (Map.Entry<String, List<VirtualFile>> entry : cache.entrySet()) {
+				String key = entry.getKey();
+				List<VirtualFile> value = entry.getValue();
+				int sizeBefore = value.size();
+				value.removeIf(f -> !f.isValid() || !key.equals(keyExtractor.apply(f)));
+				removedCount += sizeBefore - value.size();
+			}
+			cache.entrySet().removeIf(entry -> entry.getValue().isEmpty());
+			return removedCount;
+		}
+
+		/** 判断文件是否在项目内容中 */
+		private boolean isInContent(@NotNull VirtualFile file, boolean isDelete) {
+			if (isDelete) {
+				String basePath = project.getBasePath();
+				if (basePath == null) return false;
+				if (!basePath.endsWith("/")) basePath += "/";
+				return file.getPath().startsWith(basePath);
+			}
+			return projectRootManager.getFileIndex().isInContent(file);
+		}
 	}
 
 	/**
