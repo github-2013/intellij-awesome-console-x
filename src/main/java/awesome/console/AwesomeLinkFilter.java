@@ -1356,34 +1356,58 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 
 		/** 分类处理所有VFS事件 */
-		private EventClassification classifyEvents(List<? extends VFileEvent> events) {
-			List<VirtualFile> newFiles = new ArrayList<>();
-			List<VirtualFile> filesToDelete = new ArrayList<>();
-			boolean directoryDeleted = false;
+	/**
+	 * 对虚拟文件事件进行分类处理
+	 * @param events 虚拟文件事件列表
+	 * @return 事件分类结果，包含新增文件、待删除文件和目录删除标志
+	 */
+	private EventClassification classifyEvents(List<? extends VFileEvent> events) {
+		// 存储新创建或新增的文件
+		List<VirtualFile> newFiles = new ArrayList<>();
+		// 存储需要删除的文件
+		List<VirtualFile> filesToDelete = new ArrayList<>();
+		// 标记是否有目录被删除
+		boolean directoryDeleted = false;
 
-			for (VFileEvent event : events) {
-				final VirtualFile file = event.getFile();
-				if (file == null || !this.isInContent(file, event instanceof VFileDeleteEvent)) continue;
+		// 遍历所有文件事件
+		for (VFileEvent event : events) {
+			// 获取事件关联的文件
+			final VirtualFile file = event.getFile();
+			// 跳过空文件或不在内容根目录中的文件
+			if (file == null || !this.isInContent(file, event instanceof VFileDeleteEvent)) continue;
 
-				switch (event) {
-					case VFileCopyEvent e -> newFiles.add(e.findCreatedFile());
-					case VFileCreateEvent e -> newFiles.add(file);
-					case VFileDeleteEvent e -> {
-						if (file.isDirectory()) directoryDeleted = true;
-						else filesToDelete.add(file);
-					}
-					case VFileMoveEvent e -> { /* 文件移动无需处理，路径自动更新 */ }
-					case VFilePropertyChangeEvent e -> {
-						if (isRenameEvent(e)) {
-							filesToDelete.add(file);  // 删除旧名
-							newFiles.add(file);       // 添加新名
-						}
-					}
-					default -> { }
+			// 根据事件类型进行分类处理
+			switch (event) {
+				// 文件复制事件：将复制后创建的新文件添加到新文件列表
+				case VFileCopyEvent e -> newFiles.add(e.findCreatedFile());
+				// 文件创建事件：将新创建的文件添加到新文件列表
+				case VFileCreateEvent e -> newFiles.add(file);
+				// 文件删除事件：区分目录和普通文件
+				case VFileDeleteEvent e -> {
+					// 如果删除的是目录，设置目录删除标志
+					if (file.isDirectory()) directoryDeleted = true;
+					// 如果删除的是普通文件，添加到待删除文件列表
+					else filesToDelete.add(file);
 				}
+				// 文件移动事件：无需处理，因为文件路径会自动更新
+				case VFileMoveEvent e -> { /* 文件移动无需处理，路径自动更新 */ }
+				// 文件属性变更事件：主要处理文件重命名
+				case VFilePropertyChangeEvent e -> {
+					// 判断是否为重命名事件
+					if (isRenameEvent(e)) {
+						// 将旧文件名添加到待删除列表
+						filesToDelete.add(file);  // 删除旧名
+						// 将新文件名添加到新文件列表
+						newFiles.add(file);       // 添加新名
+					}
+				}
+				// 其他未处理的事件类型
+				default -> { }
 			}
-			return new EventClassification(newFiles, filesToDelete, directoryDeleted);
 		}
+		// 返回分类结果
+		return new EventClassification(newFiles, filesToDelete, directoryDeleted);
+	}
 
 		/** 判断是否为重命名事件 */
 		private boolean isRenameEvent(VFilePropertyChangeEvent e) {
@@ -1657,18 +1681,26 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @return 文件链接匹配项
 	 */
 	private FileLinkMatch createFileLinkMatch(final Matcher fileMatcher, String match, String path, int row, int col) {
+		// 移除匹配文本中的双宽字符标记
 		match = removeDoubleWidthCharMarkers(match);
+		// 初始化偏移量数组，用于记录前后需要去除的字符数
 		int[] offsets = new int[]{0, 0};
+		// 检查匹配文本是否被括号、方括号或单引号包围
 		if (isSurroundedBy(match, new String[]{"()", "[]", "''"}, offsets)) {
+			// 如果被包围，则去除包围字符，使用偏移量截取子字符串
 			match = match.substring(offsets[0], match.length() - offsets[1]);
 		}
 
+		// 获取正则匹配器中"link"命名组的起始和结束位置
 		int[] groupRange = RegexUtils.tryGetGroupRange(fileMatcher, "link");
+		// 创建并返回文件链接匹配对象
 		return new FileLinkMatch(
-				match, removeDoubleWidthCharMarkers(path),
-				groupRange[0] + offsets[0],
-				groupRange[1] - offsets[1],
-				row, col
+				match, // 处理后的匹配文本
+				removeDoubleWidthCharMarkers(path), // 移除路径中的双宽字符标记
+				groupRange[0] + offsets[0], // 链接起始位置加上前偏移量
+				groupRange[1] - offsets[1], // 链接结束位置减去后偏移量
+				row, // 行号
+				col // 列号
 		);
 	}
 
@@ -1751,15 +1783,21 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	private String normalizePathFormat(String path) {
 		// 处理用户主目录符号 '~'
+		// 如果路径仅为 '~'，则替换为用户主目录的完整路径
 		if ("~".equals(path)) {
+			// 将 '~' 替换为实际的用户主目录路径
 			path = SystemUtils.getUserHome();
 		} else if (path.startsWith("~/") || path.startsWith("~\\")) {
+			// 如果路径以 '~/' 或 '~\' 开头，则将 '~' 替换为用户主目录路径
+			// 保留 '~' 后面的路径部分（从索引1开始截取）
 			path = SystemUtils.getUserHome() + path.substring(1);
 		} else if (isUnixAbsolutePath(path) && isWindowsAbsolutePath(path)) {
 			// 处理特殊情况：路径同时满足 Unix 和 Windows 绝对路径格式
 			// 例如 "/c:/foo"，移除前导斜杠
+			// 去掉开头的斜杠，将路径转换为标准的 Windows 格式（如 "c:/foo"）
 			path = path.substring(1);
 		}
+		// 返回规范化后的路径
 		return path;
 	}
 
@@ -1787,35 +1825,55 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 预处理：根据配置决定是否移除ANSI转义序列
 		line = preprocessLine(line);
 
+		// 获取线程本地的URL匹配器实例
 		final Matcher urlMatcher = this.urlMatcher.get();
+		// 重置匹配器并设置新的输入文本
 		urlMatcher.reset(line);
+		// 创建结果列表用于存储所有匹配到的URL链接
 		final List<URLLinkMatch> results = new LinkedList<>();
+		// 循环查找所有匹配的URL
 		while (urlMatcher.find()) {
+			// 从正则表达式的命名捕获组"link"中提取匹配的URL字符串
 			String match = urlMatcher.group("link");
+			// 检查匹配结果是否为空，如果为空则记录错误并跳过当前匹配
 			if (null == match) {
 				logger.error("Regex group 'link' was NULL while trying to match url line: " + line);
 				continue;
 			}
 
+			// 移除双宽字符标记（如中文字符的特殊标记）
 			match = removeDoubleWidthCharMarkers(match);
 
+			// 初始化起始偏移量，用于调整URL在原文本中的起始位置
 			int startOffset = 0;
+			// 初始化结束偏移量，用于调整URL在原文本中的结束位置
 			int endOffset = 0;
 
+			// 遍历常见的包围符号（括号和单引号），处理URL被这些符号包围的情况
 			for (final String surrounding : new String[]{"()", "''"}) {
+				// 获取包围符号的起始字符
 				final String start = "" + surrounding.charAt(0);
+				// 获取包围符号的结束字符
 				final String end = "" + surrounding.charAt(1);
+				// 检查URL是否以起始符号开头
 				if (match.startsWith(start)) {
+					// 设置起始偏移量为1，表示需要跳过起始符号
 					startOffset = 1;
+					// 从匹配字符串中移除起始符号
 					match = match.substring(1);
+					// 检查URL是否以结束符号结尾
 					if (match.endsWith(end)) {
+						// 设置结束偏移量为1，表示需要排除结束符号
 						endOffset = 1;
+						// 从匹配字符串中移除结束符号
 						match = match.substring(0, match.length() - 1);
 					}
 				}
 			}
+			// 将处理后的URL链接匹配结果添加到结果列表中，包含URL文本和调整后的位置信息
 			results.add(new URLLinkMatch(match, urlMatcher.start() + startOffset, urlMatcher.end() - endOffset));
 		}
+		// 返回所有匹配到的URL链接列表
 		return results;
 	}
 
@@ -1837,61 +1895,88 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 检查匹配项是否应该被忽略（不应该被识别为文件路径）
-	 * 包括以下情况：
-	 * 1. 省略号的一部分（如 "Building..."）
-	 * 2. 反斜杠（如 "(\)"）
-	 * 3. 句子末尾的点号（前面是字母或数字）
-	 * 4. 单词后紧跟点号的情况（如 "sentence."）
+	 * 判断是否应该忽略当前匹配项
+	 *
+	 * 该方法用于过滤掉一些不应该被识别为文件链接的匹配项，包括：
+	 * 只包含反斜杠的字符串
+	 * 只包含点号的字符串（如省略号、句末点号等）
+	 * 单词后紧跟点号的情况（如 "word."）
+	 *
+	 * @param line 完整的文本行
+	 * @param fileLinkMatch 文件链接匹配对象，包含匹配的字符串和位置信息
+	 * @return 如果应该忽略该匹配项返回 true，否则返回 false
 	 */
 	private boolean shouldIgnoreMatch(@NotNull final String line, @NotNull final FileLinkMatch fileLinkMatch) {
+		// 提取匹配的字符串内容
 		String match = fileLinkMatch.match;
+		// 获取匹配在行中的起始位置
 		int startPos = fileLinkMatch.start;
+		// 获取匹配在行中的结束位置（不包含该位置的字符）
 		int endPos = fileLinkMatch.end;
 
 		// 检查是否只包含反斜杠，直接忽略
+		// 例如："\\" 或 "\\\\" 这样的字符串不应该被识别为文件路径
 		if (ONLY_BACKSLASHES_PATTERN.matcher(match).matches()) {
 			return true;
 		}
 
-		// 检查是否只包含点号
+		// 检查是否只包含点号（一个或多个点号）
+		// 例如："." 或 ".." 或 "..." 等
 		boolean isOnlyDots = ONLY_DOTS_PATTERN.matcher(match).matches();
 
-		// 如果不是点号，检查是否是单词后紧跟点号的情况（如 "word."）
+		// 如果不是纯点号字符串，检查是否是单词后紧跟点号的情况（如 "word."）
 		if (!isOnlyDots) {
+			// 检查匹配字符串后面紧跟的字符是否是点号
 			if (endPos < line.length() && line.charAt(endPos) == '.') {
+				// 检查点号后面是否是空白字符或已到行尾（表示句子结束）
 				boolean nextIsWhitespaceOrEnd = (endPos + 1 >= line.length() || Character.isWhitespace(line.charAt(endPos + 1)));
+				// 检查匹配的字符串是否只包含字母（纯单词）
 				boolean isOnlyLetters = ONLY_LETTERS_PATTERN.matcher(match).matches();
+				// 如果是"单词+点号+空白/行尾"的模式，则认为是句子结束，应该忽略
+				// 例如："Building. " 中的 "Building" 不应该被识别为文件名
 				return nextIsWhitespaceOrEnd && isOnlyLetters;
 			}
+			// 如果不是上述情况，则不忽略该匹配
 			return false;
 		}
 
-		// 以下处理只包含点号的情况
+		// ===== 以下处理只包含点号的情况 =====
 
 		// 检查是否是省略号（前面有字母），至少需要两个点号
+		// 例如："Building..." 或 "word.." 这样的省略号不应该被识别为文件路径
 		if (match.length() >= 2) {
-			// 检查前面是否有字母+点号的模式（如 "Building." + ".."）
+			// 检查前面是否有"字母+点号"的模式（如 "Building." + ".."）
+			// 这种情况下，当前的点号是省略号的一部分
 			if (startPos >= 2) {
+				// 获取匹配位置前面的第一个字符
 				char prevChar1 = line.charAt(startPos - 1);
+				// 获取匹配位置前面的第二个字符
 				char prevChar2 = line.charAt(startPos - 2);
+				// 如果前面是"字母+点号"的模式，则当前点号是省略号，应该忽略
 				if (prevChar1 == '.' && Character.isLetter(prevChar2)) {
 					return true;
 				}
 			}
 			// 检查直接前面是字母的情况（如 "Building.."）
+			// 这种情况下，点号紧跟在单词后面，是省略号的一部分
 			if (startPos > 0 && Character.isLetter(line.charAt(startPos - 1))) {
 				return true;
 			}
 		}
 
-		// 检查是否是句子末尾的点号
+		// 检查是否是句子末尾的单个点号
+		// 例如："sentence." 中的点号不应该被识别为文件路径的一部分
 		if (match.equals(".") && startPos > 0) {
+			// 获取点号前面的字符
 			char prevChar = line.charAt(startPos - 1);
+			// 检查点号后面是否是空白字符或已到行尾
 			boolean nextIsWhitespaceOrEnd = (endPos >= line.length() || Character.isWhitespace(line.charAt(endPos)));
+			// 如果前面是字母/数字/右括号，且后面是空白或行尾，则认为是句子结束的点号，应该忽略
+			// 例如："done." 或 "test(1)." 中的点号
 			return (Character.isLetterOrDigit(prevChar) || prevChar == ')') && nextIsWhitespaceOrEnd;
 		}
 
+		// 默认不忽略该匹配
 		return false;
 	}
 
