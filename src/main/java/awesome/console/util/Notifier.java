@@ -1,5 +1,6 @@
 package awesome.console.util;
 
+import awesome.console.config.AwesomeConsoleStorage;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationGroup;
 import com.intellij.notification.NotificationGroupManager;
@@ -64,6 +65,11 @@ public class Notifier {
      * @param actions 通知动作按钮
      */
     public static void notify(Project project, @NotNull String title, @NotNull String message, NotificationType type, @NotNull AnAction... actions) {
+        // 检查通知开关
+        if (!AwesomeConsoleStorage.getInstance().showNotifications) {
+            return;
+        }
+        
         NotificationGroup notificationGroup = getNotificationGroup();
         
         // 如果通知组未找到，降级处理：仅记录日志

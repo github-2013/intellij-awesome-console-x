@@ -15,7 +15,14 @@
 	<change-notes>
 		<![CDATA[
 		<p>
-	    <b>0.1337.33</b><br/>
+	    	<b>0.1337.34</b><br/>
+        	<ul>
+        		<li>Added notification toggle setting to enable/disable all plugin notifications</li>
+        		<li>Enhanced UI with comprehensive tooltips for all configuration options</li>
+        		<li>Optimized file filtering with lazy validation and async cleanup mechanism</li>
+        		<li>Optimized file link processing and path normalization logic, enhanced matching functionality</li>
+        	</ul>
+	    	<b>0.1337.33</b><br/>
         	<ul>
         		<li>Fixed issue #13</li>
         		<li>Added test cases for support Intellij IDE URL Schema</li>

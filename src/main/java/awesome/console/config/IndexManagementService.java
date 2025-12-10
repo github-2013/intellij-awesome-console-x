@@ -2,6 +2,7 @@ package awesome.console.config;
 
 import awesome.console.AwesomeLinkFilter;
 import awesome.console.AwesomeLinkFilterProvider;
+import awesome.console.config.AwesomeConsoleStorage;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationGroup;
 import com.intellij.notification.NotificationGroupManager;
@@ -517,6 +518,11 @@ public class IndexManagementService {
      * 显示通知
      */
     private void showNotification(Project project, String content, NotificationType type) {
+        // 检查通知开关
+        if (!AwesomeConsoleStorage.getInstance().showNotifications) {
+            return;
+        }
+        
         Notification notification = NOTIFICATION_GROUP.createNotification(
                 "Awesome Console - Index Management",
                 content,

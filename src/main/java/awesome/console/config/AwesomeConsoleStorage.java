@@ -84,6 +84,9 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 是否保留ANSI颜色 */
     public volatile boolean preserveAnsiColors = DEFAULT_PRESERVE_ANSI_COLORS;
 
+    /** 是否显示通知 */
+    public volatile boolean showNotifications = DEFAULT_SHOW_NOTIFICATIONS;
+
     /** 文件类型列表（逗号分隔） */
     private volatile String fileTypes;
 

@@ -41,6 +41,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     public JTextField fileTypesTextField;
     public JCheckBox resolveSymlinkCheckBox;
     public JCheckBox preserveAnsiColorsCheckBox;
+    public JCheckBox showNotificationsCheckBox;
 
     // 索引管理相关字段
     public JLabel indexStatusLabel;
@@ -68,6 +69,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         setupFileTypes();
         setupResolveSymlink();
         setupPreserveAnsiColors();
+        setupShowNotifications();
         setupIndexManagement();
     }
 
@@ -172,6 +174,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         maxLengthSpinner = initSpinner(DEFAULT_LINE_MAX_LENGTH);
         maxLengthSpinner.setModel(new SpinnerNumberModel(DEFAULT_LINE_MAX_LENGTH, 1, Integer.MAX_VALUE, 10));
+        maxLengthSpinner.setToolTipText("Maximum number of characters per line to process. Lines exceeding this limit will be handled based on the 'Match lines longer than the limit' setting.");
 
         JPopupMenu popup = new JPopupMenu("Defaults");
         maxLengthSpinner.setComponentPopupMenu(popup);
@@ -212,6 +215,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 		limitResultCheckBox.setToolTipText("Limit the maximum number of search results to improve performance when multiple files match.");
 		limitResultSpinner = initSpinner(DEFAULT_RESULT_LIMIT);
 		limitResultSpinner.setModel(new SpinnerNumberModel(DEFAULT_RESULT_LIMIT, DEFAULT_MIN_RESULT_LIMIT, Integer.MAX_VALUE, 10));
+		limitResultSpinner.setToolTipText("Maximum number of matching files to return for each hyperlink.");
 
 		bindCheckBoxAndComponents(searchForFilesCheckBox, searchForClassesCheckBox, limitResultCheckBox);
 		bindComponentToCheckBoxes(limitResultSpinner, searchForFilesCheckBox, limitResultCheckBox);
@@ -231,6 +235,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         ignorePatternCheckBox = initCheckBox(DEFAULT_USE_IGNORE_PATTERN);
         ignorePatternCheckBox.setToolTipText("Use regex pattern to ignore specific file paths or URLs from being matched.");
         ignorePatternTextField = initTextField(DEFAULT_IGNORE_PATTERN_TEXT);
+        ignorePatternTextField.setToolTipText("Regular expression pattern. Matches will be excluded from hyperlinks. Example: node_modules|build|dist");
         ignorePatternLabel = new JLabel("* Use regex pattern");
         // 设置小号字体和浅灰色
         Font currentFont = ignorePatternLabel.getFont();
@@ -255,7 +260,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         fileTypesCheckBox = initCheckBox(DEFAULT_USE_FILE_TYPES);
         fileTypesCheckBox.setToolTipText("Fix some files still open in external programs, uncheck if you don't need it.");
         fileTypesTextField = initTextField(DEFAULT_FILE_TYPES);
-        fileTypesTextField.setToolTipText("Use , to separate types.");
+        fileTypesTextField.setToolTipText("Comma-separated list of file extensions that should be treated as non-text files. Example: png,jpg,gif,pdf");
         bindCheckBoxAndComponents(fileTypesCheckBox, fileTypesTextField);
     }
 
@@ -273,12 +278,18 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         preserveAnsiColorsCheckBox.setToolTipText("Preserve ANSI color codes and formatting in console output. Useful for modern shell prompts (oh-my-posh, starship).");
     }
 
+    private void setupShowNotifications() {
+        showNotificationsCheckBox = initCheckBox(DEFAULT_SHOW_NOTIFICATIONS);
+        showNotificationsCheckBox.setToolTipText("Uncheck to disable all plugin notifications.");
+    }
+
     /**
      * 设置索引管理组件
      */
     private void setupIndexManagement() {
         indexStatusLabel = new JLabel("Index Status: Not initialized");
         indexStatusLabel.setForeground(JBColor.GRAY);
+        indexStatusLabel.setToolTipText("Displays the current state of the file index including total files, matched files, and ignored files.");
 
         indexProgressBar = new JProgressBar(0, 100);
         indexProgressBar.setStringPainted(true);
@@ -292,9 +303,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         indexProgressBar.setUI(dualColorProgressBarUI);
 
         rebuildIndexButton = new JButton("Rebuild");
+        rebuildIndexButton.setToolTipText("Rebuild the file index by scanning all project files. This may take a while for large projects.");
         rebuildIndexButton.addActionListener(e -> rebuildIndex());
 
         clearIndexButton = new JButton("Clear");
+        clearIndexButton.setToolTipText("Clear the file index. It will be automatically rebuilt when needed.");
         clearIndexButton.addActionListener(e -> clearIndex());
 
         // 创建索引管理服务

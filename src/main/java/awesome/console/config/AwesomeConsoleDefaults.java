@@ -67,4 +67,7 @@ public interface AwesomeConsoleDefaults {
 
     /** 默认是否保留ANSI颜色 */
     boolean DEFAULT_PRESERVE_ANSI_COLORS = false;
+
+    /** 默认是否显示通知 */
+    boolean DEFAULT_SHOW_NOTIFICATIONS = true;
 }

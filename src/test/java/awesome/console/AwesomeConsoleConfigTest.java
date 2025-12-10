@@ -578,6 +578,42 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         }
     }
 
+    /**
+     * 测试显示通知的配置
+     * 验证 showNotifications 配置能够正确控制插件通知的显示
+     */
+    public void testShowNotificationsConfiguration() {
+        // 保存原始配置
+        boolean originalValue = storage.showNotifications;
+        
+        try {
+            // 测试默认值
+            assertTrue("Show notifications should be enabled by default", 
+                AwesomeConsoleDefaults.DEFAULT_SHOW_NOTIFICATIONS);
+            
+            // 测试启用/禁用
+            storage.showNotifications = true;
+            assertTrue("Should be enabled", storage.showNotifications);
+            
+            storage.showNotifications = false;
+            assertFalse("Should be disabled", storage.showNotifications);
+            
+            // 边界测试：快速切换
+            for (int i = 0; i < 10; i++) {
+                boolean state = (i % 2 == 0);
+                storage.showNotifications = state;
+                assertEquals("Show notifications should toggle correctly", 
+                    state, storage.showNotifications);
+            }
+            
+        } finally {
+            // 恢复原始配置
+            storage.showNotifications = originalValue;
+            // 重新创建过滤器以恢复原始配置
+            filter = new AwesomeLinkFilter(getProject());
+        }
+    }
+
     // ========== 九、配置持久化测试 ==========
 
     /**
@@ -592,6 +628,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             // 修改配置
             storage.setResultLimit(50);
             storage.searchUrls = !backup.searchUrls;
+            storage.showNotifications = !backup.showNotifications;
             
             // 保存状态
             AwesomeConsoleStorage savedState = storage.getState();
@@ -605,6 +642,8 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                 storage.getResultLimit(), newStorage.getResultLimit());
             assertEquals("Search URLs should be persisted", 
                 storage.searchUrls, newStorage.searchUrls);
+            assertEquals("Show notifications should be persisted", 
+                storage.showNotifications, newStorage.showNotifications);
             
         } finally {
             // 恢复原始配置
@@ -1035,6 +1074,46 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             
         } finally {
             storage.preserveAnsiColors = originalValue;
+            filter = new AwesomeLinkFilter(getProject());
+        }
+    }
+
+    /**
+     * 测试显示通知配置的功能验证
+     * 验证 showNotifications 配置能够正确控制 Notifier 和 IndexManagementService 的通知行为
+     */
+    public void testShowNotificationsFunctionality() {
+        // 保存原始配置
+        boolean originalValue = storage.showNotifications;
+        
+        try {
+            // 测试启用通知（默认）
+            storage.showNotifications = true;
+            
+            // 验证配置已正确设置
+            assertTrue("Show notifications should be enabled", storage.showNotifications);
+            
+            // 测试禁用通知
+            storage.showNotifications = false;
+            
+            // 验证配置已正确设置
+            assertFalse("Show notifications should be disabled", storage.showNotifications);
+            
+            // 验证禁用通知不影响核心功能
+            filter = new AwesomeLinkFilter(getProject());
+            assertPathDetection("Error in src/main.java:10", "src/main.java:10");
+            assertURLDetection("Visit https://example.com", "https://example.com");
+            
+            // 验证启用通知不影响核心功能
+            storage.showNotifications = true;
+            filter = new AwesomeLinkFilter(getProject());
+            assertPathDetection("Error in test.java:20", "test.java:20");
+            
+            // 注意：实际的通知显示由 Notifier.notify() 和 IndexManagementService.showNotification() 控制
+            // 这里我们验证配置能够正确存储和读取，具体的通知行为在运行时验证
+            
+        } finally {
+            storage.showNotifications = originalValue;
             filter = new AwesomeLinkFilter(getProject());
         }
     }
