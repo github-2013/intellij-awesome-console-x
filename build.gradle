@@ -1,146 +1,102 @@
-// 导入测试框架类型，用于配置 IntelliJ Platform 测试依赖
+// 导入 IntelliJ Platform Gradle 插件中的测试框架类型枚举
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 
-// ========== 插件配置 ==========
+// ==================== 插件配置 ====================
 plugins {
-    // Java 插件：提供 Java 项目的基本构建能力（编译、测试、打包等）
+    // 启用 Java 插件，提供 Java 项目的编译、测试、打包等基础能力
     id "java"
-    
-    // IntelliJ Platform Gradle 插件：用于开发 IntelliJ IDEA 插件的核心插件
-    // 版本 2.2.1 是该插件的版本号，提供了构建、测试、验证和发布 IDEA 插件的功能
+    // 启用 IntelliJ Platform Gradle 插件 2.2.1 版本
+    // 该插件用于开发 IntelliJ IDEA 插件，提供构建、运行、调试、发布等功能
     id "org.jetbrains.intellij.platform" version "2.2.1"
 }
 
-// ========== 仓库配置 ==========
+// ==================== 仓库配置 ====================
 repositories {
     // Maven 中央仓库：用于下载通用的 Java 依赖（如 JUnit 等）
     // mavenCentral()
 
-    // Tencent Maven 中央仓库：用于下载通用的 Java 依赖（如 JUnit 等）
+    // 配置腾讯云 Maven 镜像仓库，用于加速依赖下载
     maven {
         url "http://mirrors.tencent.com/nexus/repository/maven-public/"
+        // 允许使用不安全的 HTTP 协议（非 HTTPS）
         allowInsecureProtocol = true
     }
-
-    // IntelliJ Platform 专用仓库配置
+    // 配置 IntelliJ Platform 默认仓库
+    // 包含 JetBrains 官方的插件和 IDE 依赖仓库
     intellijPlatform {
-        // 默认仓库：自动配置 JetBrains 的 Maven 仓库，用于下载 IntelliJ Platform SDK 和相关依赖
         defaultRepositories()
     }
 }
 
-// ========== 依赖配置 ==========
+// ==================== 依赖配置 ====================
 dependencies {
     // IntelliJ Platform 相关依赖
     intellijPlatform {
-        // IntelliJ IDEA Community Edition 2024.2 版本
-        // 这是插件开发的基础 SDK，决定了插件的 API 版本和兼容性
-        // 注意：2024.2 对应 Build Number 242，更稳定的版本
+        // 指定目标 IDE 为 IntelliJ IDEA Community Edition 2024.2 版本
+        // 插件将基于此版本进行开发和编译
         intellijIdeaCommunity("2024.2")
-
-        // 捆绑的 Java 插件依赖
-        // 如果你的插件需要使用 IDEA 的 Java 支持功能（如代码分析、导航等），需要声明此依赖
+        // 声明依赖 IntelliJ 内置的 Java 插件
+        // 这使得本插件可以使用 Java 插件提供的 API
         bundledPlugin "com.intellij.java"
-
-        // 插件验证器：用于在构建时验证插件与不同 IDEA 版本的兼容性
-        // 可以检测 API 使用问题、废弃 API 调用等
+        // 启用插件验证器，用于检查插件兼容性
         pluginVerifier()
-        
-        // 代码插桩工具：用于处理 IntelliJ Platform 的特殊注解和字节码增强
-        // 例如 @NotNull、@Nullable 等注解的运行时检查
-        // 这个配置启用了 GUI Designer 的字节码增强
-        // instrumentationTools()
-
-        // 测试框架：提供 IntelliJ Platform 的测试基础设施
-        // Platform.INSTANCE 表示使用平台级别的测试框架
+        // 启用代码插桩工具，用于处理 @NotNull 等注解的运行时检查
+        instrumentationTools()
+        // 配置测试框架为 Platform 类型，用于编写插件的单元测试
         testFramework TestFrameworkType.Platform.INSTANCE
     }
-    
-    // JUnit 5 测试 API：用于编写测试用例
-    testImplementation("org.junit.jupiter:junit-jupiter-api:5.11.3")
-    
-    // JUnit 4 兼容性：仅在编译时需要，用于支持旧的 JUnit 4 测试
-    testCompileOnly("junit:junit:4.13.2")
-
-    // JUnit Vintage 引擎：运行时依赖，用于在 JUnit 5 平台上运行 JUnit 4 测试
-    testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
-    
-    // JUnit Platform 启动器：运行时依赖，用于启动测试执行
-    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
+    // 添加 JUnit 4.13.2 作为测试依赖
+    testImplementation("junit:junit:4.13.2")
 }
 
-// ========== IntelliJ Platform 插件配置 ==========
+// ==================== IntelliJ Platform 插件配置 ====================
 intellijPlatform {
+    // 插件元信息配置
     pluginConfiguration {
-        // 插件 ID：从 gradle.properties 文件中读取，用于唯一标识插件
-        // 格式通常为：com.company.pluginname
+        // 插件唯一标识符，从 gradle.properties 文件中读取 pluginId 属性
         id = providers.gradleProperty("pluginId")
-        
-        // 插件名称：从 gradle.properties 文件中读取，显示在插件市场和 IDEA 中
+        // 插件显示名称，从 gradle.properties 文件中读取 pluginTitle 属性
         name = providers.gradleProperty("pluginTitle")
-        
-        // 插件版本号：从 gradle.properties 文件中读取，用于版本管理和更新检测
+        // 插件版本号，从 gradle.properties 文件中读取 pluginVersion 属性
         version = providers.gradleProperty("pluginVersion")
-        
-        // 供应商信息：插件开发者或组织的信息
+        // 插件开发者/供应商信息
         vendor {
-            name = "xingjiexu"                                              // 开发者名称
-            email = "553926121@qq.com"                                      // 联系邮箱
-            url = "https://github.com/github-2013/intellij-awesome-console-x"  // 项目主页
+            // 开发者名称
+            name = "xingjiexu"
+            // 开发者联系邮箱
+            email = "553926121@qq.com"
+            // 插件项目主页 URL
+            url = "https://github.com/github-2013/intellij-awesome-console-x"
         }
-        
-        // IDEA 版本兼容性配置
+        // IDE 版本兼容性配置
         ideaVersion {
-            // sinceBuild：插件支持的最低 IDEA 版本
-            // '242' 对应 IntelliJ IDEA 2024.2
-            // 低于此版本的 IDEA 将无法安装此插件
+            // 最低支持的 IDE 构建版本号（242 对应 2024.2 版本）
             sinceBuild = '242'
+            // 最高支持的 IDE 构建版本号（299.* 表示支持到 2029.9 的所有小版本）
             untilBuild = '299.*'
         }
     }
 }
 
-// ========== Java 工具链配置 ==========
+// ==================== Java 编译配置 ====================
 java {
+    // 配置 Java 工具链
     toolchain {
-        // 指定 Java 语言版本为 21
-        // 这确保了项目使用 Java 21 的语法特性和 API
+        // 指定使用 Java 21 版本进行编译
         languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
-// ========== Java 编译配置 ==========
+// ==================== 任务配置 ====================
+// 配置所有 JavaCompile 类型的任务
 tasks.withType(JavaCompile).configureEach {
-    // 设置源代码文件的字符编码为 UTF-8
-    // 避免在不同操作系统上出现乱码问题
+    // 设置源文件编码为 UTF-8，避免中文等字符编译问题
     options.encoding = 'UTF-8'
-
-    // 指定 Java 编译器版本为 21
-    // 确保使用 Java 21 编译器来编译源代码
-    javaCompiler = javaToolchains.compilerFor {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
 }
 
-// ========== 测试任务配置 ==========
-test {
-    // 使用 JUnit Platform 来运行测试
-    // 这是 JUnit 5 的测试执行引擎
-    useJUnitPlatform()
-    
-    // 指定测试运行时使用的 Java 启动器版本为 21
-    // 确保测试在 Java 21 环境下运行
-    javaLauncher = javaToolchains.launcherFor {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
-}
-
-// ========== buildSearchableOptions 任务配置 ==========
-// 禁用 buildSearchableOptions 任务
-// 该任务会在构建时启动完整的 IDEA 实例来生成可搜索选项索引
-// 但可能因网络问题（尝试从 JetBrains Marketplace 下载插件信息）导致 JsonEOFException 错误
-// 对于简单插件，可以安全地禁用此任务
+// 配置 buildSearchableOptions 任务
+// 该任务用于构建插件设置页面的可搜索选项索引
 tasks.named('buildSearchableOptions') {
+    // 启用此任务（设为 false 可跳过，加快构建速度，但会影响设置搜索功能）
     enabled = true
 }
-

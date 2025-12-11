@@ -17,7 +17,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.jetbrains.annotations.NotNull;
-import org.junit.jupiter.api.Assertions;
+import org.junit.Assert;
 
 /**
  * AwesomeLinkFilter 测试类
@@ -1420,9 +1420,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 */
 	private void assertUrlNoMatches(@NotNull final String desc, @NotNull final String line) {
 		System.out.println(desc + line);
-		List<URLLinkMatch> matches = filter.detectURLs(line);
+List<URLLinkMatch> matches = filter.detectURLs(line);
 		List<String> results = matches.stream().map(it -> it.match).toList();
-		Assertions.assertTrue(results.isEmpty(), "Expected no URL matches in: " + line);
+		Assert.assertTrue("Expected no URL matches in: " + line, results.isEmpty());
 	}
 
 	/**
@@ -1491,9 +1491,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		// 注意：这里只检测路径模式，不检查文件是否实际存在
 		List<FileLinkMatch> results = filter.detectPaths(line);
 
-		// 断言检测结果不为空，即至少检测到一个路径
+// 断言检测结果不为空，即至少检测到一个路径
 		// 如果为空，测试失败并显示错误消息
-		Assertions.assertFalse(results.isEmpty(), "No matches in line \"" + line + "\"");
+		Assert.assertFalse("No matches in line \"" + line + "\"", results.isEmpty());
 
 		// 将期望的路径数组转换为Set集合，便于后续的包含关系检查
 		// 使用Set可以自动去重，并提高查找效率
@@ -1563,16 +1563,16 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 
 		// 如果期望行号大于等于0（-1表示不验证），则验证解析出的行号是否匹配
 		if (expectedRow >= 0) {
-			// 断言FileLinkMatch对象中的linkedRow字段与期望行号相等
+// 断言FileLinkMatch对象中的linkedRow字段与期望行号相等
 			// 如果不相等，测试失败并显示错误消息
-			Assertions.assertEquals(expectedRow, info.linkedRow, "Expected to capture row number");
+			Assert.assertEquals("Expected to capture row number", expectedRow, info.linkedRow);
 		}
 
 		// 如果期望列号大于等于0（-1表示不验证），则验证解析出的列号是否匹配
 		if (expectedCol >= 0) {
-			// 断言FileLinkMatch对象中的linkedCol字段与期望列号相等
+// 断言FileLinkMatch对象中的linkedCol字段与期望列号相等
 			// 如果不相等，测试失败并显示错误消息
-			Assertions.assertEquals(expectedCol, info.linkedCol, "Expected to capture column number");
+			Assert.assertEquals("Expected to capture column number", expectedCol, info.linkedCol);
 		}
 	}
 
@@ -1613,14 +1613,14 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		// 注意：这里只检测URL模式，不检查URL是否可访问
 		List<URLLinkMatch> results = filter.detectURLs(line);
 
-		// 断言检测结果数量为1，即期望只检测到一个URL
+// 断言检测结果数量为1，即期望只检测到一个URL
 		// 如果数量不是1（可能是0或多个），测试失败并显示错误消息
-		Assertions.assertEquals(1, results.size(), "No matches in line \"" + line + "\"");
+		Assert.assertEquals("No matches in line \"" + line + "\"", 1, results.size());
 		// 获取检测到的第一个（也是唯一的）URL匹配结果
 		URLLinkMatch info = results.get(0);
-		// 断言检测到的URL字符串与期望的URL完全匹配
+// 断言检测到的URL字符串与期望的URL完全匹配
 		// 如果不匹配，测试失败并显示格式化的错误消息，包含期望值和实际文本
-		Assertions.assertEquals(expected, info.match, String.format("Expected filter to detect \"%s\" link in \"%s\"", expected, line));
+		Assert.assertEquals(String.format("Expected filter to detect \"%s\" link in \"%s\"", expected, line), expected, info.match);
 	}
 
 	/**
