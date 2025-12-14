@@ -1256,28 +1256,35 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		@Override
 		public boolean processFile(VirtualFile fileOrDir) {
-			// 跳过目录，直接返回继续迭代
-			if (fileOrDir.isDirectory()) {
-				return true;
-			}
+			try {
+				// 跳过目录，直接返回继续迭代
+				if (fileOrDir.isDirectory()) {
+					return true;
+				}
 
-			// 统计处理的文件数（包括被忽略的文件，用于进度显示）
-			processedCount++;
+				// 统计处理的文件数（包括被忽略的文件，用于进度显示）
+				processedCount++;
 
-			// 在索引阶段就应用忽略模式过滤，减少无效索引
-			if (shouldIgnoreFile(fileOrDir)) {
-				localIgnoredCount++;
-				// 被忽略的文件不添加到缓存，但仍触发进度回调
+				// 在索引阶段就应用忽略模式过滤，减少无效索引
+				if (shouldIgnoreFile(fileOrDir)) {
+					localIgnoredCount++;
+					// 被忽略的文件不添加到缓存，但仍触发进度回调
+					triggerProgressCallback();
+					return true;
+				}
+
+				// 只有通过过滤的文件才调用父类方法添加到缓存
+				boolean result = super.processFile(fileOrDir);
+
+				// 调用进度回调
 				triggerProgressCallback();
-				return true;
+				return result;
+			} catch (Exception e) {
+				// 记录错误但不中断整个索引过程，继续处理其他文件
+				logger.error(String.format("project[%s]: Error processing file during indexing: %s",
+						project.getName(), fileOrDir.getPath()), e);
+				return true; // 继续处理下一个文件
 			}
-
-			// 只有通过过滤的文件才调用父类方法添加到缓存
-			boolean result = super.processFile(fileOrDir);
-
-			// 调用进度回调
-			triggerProgressCallback();
-			return result;
 		}
 
 		/**
@@ -1354,12 +1361,18 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		@Override
 		public void after(@NotNull List<? extends @NotNull VFileEvent> events) {
-			EventClassification result = classifyEvents(events);
-			if (!result.hasChanges()) return;
+			try {
+				EventClassification result = classifyEvents(events);
+				if (!result.hasChanges()) return;
 
-			processDeletions(result.filesToDelete);
-			if (result.directoryDeleted) cleanupInvalidFilesAsync();
-			processAdditions(result.newFiles);
+				processDeletions(result.filesToDelete);
+				if (result.directoryDeleted) cleanupInvalidFilesAsync();
+				processAdditions(result.newFiles);
+			} catch (Exception e) {
+				// 记录错误但不中断VFS事件处理，避免影响其他监听器
+				logger.error(String.format("project[%s]: Error handling VFS events",
+						project.getName()), e);
+			}
 		}
 
 		/** 分类处理所有VFS事件 */
