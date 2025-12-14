@@ -956,12 +956,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			if (null == matchingFiles && config.searchClasses) {
 				matchingFiles = getResultItemsFileFromBasename(fileName);
 			}
-			if (null != matchingFiles) {
-				// 方案三（惰性验证）：读取时过滤无效文件，作为兜底机制
-				// 不能使用并行流，因为 shouldIgnore 方法使用了 ThreadLocal
+		if (null != matchingFiles) {
+				// 使用统一的 shouldIgnoreFile 方法确保与索引阶段和配置变更处理的一致性
 				matchingFiles = matchingFiles.stream()
 						.filter(VirtualFile::isValid)  // 惰性验证：过滤已失效的文件
-						.filter(f -> !shouldIgnore(getRelativePath(f.getPath())))
+						.filter(f -> !shouldIgnoreFile(f))  // 使用统一的忽略检查方法
 						.limit(config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
 						.collect(Collectors.toList());
 			}
@@ -1257,29 +1256,42 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		@Override
 		public boolean processFile(VirtualFile fileOrDir) {
+			// 跳过目录，直接返回继续迭代
+			if (fileOrDir.isDirectory()) {
+				return true;
+			}
+
+			// 统计处理的文件数（包括被忽略的文件，用于进度显示）
+			processedCount++;
+
+			// 在索引阶段就应用忽略模式过滤，减少无效索引
+			if (shouldIgnoreFile(fileOrDir)) {
+				localIgnoredCount++;
+				// 被忽略的文件不添加到缓存，但仍触发进度回调
+				triggerProgressCallback();
+				return true;
+			}
+
+			// 只有通过过滤的文件才调用父类方法添加到缓存
 			boolean result = super.processFile(fileOrDir);
-			if (!fileOrDir.isDirectory()) {
-				processedCount++;
 
-				// 统计忽略的文件
-				if (config.useIgnorePattern) {
-					String fileName = fileOrDir.getName();
-					String filePath = fileOrDir.getPath();
-					if (shouldIgnore(fileName) || shouldIgnore(filePath)) {
-						localIgnoredCount++;
-					}
-				}
+			// 调用进度回调
+			triggerProgressCallback();
+			return result;
+		}
 
-				// 调用进度回调
-				if (progressCallback != null) {
-					long currentTime = System.currentTimeMillis();
-					if (processedCount % 5 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
-						progressCallback.accept(processedCount);
-						lastCallbackTime = currentTime;
-					}
+		/**
+		 * 触发进度回调
+		 * 每处理5个文件或间隔50ms触发一次
+		 */
+		private void triggerProgressCallback() {
+			if (progressCallback != null) {
+				long currentTime = System.currentTimeMillis();
+				if (processedCount % 5 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
+					progressCallback.accept(processedCount);
+					lastCallbackTime = currentTime;
 				}
 			}
-			return result;
 		}
 
 		public int getIgnoredCount() {
@@ -1327,11 +1339,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 文件缓存更新监听器，处理文件系统事件并增量更新缓存
-	 * 
-	 * 优化策略（三种方案结合）：
-	 * - 方案一（精准删除）：单文件删除时，O(1) 复杂度精准移除
-	 * - 方案二（异步清理）：目录删除时，使用后台线程处理，不阻塞UI
-	 * - 方案三（惰性验证）：在 findMatchingFilesInCache 中读取时过滤无效文件，作为兜底机制
 	 */
 	private class FileCacheUpdateListener implements BulkFileListener {
 		/** 事件分类结果 */
@@ -1416,7 +1423,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					&& e.getOldValue() != null;
 		}
 
-		/** 方案一：精准删除单文件（同步，O(1)复杂度） */
+		/** 精准删除单文件 */
 		private void processDeletions(List<VirtualFile> filesToDelete) {
 			if (filesToDelete.isEmpty()) return;
 			cacheWriteLock.lock();
@@ -1429,20 +1436,37 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 		}
 
-		/** 处理新增文件 */
+		/** 处理新增文件（应用忽略模式过滤） */
 		private void processAdditions(List<VirtualFile> newFiles) {
 			if (newFiles.isEmpty()) return;
 			cacheWriteLock.lock();
 			try {
-				newFiles.forEach(indexIterator::processFile);
-				logger.info(String.format("project[%s]: add %d file(s)", 
-						project.getName(), newFiles.size()));
+				int addedCount = 0;
+				int ignoredCount = 0;
+				for (VirtualFile file : newFiles) {
+					// 跳过目录
+					if (file.isDirectory()) continue;
+					
+					// 应用忽略模式过滤，与索引阶段保持一致
+					if (shouldIgnoreFile(file)) {
+						ignoredCount++;
+						continue;
+					}
+					
+					// 只有通过过滤的文件才添加到缓存
+					indexIterator.processFile(file);
+					addedCount++;
+				}
+				if (addedCount > 0 || ignoredCount > 0) {
+					logger.info(String.format("project[%s]: add %d file(s), ignored %d file(s)", 
+							project.getName(), addedCount, ignoredCount));
+				}
 			} finally {
 				cacheWriteLock.unlock();
 			}
 		}
 
-		/** 方案一：从缓存中精准删除单个文件，O(1)复杂度 */
+		/** 从缓存中精准删除单个文件 */
 		private void removeFileFromCache(@NotNull VirtualFile file) {
 			removeFromCacheMap(fileCache, file.getName(), file);
 			removeFromCacheMap(fileBaseCache, file.getNameWithoutExtension(), file);
@@ -1457,7 +1481,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 		}
 
-		/** 方案二：异步清理所有无效文件，不阻塞UI线程 */
+		/** 异步清理所有无效文件，不阻塞UI线程 */
 		private void cleanupInvalidFilesAsync() {
 			ApplicationManager.getApplication().executeOnPooledThread(() -> {
 				cacheWriteLock.lock();
@@ -2091,12 +2115,21 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			switch (changeType) {
 				case SEARCH_FILES_CHANGED:
 				case SEARCH_CLASSES_CHANGED:
-				case IGNORE_PATTERN_CHANGED:
 				case FILE_TYPES_CHANGED:
 					// 这些变更需要重建缓存
 					logger.info(String.format("project[%s]: Config changed (%s), rebuilding cache", 
 						project.getName(), changeType.name().toLowerCase()));
 					reloadFileCache("config changed: " + changeType.name().toLowerCase());
+					break;
+			case IGNORE_PATTERN_CHANGED:
+					// 忽略模式变更：必须完全重建缓存
+					// 原因：
+					// 1. 当忽略模式放宽时（如从"node_modules"改为"test"），增量清理无法添加回之前被忽略的文件
+					// 2. 索引阶段已过滤被忽略文件，这些文件根本不在缓存中，无法通过增量方式恢复
+					// 3. 完全重建可确保ignoredFilesCount统计准确
+					logger.info(String.format("project[%s]: Ignore pattern changed, rebuilding cache", 
+						project.getName()));
+					reloadFileCache("ignore pattern changed");
 					break;
 				case OTHER_CHANGED:
 					// 其他变更不需要重建缓存，只记录日志
@@ -2112,6 +2145,23 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			logger.error(String.format("project[%s]: Error handling config change (%s)", 
 				project.getName(), changeType), e);
 		}
+	}
+
+	/**
+	 * 统一的忽略检查方法
+	 * 检查文件是否应该被忽略（根据文件名和相对路径）
+	 * 确保在索引阶段、VFS增量更新、缓存查询等所有位置使用一致的忽略逻辑
+	 *
+	 * @param file 要检查的文件
+	 * @return 如果文件应该被忽略则返回true
+	 */
+	private boolean shouldIgnoreFile(@NotNull VirtualFile file) {
+		if (!config.useIgnorePattern) {
+			return false;
+		}
+		String fileName = file.getName();
+		String relativePath = getRelativePath(file.getPath());
+		return shouldIgnore(fileName) || shouldIgnore(relativePath);
 	}
 
 	// ==================== Disposable 接口实现 ====================

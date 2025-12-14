@@ -15,6 +15,15 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.35</b><br/>
+        	<ul>
+        		<li>Unified ignore file checking logic with new shouldIgnoreFile() method</li>
+        		<li>Optimized file filtering at index stage to reduce invalid indexing</li>
+        		<li>Refactored progress callback logic with dedicated triggerProgressCallback() method</li>
+        		<li>Improved ignore pattern change handling with forced full cache rebuild</li>
+        		<li>Enhanced VFS file addition event processing with ignore pattern filtering</li>
+        		<li>Cleaned up redundant code comments and simplified implementation</li>
+        	</ul>
 	    	<b>0.1337.34</b><br/>
         	<ul>
         		<li>Added notification toggle setting to enable/disable all plugin notifications</li>
