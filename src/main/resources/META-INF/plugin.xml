@@ -25,6 +25,7 @@
         		<li>Cleaned up redundant code comments and simplified implementation</li>
         		<li>Added exception handling for file indexing process to prevent interruption on errors</li>
         		<li>Added exception handling for VFS event processing to improve plugin stability</li>
+        		<li>Optimized getVirtualFileFromPath to avoid deadlock when called under read lock</li>
         	</ul>
 	    	<b>0.1337.34</b><br/>
         	<ul>

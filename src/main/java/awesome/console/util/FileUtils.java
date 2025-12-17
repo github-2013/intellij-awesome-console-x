@@ -1,5 +1,7 @@
 package awesome.console.util;
 
+import com.intellij.openapi.application.Application;
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
@@ -181,6 +183,9 @@ public class FileUtils {
     /**
      * 根据路径获取VirtualFile对象
      * 仅支持Unix和Windows下的"file"和"jar"协议
+     * <p>
+     * 注意：为避免在读锁下执行同步刷新导致死锁，此方法会先尝试不刷新直接查找，
+     * 如果找不到且不在读锁下，才会执行同步刷新。
      *
      * @see VfsUtil#findFileByURL(URL)
      * @see com.intellij.openapi.vfs.VirtualFileManager#findFileByUrl(String)
@@ -195,7 +200,24 @@ public class FileUtils {
         if (isJarPath(path)) {
             return JarFileSystem.getInstance().findFileByPath(path);
         }
-        return LocalFileSystem.getInstance().refreshAndFindFileByPath(path);
+        
+        LocalFileSystem lfs = LocalFileSystem.getInstance();
+        // 先尝试不刷新直接查找
+        VirtualFile file = lfs.findFileByPath(path);
+        if (file != null) {
+            return file;
+        }
+        
+        // 如果找不到，检查是否在读锁下
+        // 在读锁下执行同步刷新会导致死锁风险，因此需要避免
+        Application app = ApplicationManager.getApplication();
+        if (app.isReadAccessAllowed() && !app.isWriteAccessAllowed()) {
+            // 在读锁下，不能执行同步刷新，返回 null
+            return null;
+        }
+        
+        // 不在读锁下，可以安全执行同步刷新
+        return lfs.refreshAndFindFileByPath(path);
     }
 
     /**
