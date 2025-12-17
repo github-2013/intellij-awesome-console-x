@@ -87,6 +87,9 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 是否显示通知 */
     public volatile boolean showNotifications = DEFAULT_SHOW_NOTIFICATIONS;
 
+    /** 是否仅保留超链接下划线效果（不改变颜色） */
+    public volatile boolean underlineOnly = DEFAULT_UNDERLINE_ONLY;
+
     /** 文件类型列表（逗号分隔） */
     private volatile String fileTypes;
 

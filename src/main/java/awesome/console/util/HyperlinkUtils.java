@@ -187,4 +187,52 @@ public class HyperlinkUtils {
             return null;
         }
     }
+
+    /**
+     * 创建仅下划线效果的超链接样式（不改变文本颜色）
+     * 
+     * @return 仅包含下划线效果的文本属性对象，失败时返回null
+     */
+    @Nullable
+    public static TextAttributes createUnderlineOnlyAttributes() {
+        try {
+            TextAttributes attr = new TextAttributes();
+            // 仅设置下划线效果，不设置前景色，保持原有文本颜色
+            attr.setEffectType(EffectType.LINE_UNDERSCORE);
+            // 获取当前配色方案的超链接颜色用于下划线
+            TextAttributes hyperlinkAttr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
+            if (hyperlinkAttr != null && hyperlinkAttr.getEffectColor() != null) {
+                attr.setEffectColor(hyperlinkAttr.getEffectColor());
+            } else if (hyperlinkAttr != null && hyperlinkAttr.getForegroundColor() != null) {
+                attr.setEffectColor(hyperlinkAttr.getForegroundColor());
+            }
+            return attr;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * 创建仅下划线效果的已访问超链接样式（不改变文本颜色）
+     * 
+     * @return 仅包含下划线效果的文本属性对象，失败时返回null
+     */
+    @Nullable
+    public static TextAttributes createFollowedUnderlineOnlyAttributes() {
+        try {
+            TextAttributes attr = new TextAttributes();
+            // 仅设置下划线效果，不设置前景色，保持原有文本颜色
+            attr.setEffectType(EffectType.LINE_UNDERSCORE);
+            // 获取当前配色方案的已访问超链接颜色用于下划线
+            TextAttributes followedAttr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES);
+            if (followedAttr != null && followedAttr.getEffectColor() != null) {
+                attr.setEffectColor(followedAttr.getEffectColor());
+            } else if (followedAttr != null && followedAttr.getForegroundColor() != null) {
+                attr.setEffectColor(followedAttr.getForegroundColor());
+            }
+            return attr;
+        } catch (Exception e) {
+            return null;
+        }
+    }
 }

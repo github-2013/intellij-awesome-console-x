@@ -614,6 +614,48 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         }
     }
 
+    /**
+     * 测试仅下划线样式的配置
+     * 验证 underlineOnly 配置能够正确控制超链接是否只显示下划线而不改变颜色
+     */
+    public void testUnderlineOnlyConfiguration() {
+        // 保存原始配置
+        boolean originalValue = storage.underlineOnly;
+        
+        try {
+            // 测试默认值
+            assertFalse("Underline only should be disabled by default", 
+                AwesomeConsoleDefaults.DEFAULT_UNDERLINE_ONLY);
+            
+            // 测试启用/禁用
+            storage.underlineOnly = true;
+            assertTrue("Should be enabled", storage.underlineOnly);
+            
+            storage.underlineOnly = false;
+            assertFalse("Should be disabled", storage.underlineOnly);
+            
+            // 边界测试：快速切换
+            for (int i = 0; i < 10; i++) {
+                boolean state = (i % 2 == 0);
+                storage.underlineOnly = state;
+                assertEquals("Underline only should toggle correctly", 
+                    state, storage.underlineOnly);
+            }
+            
+            // 测试与其他配置的组合
+            storage.underlineOnly = true;
+            storage.preserveAnsiColors = true;
+            assertTrue("Both underline only and preserve ANSI colors can be enabled",
+                storage.underlineOnly && storage.preserveAnsiColors);
+            
+        } finally {
+            // 恢复原始配置
+            storage.underlineOnly = originalValue;
+            // 重新创建过滤器以恢复原始配置
+            filter = new AwesomeLinkFilter(getProject());
+        }
+    }
+
     // ========== 九、配置持久化测试 ==========
 
     /**
@@ -629,6 +671,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             storage.setResultLimit(50);
             storage.searchUrls = !backup.searchUrls;
             storage.showNotifications = !backup.showNotifications;
+            storage.underlineOnly = !backup.underlineOnly;
             
             // 保存状态
             AwesomeConsoleStorage savedState = storage.getState();
@@ -644,6 +687,8 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                 storage.searchUrls, newStorage.searchUrls);
             assertEquals("Show notifications should be persisted", 
                 storage.showNotifications, newStorage.showNotifications);
+            assertEquals("Underline only should be persisted", 
+                storage.underlineOnly, newStorage.underlineOnly);
             
         } finally {
             // 恢复原始配置

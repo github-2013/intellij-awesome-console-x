@@ -70,4 +70,7 @@ public interface AwesomeConsoleDefaults {
 
     /** 默认是否显示通知 */
     boolean DEFAULT_SHOW_NOTIFICATIONS = true;
+
+    /** 默认是否仅保留超链接下划线效果（不改变颜色） */
+    boolean DEFAULT_UNDERLINE_ONLY = false;
 }

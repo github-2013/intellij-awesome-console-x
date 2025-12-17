@@ -814,8 +814,18 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param linkInfo 超链接信息
 	 */
 	private void addHyperlinkResult(final List<ResultItem> results, final int start, final int end, final HyperlinkInfo linkInfo) {
-		TextAttributes hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
-		TextAttributes followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		TextAttributes hyperlinkAttributes;
+		TextAttributes followedHyperlinkAttributes;
+		
+		// 根据配置选择超链接样式：仅下划线或正常超链接样式
+		if (config.underlineOnly) {
+			hyperlinkAttributes = HyperlinkUtils.createUnderlineOnlyAttributes();
+			followedHyperlinkAttributes = HyperlinkUtils.createFollowedUnderlineOnlyAttributes();
+		} else {
+			hyperlinkAttributes = HyperlinkUtils.createHyperlinkAttributes();
+			followedHyperlinkAttributes = HyperlinkUtils.createFollowedHyperlinkAttributes();
+		}
+		
 		results.add(new Result(start, end, linkInfo, hyperlinkAttributes, followedHyperlinkAttributes));
 	}
 

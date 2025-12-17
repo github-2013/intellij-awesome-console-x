@@ -17,6 +17,7 @@
 		<p>
 	    	<b>0.1337.35</b><br/>
         	<ul>
+        		<li>Added "Underline Only" option to display hyperlinks with underline only without changing text color</li>
         		<li>Unified ignore file checking logic with new shouldIgnoreFile() method</li>
         		<li>Optimized file filtering at index stage to reduce invalid indexing</li>
         		<li>Refactored progress callback logic with dedicated triggerProgressCallback() method</li>

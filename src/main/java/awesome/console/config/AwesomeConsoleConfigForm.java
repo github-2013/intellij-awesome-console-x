@@ -42,6 +42,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     public JCheckBox resolveSymlinkCheckBox;
     public JCheckBox preserveAnsiColorsCheckBox;
     public JCheckBox showNotificationsCheckBox;
+    public JCheckBox underlineOnlyCheckBox;
 
     // 索引管理相关字段
     public JLabel indexStatusLabel;
@@ -70,6 +71,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         setupResolveSymlink();
         setupPreserveAnsiColors();
         setupShowNotifications();
+        setupUnderlineOnly();
         setupIndexManagement();
     }
 
@@ -281,6 +283,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private void setupShowNotifications() {
         showNotificationsCheckBox = initCheckBox(DEFAULT_SHOW_NOTIFICATIONS);
         showNotificationsCheckBox.setToolTipText("Uncheck to disable all plugin notifications.");
+    }
+
+    private void setupUnderlineOnly() {
+        underlineOnlyCheckBox = initCheckBox(DEFAULT_UNDERLINE_ONLY);
+        underlineOnlyCheckBox.setToolTipText("When enabled, hyperlinks will only show underline without changing text color.");
     }
 
     /**

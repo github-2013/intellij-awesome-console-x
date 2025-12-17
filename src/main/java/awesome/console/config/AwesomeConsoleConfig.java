@@ -74,6 +74,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.resolveSymlinkCheckBox.setSelected(storage.resolveSymlink);
 		form.preserveAnsiColorsCheckBox.setSelected(storage.preserveAnsiColors);
 		form.showNotificationsCheckBox.setSelected(storage.showNotifications);
+		form.underlineOnlyCheckBox.setSelected(storage.underlineOnly);
 	}
 
 	/**
@@ -173,6 +174,7 @@ public class AwesomeConsoleConfig implements Configurable {
 				|| form.resolveSymlinkCheckBox.isSelected() != storage.resolveSymlink
 				|| form.preserveAnsiColorsCheckBox.isSelected() != storage.preserveAnsiColors
 				|| form.showNotificationsCheckBox.isSelected() != storage.showNotifications
+				|| form.underlineOnlyCheckBox.isSelected() != storage.underlineOnly
 				;
 	}
 
@@ -225,6 +227,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		storage.resolveSymlink = form.resolveSymlinkCheckBox.isSelected();
 		storage.preserveAnsiColors = form.preserveAnsiColorsCheckBox.isSelected();
 		storage.showNotifications = form.showNotificationsCheckBox.isSelected();
+		storage.underlineOnly = form.underlineOnlyCheckBox.isSelected();
 
 		// 发布配置变更事件（包括需要重建缓存的变更和其他配置变更）
 		if (changeType != null) {
@@ -284,7 +287,8 @@ public class AwesomeConsoleConfig implements Configurable {
 				storage.fixChooseTargetFile != form.fixChooseTargetFileCheckBox.isSelected() ||
 				storage.resolveSymlink != form.resolveSymlinkCheckBox.isSelected() ||
 				storage.preserveAnsiColors != form.preserveAnsiColorsCheckBox.isSelected() ||
-				storage.showNotifications != form.showNotificationsCheckBox.isSelected()) {
+				storage.showNotifications != form.showNotificationsCheckBox.isSelected() ||
+				storage.underlineOnly != form.underlineOnlyCheckBox.isSelected()) {
 			logger.debug("Config change detected: other settings changed (no cache rebuild needed)");
 			return AwesomeConsoleConfigListener.ConfigChangeType.OTHER_CHANGED;
 		}
