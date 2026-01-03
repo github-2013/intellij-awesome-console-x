@@ -1,0 +1,86 @@
+---
+description: 代码命名语义化规范
+alwaysApply: true
+enabled: true
+updatedAt: 2026-01-03T22:36:00.000Z
+---
+
+# 命名语义化规范
+
+## 核心原则
+
+**语义化命名**：名称应准确表达意图，让人一眼看懂其作用。
+
+---
+
+## 方法命名
+
+### 1. 动词选择指南
+
+| 行为 | 推荐动词 | 避免 |
+|------|----------|------|
+| 从数据中提取 | `extract` | `get` |
+| 在集合中查找 | `find` | `get` |
+| 按条件筛选 | `filter` | `get` |
+| 创建新对象 | `create`, `build` | `make` |
+| 转换格式 | `convert`, `transform`, `parse` | `to` (单独使用) |
+| 验证/校验 | `validate`, `check` | `is` (复杂逻辑) |
+| 计算/统计 | `calculate`, `count`, `compute` | `get` |
+| 加载/获取资源 | `load`, `fetch` | `get` |
+| 添加到集合 | `addTo{Target}` | 单独 `add` |
+| 移除元素 | `remove`, `delete` | - |
+
+### 2. 命名结构
+
+```
+{动词}{对象}From{来源}    → extractUrlLinksFromLine
+{动词}{对象}By{条件}      → findFilesByClassName
+{动词}{对象}For{用途}     → truncateLineForLog
+{动词}{对象}To{目标}      → addHyperlinkToResults
+```
+
+### 3. 布尔方法
+
+- 简单状态：`is{状态}` / `has{属性}` / `can{能力}`
+- 复杂检查：`check{内容}` - 如 `checkPairedCharSurrounding`
+- 存在判断：`exists`, `contains`
+
+### 4. 禁止的命名模式
+
+- ❌ `getXxx` 用于非简单属性访问
+- ❌ `doXxx`, `handleXxx` 过于模糊
+- ❌ 单个单词方法名（除非极其明确）
+- ❌ 缩写（除非广泛认可：URL, ID, HTML）
+
+---
+
+## 变量命名
+
+### 1. 集合类型
+- 复数形式：`files`, `users`, `links`
+- 或带类型后缀：`fileList`, `userSet`, `linkMap`
+
+### 2. 布尔变量
+- `is{状态}`: `isValid`, `isEmpty`
+- `has{属性}`: `hasPermission`
+- `should{行为}`: `shouldRetry`
+
+### 3. 临时/局部变量
+- 避免单字母（循环索引除外）
+- 保持简洁但有意义：`matchedFile` 而非 `f`
+
+---
+
+## 常量命名
+
+- 全大写 + 下划线：`MAX_RETRY_COUNT`
+- 表达含义而非值：`DEFAULT_TIMEOUT_MS` 而非 `FIVE_THOUSAND`
+
+---
+
+## 检查要点
+
+- ☐ 名称是否准确描述了行为/用途？
+- ☐ 动词是否精确（非 get/do/handle）？
+- ☐ 是否包含必要上下文（来源/条件/用途）？
+- ☐ 是否避免了缩写和模糊词汇？

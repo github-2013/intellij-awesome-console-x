@@ -1194,7 +1194,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             filter = new AwesomeLinkFilter(getProject());
             
             // 启用忽略样式后，被忽略的内容会创建灰色占位符
-            // 注意：占位符的创建在 getResultItemsFile 中进行
+            // 注意：占位符的创建在 extractFileLinksFromLine 中进行
             // 这里我们验证配置生效，具体的占位符创建需要在实际使用中测试
             List<FileLinkMatch> results = filter.detectPaths("Command: dev");
             assertNotNull("Should handle ignore style", results);

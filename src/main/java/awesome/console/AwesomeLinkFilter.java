@@ -397,7 +397,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			try {
 				prepareFilter();
 			} catch (Exception e) {
-				logger.error("Error while preparing filter for line: " + truncateLine(line), e);
+				logger.error("Error while preparing filter for line: " + truncateLineForLog(line), e);
 				return null;
 			}
 
@@ -411,7 +411,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			try {
 				chunks = splitLine(line);
 			} catch (Exception e) {
-				logger.error("Error while splitting line (length=" + line.length() + "): " + truncateLine(line), e);
+				logger.error("Error while splitting line (length=" + line.length() + "): " + truncateLineForLog(line), e);
 				return null;
 			}
 			
@@ -425,11 +425,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				// 如果启用了文件搜索，提取文件路径并生成超链接
 				if (config.searchFiles) {
 					try {
-						results.addAll(getResultItemsFile(chunk, startPoint + offset));
+						results.addAll(extractFileLinksFromLine(chunk, startPoint + offset));
 					} catch (Exception e) {
 						logger.error(String.format(
 							"Error while processing file links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
-							i + 1, chunks.size(), offset, chunk.length(), truncateLine(chunk)
+							i + 1, chunks.size(), offset, chunk.length(), truncateLineForLog(chunk)
 						), e);
 						// 继续处理其他块，不中断整个过滤流程
 					}
@@ -438,11 +438,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				// 如果启用了URL搜索，提取URL并生成超链接
 				if (config.searchUrls) {
 					try {
-						results.addAll(getResultItemsUrl(chunk, startPoint + offset));
+						results.addAll(extractUrlLinksFromLine(chunk, startPoint + offset));
 					} catch (Exception e) {
 						logger.error(String.format(
 							"Error while processing URL links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
-							i + 1, chunks.size(), offset, chunk.length(), truncateLine(chunk)
+							i + 1, chunks.size(), offset, chunk.length(), truncateLineForLog(chunk)
 						), e);
 						// 继续处理其他块，不中断整个过滤流程
 					}
@@ -458,7 +458,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 捕获未预期的业务异常，记录详细错误日志但不抛出，避免过滤器崩溃
 			logger.error(String.format(
 				"Unexpected error in applyFilter (endPoint=%d, lineLength=%d): %s",
-				endPoint, line.length(), truncateLine(line)
+				endPoint, line.length(), truncateLineForLog(line)
 			), e);
 		}
 		// 如果发生异常，返回 null
@@ -472,7 +472,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param line 原始行内容
 	 * @return 截断后的行内容（最多100个字符）
 	 */
-	private String truncateLine(@NotNull final String line) {
+	private String truncateLineForLog(@NotNull final String line) {
 		final int maxLength = 100;
 		if (line.length() <= maxLength) {
 			return line;
@@ -654,7 +654,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param startPoint 该行在整个控制台输出中的起始位置
 	 * @return URL链接结果项列表，每个结果项包含超链接信息和位置
 	 */
-	public List<ResultItem> getResultItemsUrl(final String line, final int startPoint) {
+	public List<ResultItem> extractUrlLinksFromLine(final String line, final int startPoint) {
 		final List<ResultItem> results = new ArrayList<>();
 		final List<URLLinkMatch> matches = detectURLs(line);
 
@@ -675,7 +675,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
             if (null != file && !FileUtils.quickExists(file)) {
                 continue;
             }
-		    addHyperlinkResult(results, startPoint + match.start, startPoint + match.end, new OpenUrlHyperlinkInfo(normalizedUrl));
+		    addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, new OpenUrlHyperlinkInfo(normalizedUrl));
 	    }
 	    return results;
 	}
@@ -782,7 +782,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param startPoint 该行在整个控制台输出中的起始位置
 	 * @return 文件路径结果项列表，每个结果项包含超链接信息、位置和样式
 	 */
-	public List<ResultItem> getResultItemsFile(final String line, final int startPoint) {
+	public List<ResultItem> extractFileLinksFromLine(final String line, final int startPoint) {
 		final List<ResultItem> results = new ArrayList<>();
 		final List<FileLinkMatch> matches = detectPaths(line);
 
@@ -813,7 +813,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param end 结束位置
 	 * @param linkInfo 超链接信息
 	 */
-	private void addHyperlinkResult(final List<ResultItem> results, final int start, final int end, final HyperlinkInfo linkInfo) {
+	private void addHyperlinkToResults(final List<ResultItem> results, final int start, final int end, final HyperlinkInfo linkInfo) {
 		TextAttributes hyperlinkAttributes;
 		TextAttributes followedHyperlinkAttributes;
 		
@@ -874,7 +874,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
 					project, filePath, match.linkedRow, match.linkedCol
 			);
-			addHyperlinkResult(results, startPoint + match.start, startPoint + match.end, linkInfo);
+			addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
 			return true;
 		} else if (isExternal && !isUnixAbsolutePath(matchPath)) {
 			// 外部相对路径无法正确解析，跳过
@@ -914,7 +914,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
 				project, matchingFiles, match.linkedRow, match.linkedCol
 		);
-		addHyperlinkResult(results, startPoint + match.start, startPoint + match.end, linkInfo);
+		addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
 	}
 
 	/**
@@ -964,7 +964,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			matchingFiles = fileCache.get(fileName);
 			if (null == matchingFiles && config.searchClasses) {
-				matchingFiles = getResultItemsFileFromBasename(fileName);
+				matchingFiles = findFilesByClassName(fileName);
 			}
 		if (null != matchingFiles) {
 				// 使用统一的 shouldIgnoreFile 方法确保与索引阶段和配置变更处理的一致性
@@ -1025,13 +1025,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	private List<VirtualFile> findBestMatchingFiles(final String generalizedMatchPath,
 													final List<VirtualFile> matchingFiles) {
 		// 根据路径过滤文件列表
-		final List<VirtualFile> foundFiles = getFilesByPath(generalizedMatchPath, matchingFiles);
+		final List<VirtualFile> foundFiles = filterFilesByPathSuffix(generalizedMatchPath, matchingFiles);
 		// 如果找到匹配的文件，直接返回
 		if (!foundFiles.isEmpty()) {
 			return foundFiles;
 		}
 		// 从路径中移除最顶层目录，得到更宽泛的匹配路径
-		final String widerMatchingPath = removeFirstPathSegment(generalizedMatchPath);
+		final String widerMatchingPath = removeFirstDirectory(generalizedMatchPath);
 		// 如果还有更宽泛的路径，递归查找
 		if (widerMatchingPath != null) {
 			return findBestMatchingFiles(widerMatchingPath, matchingFiles);
@@ -1050,7 +1050,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @return 路径匹配的文件列表
 	 */
 	// 定义私有方法，根据路径过滤文件列表
-	private List<VirtualFile> getFilesByPath(final String generalizedMatchPath, final List<VirtualFile> matchingFiles) {
+	private List<VirtualFile> filterFilesByPathSuffix(final String generalizedMatchPath, final List<VirtualFile> matchingFiles) {
 		// 使用并行流处理文件列表，提高性能
 		return matchingFiles.parallelStream()
 			// 过滤出路径以指定路径结尾的文件
@@ -1067,7 +1067,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @return 移除最顶层目录后的路径，如果没有更多层级（不包含斜杠）则返回null
 	 */
 	// 定义私有方法，从路径中移除最顶层目录
-	private String removeFirstPathSegment(final String path) {
+	private String removeFirstDirectory(final String path) {
 		// 如果路径包含斜杠（有多个层级）
 		if (path.contains("/")) {
 			// 返回第一个斜杠之后的部分（移除最顶层目录）
@@ -1102,9 +1102,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	// 定义公共方法，根据基础名搜索文件（用于完全限定类名）
 	// 从初始深度 0 开始搜索
-	public List<VirtualFile> getResultItemsFileFromBasename(final String match) {
+	public List<VirtualFile> findFilesByClassName(final String match) {
 		// 调用重载方法，深度为 0
-		return getResultItemsFileFromBasename(match, 0);
+		return findFilesByClassName(match, 0);
 	}
 
 	/**
@@ -1117,7 +1117,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param depth 当前搜索深度，用于限制递归次数
 	 * @return 匹配的文件列表，如果没有找到则返回空列表
 	 */
-	public List<VirtualFile> getResultItemsFileFromBasename(final String match, final int depth) {
+	public List<VirtualFile> findFilesByClassName(final String match, final int depth) {
 		final char packageSeparator = '.';
 		final int index = match.lastIndexOf(packageSeparator);
 		if (-1 == index) {
@@ -1132,7 +1132,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (!fileBaseCache.containsKey(basename)) {
 			/* Try to search deeper down the rabbit hole */
 			if (depth <= maxSearchDepth) {
-				return getResultItemsFileFromBasename(origin, depth + 1);
+				return findFilesByClassName(origin, depth + 1);
 			}
 			return new ArrayList<>();
 		}
@@ -1404,7 +1404,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 获取事件关联的文件
 			final VirtualFile file = event.getFile();
 			// 跳过空文件或不在内容根目录中的文件
-			if (file == null || !this.isInContent(file, event instanceof VFileDeleteEvent)) continue;
+			if (file == null || !this.isFileInProjectScope(file, event instanceof VFileDeleteEvent)) continue;
 
 			// 根据事件类型进行分类处理
 			switch (event) {
@@ -1535,7 +1535,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 
 		/** 判断文件是否在项目内容中 */
-		private boolean isInContent(@NotNull VirtualFile file, boolean isDelete) {
+		private boolean isFileInProjectScope(@NotNull VirtualFile file, boolean isDelete) {
 			if (isDelete) {
 				String basePath = project.getBasePath();
 				if (basePath == null) return false;
@@ -1595,7 +1595,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @return 如果被包围（完整或部分）则返回true
 	 */
 	// 定义私有方法，判断字符串是否被成对的字符包围（如括号、引号等）
-	private boolean isSurroundedBy(@NotNull final String s, @NotNull final String[] pairs, int[] offsets) {
+	private boolean checkPairedCharSurrounding(@NotNull final String s, @NotNull final String[] pairs, int[] offsets) {
 		// 如果字符串长度小于 2，不可能被包围
 		if (s.length() < 2) {
 			return false;
@@ -1733,7 +1733,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 初始化偏移量数组，用于记录前后需要去除的字符数
 		int[] offsets = new int[]{0, 0};
 		// 检查匹配文本是否被括号、方括号或单引号包围
-		if (isSurroundedBy(match, new String[]{"()", "[]", "''"}, offsets)) {
+		if (checkPairedCharSurrounding(match, new String[]{"()", "[]", "''"}, offsets)) {
 			// 如果被包围，则去除包围字符，使用偏移量截取子字符串
 			match = match.substring(offsets[0], match.length() - offsets[1]);
 		}

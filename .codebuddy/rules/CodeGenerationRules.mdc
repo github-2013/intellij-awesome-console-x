@@ -1,9 +1,8 @@
 ---
-description: 
+description: 使用 Context7 MCP 工具自动获取库文档进行代码生成
 alwaysApply: true
 enabled: true
 updatedAt: 2025-11-09T02:23:44.045Z
-provider: 
 ---
 
 # 代码生成规则
