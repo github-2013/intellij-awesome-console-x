@@ -8,12 +8,19 @@ import static awesome.console.IntegrationTest.getFileProtocols;
 import static awesome.console.IntegrationTest.getJarFileProtocols;
 import static awesome.console.IntegrationTest.parseTemplate;
 
+import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.jetbrains.annotations.NotNull;
@@ -2761,6 +2768,38 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
+	 * 测试配置变更触发的重建会被防抖合并
+	 * 验证短时间内多次变更只会触发一次重建
+	 */
+	public void testConfigChangedDebouncesReloads() throws Exception {
+		waitForReloadsToQuiesce(500, 5000);
+
+		long baselineTime = rebuildWithProgress("baseline", true, 5000);
+		waitForReloadsToQuiesce(500, 5000);
+
+		AtomicInteger progressCalls = new AtomicInteger();
+		CompletableFuture<Void> future = scheduleReloadForTest(
+			"config changed: debounce",
+			count -> progressCalls.incrementAndGet(),
+			false
+		);
+
+		filter.configChanged(AwesomeConsoleConfigListener.ConfigChangeType.SEARCH_FILES_CHANGED);
+		filter.configChanged(AwesomeConsoleConfigListener.ConfigChangeType.FILE_TYPES_CHANGED);
+		filter.configChanged(AwesomeConsoleConfigListener.ConfigChangeType.SEARCH_CLASSES_CHANGED);
+
+		future.get(5000, TimeUnit.MILLISECONDS);
+		assertTrue("Progress callback should be invoked", progressCalls.get() > 0);
+
+		long rebuiltTime = filter.getIndexStatistics().getLastRebuildTime();
+		assertTrue("Rebuild time should advance", rebuiltTime > baselineTime);
+
+		waitForReloadsToQuiesce(800, 5000);
+		long finalTime = filter.getIndexStatistics().getLastRebuildTime();
+		assertEquals("Debounced reloads should coalesce into a single rebuild", rebuiltTime, finalTime);
+	}
+
+	/**
 	 * 测试清除缓存功能
 	 * 验证清除缓存后索引为空，且能自动重建
 	 */
@@ -3010,6 +3049,59 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		
 		// 验证索引状态
 		assertTrue("File count should be non-negative", filter.getTotalCachedFiles() >= 0);
+	}
+
+	private long rebuildWithProgress(String reason, boolean immediate, long timeoutMs) throws Exception {
+		AtomicInteger progressCalls = new AtomicInteger();
+		CompletableFuture<Void> future = scheduleReloadForTest(
+			reason,
+			count -> progressCalls.incrementAndGet(),
+			immediate
+		);
+		future.get(timeoutMs, TimeUnit.MILLISECONDS);
+		assertTrue("Progress callback should be invoked", progressCalls.get() > 0);
+		return filter.getIndexStatistics().getLastRebuildTime();
+	}
+
+	private CompletableFuture<Void> scheduleReloadForTest(
+			String reason,
+			Consumer<Integer> progressCallback,
+			boolean immediate
+	) {
+		try {
+			Method method = AwesomeLinkFilter.class.getDeclaredMethod(
+				"scheduleReload",
+				String.class,
+				Consumer.class,
+				boolean.class
+			);
+			method.setAccessible(true);
+			@SuppressWarnings("unchecked")
+			CompletableFuture<Void> future =
+				(CompletableFuture<Void>) method.invoke(filter, reason, progressCallback, immediate);
+			return future;
+		} catch (Exception e) {
+			throw new AssertionError("Failed to invoke scheduleReload", e);
+		}
+	}
+
+	private void waitForReloadsToQuiesce(long stableMs, long timeoutMs) {
+		final long[] lastRebuildTime = {filter.getIndexStatistics().getLastRebuildTime()};
+		final long[] stableStart = {System.currentTimeMillis()};
+		int timeout = (int) Math.min(Integer.MAX_VALUE, timeoutMs);
+
+		PlatformTestUtil.waitWithEventsDispatching(
+			() -> "Timed out waiting for reloads to quiesce",
+			() -> {
+				long current = filter.getIndexStatistics().getLastRebuildTime();
+				if (current != lastRebuildTime[0]) {
+					lastRebuildTime[0] = current;
+					stableStart[0] = System.currentTimeMillis();
+				}
+				return System.currentTimeMillis() - stableStart[0] >= stableMs;
+			},
+			timeout
+		);
 	}
 
 	// ========== Go语言测试用例 ==========
