@@ -36,11 +36,14 @@ import com.intellij.openapi.vfs.newvfs.events.VFileDeleteEvent;
 import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
 import com.intellij.openapi.vfs.newvfs.events.VFileMoveEvent;
 import com.intellij.openapi.vfs.newvfs.events.VFilePropertyChangeEvent;
+import com.intellij.util.Alarm;
 import com.intellij.util.PathUtil;
 import com.intellij.util.messages.MessageBusConnection;
 import com.intellij.openapi.application.ApplicationManager;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -316,6 +319,30 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	// 声明私有final成员变量，存储项目文件迭代器
 	// 用于遍历项目中的所有文件，并将它们添加到 fileCache 和 fileBaseCache 中
 	private final AwesomeProjectFilesIterator indexIterator;
+
+	/** 文件缓存重建防抖间隔（毫秒） */
+	private static final int RELOAD_DEBOUNCE_MS = 250;
+
+	/** 缓存重建调度器（后台线程） */
+	private final Alarm reloadAlarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
+
+	/** 重建调度锁 */
+	private final Object reloadLock = new Object();
+
+	/** 待处理的重建原因（去重并保留顺序） */
+	private final Set<String> pendingReloadReasons = new LinkedHashSet<>();
+
+	/** 待处理的进度回调 */
+	private final List<Consumer<Integer>> pendingProgressCallbacks = new ArrayList<>();
+
+	/** 待完成的重建 Future */
+	private final List<CompletableFuture<Void>> pendingReloadFutures = new ArrayList<>();
+
+	/** 是否有重建正在进行 */
+	private boolean reloadInProgress = false;
+
+	/** 是否有立即执行的重建请求 */
+	private boolean pendingImmediateReload = false;
 
 	/** 缓存是否已初始化 */
 	// 声明私有volatile成员变量，标记缓存是否已经初始化
@@ -1162,28 +1189,153 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 通知消息
 			message,
 			// 创建一个简单的通知操作，标签为 "Reload file cache"，点击时手动重新加载缓存
-			NotificationAction.createSimple("Reload file cache", () -> reloadFileCache("manual"))
+			NotificationAction.createSimple("Reload file cache", this::manualRebuild)
 		);
 	}
 
 	/**
 	 * 重新加载文件缓存
-	 * 清空现有缓存并重新遍历项目文件，构建文件名和基础名的索引
-	 * 使用写锁确保线程安全
+	 * 通过后台调度执行，避免在EDT中执行慢操作
 	 *
 	 * @param reason 重新加载的原因，用于日志记录和通知（如 "open project"、"indices are updated"、"manual"）
 	 */
 	private void reloadFileCache(String reason) {
-		reloadFileCacheWithProgress(reason, null);
+		scheduleReload(reason, null, false);
 	}
 
 	/**
-	 * 重建文件缓存（带进度回调）
+	 * 调度一次缓存重建（可合并/防抖）
+	 *
+	 * @param reason 重建原因（可被合并）
+	 * @param progressCallback 进度回调函数，参数为已处理的文件数
+	 * @param immediate 是否立即执行（跳过防抖）
+	 * @return 重建完成的Future
+	 */
+	private CompletableFuture<Void> scheduleReload(String reason, @Nullable Consumer<Integer> progressCallback, boolean immediate) {
+		CompletableFuture<Void> future = new CompletableFuture<>();
+		if (project.isDisposed()) {
+			future.completeExceptionally(new CancellationException("Project disposed"));
+			return future;
+		}
+
+		synchronized (reloadLock) {
+			pendingReloadReasons.add(reason);
+			if (progressCallback != null) {
+				pendingProgressCallbacks.add(progressCallback);
+			}
+			pendingReloadFutures.add(future);
+			if (immediate) {
+				pendingImmediateReload = true;
+			}
+			if (!reloadInProgress) {
+				scheduleReloadLocked();
+			}
+		}
+		return future;
+	}
+
+	private void scheduleReloadLocked() {
+		int delayMs = pendingImmediateReload ? 0 : RELOAD_DEBOUNCE_MS;
+		reloadAlarm.cancelAllRequests();
+		reloadAlarm.addRequest(this::runScheduledReload, delayMs);
+	}
+
+	private void runScheduledReload() {
+		List<Consumer<Integer>> callbacks = Collections.emptyList();
+		List<CompletableFuture<Void>> futures = Collections.emptyList();
+		List<CompletableFuture<Void>> disposeFutures = Collections.emptyList();
+		String reason = "unspecified";
+		boolean disposed = false;
+
+		synchronized (reloadLock) {
+			if (reloadInProgress || pendingReloadReasons.isEmpty()) {
+				return;
+			}
+			if (project.isDisposed()) {
+				disposed = true;
+				disposeFutures = new ArrayList<>(pendingReloadFutures);
+				pendingReloadFutures.clear();
+				pendingProgressCallbacks.clear();
+				pendingReloadReasons.clear();
+				pendingImmediateReload = false;
+				reloadInProgress = false;
+			} else {
+				reloadInProgress = true;
+				reason = formatReloadReason(pendingReloadReasons);
+				pendingReloadReasons.clear();
+				callbacks = new ArrayList<>(pendingProgressCallbacks);
+				pendingProgressCallbacks.clear();
+				futures = new ArrayList<>(pendingReloadFutures);
+				pendingReloadFutures.clear();
+				pendingImmediateReload = false;
+			}
+		}
+
+		if (disposed) {
+			CancellationException exception = new CancellationException("Project disposed");
+			for (CompletableFuture<Void> future : disposeFutures) {
+				future.completeExceptionally(exception);
+			}
+			return;
+		}
+
+		try {
+			runReloadFileCache(reason, combineProgressCallbacks(callbacks));
+			for (CompletableFuture<Void> future : futures) {
+				future.complete(null);
+			}
+		} catch (Exception e) {
+			for (CompletableFuture<Void> future : futures) {
+				future.completeExceptionally(e);
+			}
+			logger.error(String.format("project[%s]: Error reloading file cache ( %s )", project.getName(), reason), e);
+		} finally {
+			boolean scheduleNext;
+			synchronized (reloadLock) {
+				reloadInProgress = false;
+				scheduleNext = !pendingReloadReasons.isEmpty();
+			}
+			if (scheduleNext) {
+				synchronized (reloadLock) {
+					scheduleReloadLocked();
+				}
+			}
+		}
+	}
+
+	@Nullable
+	private Consumer<Integer> combineProgressCallbacks(List<Consumer<Integer>> callbacks) {
+		if (callbacks.isEmpty()) {
+			return null;
+		}
+		return count -> {
+			for (Consumer<Integer> callback : callbacks) {
+				try {
+					callback.accept(count);
+				} catch (Exception e) {
+					logger.warn(String.format("project[%s]: Error in reload progress callback", project.getName()), e);
+				}
+			}
+		};
+	}
+
+	private String formatReloadReason(Set<String> reasons) {
+		if (reasons.isEmpty()) {
+			return "unspecified";
+		}
+		if (reasons.size() == 1) {
+			return reasons.iterator().next();
+		}
+		return String.join(", ", reasons);
+	}
+
+	/**
+	 * 执行文件缓存重建（必须在后台线程中调用）
 	 *
 	 * @param reason 重建原因
 	 * @param progressCallback 进度回调函数，参数为已处理的文件数
 	 */
-	private void reloadFileCacheWithProgress(String reason, Consumer<Integer> progressCallback) {
+	private void runReloadFileCache(String reason, @Nullable Consumer<Integer> progressCallback) {
 		cacheWriteLock.lock();
 		long startTime = System.currentTimeMillis();
 		try {
@@ -1326,7 +1478,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 这样可以确保缓存始终与项目文件系统保持同步
 	 */
 	private void createFileCache() {
-		reloadFileCache("open project");
+		scheduleReload("open project", null, true);
 
 		// 创建 MessageBus 连接并传入 this 作为父 Disposable，确保在 dispose() 时自动断开连接
 		messageBusConnection = project.getMessageBus().connect(this);
@@ -2034,7 +2186,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 清空现有缓存并重新遍历项目文件
 	 */
 	public void manualRebuild() {
-		reloadFileCache("manual");
+		scheduleManualRebuild(null);
 	}
 
 	/**
@@ -2042,7 +2194,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param progressCallback 进度回调函数，参数为已处理的文件数
 	 */
 	public void manualRebuild(Consumer<Integer> progressCallback) {
-		reloadFileCacheWithProgress("manual", progressCallback);
+		scheduleManualRebuild(progressCallback);
+	}
+
+	private void scheduleManualRebuild(@Nullable Consumer<Integer> progressCallback) {
+		CompletableFuture<Void> future = scheduleReload("manual", progressCallback, true);
+		if (!ApplicationManager.getApplication().isDispatchThread()) {
+			future.join();
+		}
 	}
 
 	/**
@@ -2211,7 +2370,29 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			logger.warn(String.format("project[%s]: Error while cleaning up ThreadLocal variables", project.getName()), e);
 		}
 
-		// 2. 清理缓存，释放内存
+		// 2. 取消未完成的重建请求
+		try {
+			reloadAlarm.cancelAllRequests();
+			List<CompletableFuture<Void>> futuresToCancel;
+			synchronized (reloadLock) {
+				futuresToCancel = new ArrayList<>(pendingReloadFutures);
+				pendingReloadFutures.clear();
+				pendingProgressCallbacks.clear();
+				pendingReloadReasons.clear();
+				pendingImmediateReload = false;
+				reloadInProgress = false;
+			}
+			if (!futuresToCancel.isEmpty()) {
+				CancellationException exception = new CancellationException("AwesomeLinkFilter disposed");
+				for (CompletableFuture<Void> future : futuresToCancel) {
+					future.completeExceptionally(exception);
+				}
+			}
+		} catch (Exception e) {
+			logger.warn(String.format("project[%s]: Error while canceling reload requests", project.getName()), e);
+		}
+
+		// 3. 清理缓存，释放内存
 		cacheWriteLock.lock();
 		try {
 			fileCache.clear();
@@ -2224,7 +2405,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			cacheWriteLock.unlock();
 		}
 
-		// 3. 断开 MessageBusConnection（虽然传入了 this 作为父 Disposable 会自动断开，但为了明确性也手动调用）
+		// 4. 断开 MessageBusConnection（虽然传入了 this 作为父 Disposable 会自动断开，但为了明确性也手动调用）
 		if (messageBusConnection != null) {
 			try {
 				messageBusConnection.disconnect();
@@ -2234,7 +2415,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 		}
 
-		// 4. 断开 Application 级别的 MessageBusConnection
+		// 5. 断开 Application 级别的 MessageBusConnection
 		if (appMessageBusConnection != null) {
 			try {
 				appMessageBusConnection.disconnect();
