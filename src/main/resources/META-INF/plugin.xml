@@ -15,6 +15,14 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.36</b><br/>
+        	<ul>
+        		<li>Refactored cache rebuild to two-phase strategy: lock-free build + atomic swap with brief write lock</li>
+        		<li>Added timeout protection for synchronous cache rebuild to prevent indefinite blocking</li>
+        		<li>Skip synchronous cache init on EDT to avoid UI freeze</li>
+        		<li>Promoted scheduleReloadAsync to public API, eliminating reflection-based test access</li>
+        		<li>Simplified pending reload scheduling logic by removing redundant synchronized block</li>
+        	</ul>
 	    	<b>0.1337.35</b><br/>
         	<ul>
         		<li>Added "Underline Only" option to display hyperlinks with underline only without changing text color</li>

@@ -13,7 +13,6 @@ import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
-import java.lang.reflect.Method;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -3068,21 +3067,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			Consumer<Integer> progressCallback,
 			boolean immediate
 	) {
-		try {
-			Method method = AwesomeLinkFilter.class.getDeclaredMethod(
-				"scheduleReload",
-				String.class,
-				Consumer.class,
-				boolean.class
-			);
-			method.setAccessible(true);
-			@SuppressWarnings("unchecked")
-			CompletableFuture<Void> future =
-				(CompletableFuture<Void>) method.invoke(filter, reason, progressCallback, immediate);
-			return future;
-		} catch (Exception e) {
-			throw new AssertionError("Failed to invoke scheduleReload", e);
-		}
+		return filter.scheduleReloadAsync(reason, progressCallback, immediate);
 	}
 
 	private void waitForReloadsToQuiesce(long stableMs, long timeoutMs) {

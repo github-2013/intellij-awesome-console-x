@@ -118,7 +118,7 @@ public class AwesomeConsoleConfig implements Configurable {
 	@Nls
 	@Override
 	public String getDisplayName() {
-		return "Awesome Console";
+		return "Awesome Console X";
 	}
 
 	/**

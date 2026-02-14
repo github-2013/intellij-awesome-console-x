@@ -44,6 +44,9 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -322,6 +325,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/** 文件缓存重建防抖间隔（毫秒） */
 	private static final int RELOAD_DEBOUNCE_MS = 250;
+
+	/** 手动重建等待超时时间（秒） */
+	private static final int MANUAL_REBUILD_TIMEOUT_SECONDS = 10;
 
 	/** 缓存重建调度器（后台线程） */
 	private final Alarm reloadAlarm = new Alarm(Alarm.ThreadToUse.POOLED_THREAD, this);
@@ -1200,18 +1206,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param reason 重新加载的原因，用于日志记录和通知（如 "open project"、"indices are updated"、"manual"）
 	 */
 	private void reloadFileCache(String reason) {
-		scheduleReload(reason, null, false);
+		scheduleReloadAsync(reason, null, false);
 	}
 
 	/**
-	 * 调度一次缓存重建（可合并/防抖）
+	 * 异步调度一次缓存重建（可合并/防抖）
+	 * <p>
+	 * 该方法是缓存重建调度的公共入口，允许调用方通过返回的 Future 感知重建完成。
+	 * 多次调用会被合并/防抖处理：
+	 * <ul>
+	 *   <li>{@code immediate=true}: 跳过防抖，立即执行（适用于手动重建、项目初始化等场景）</li>
+	 *   <li>{@code immediate=false}: 经过 250ms 防抖延迟后执行（适用于配置变更等高频触发场景）</li>
+	 * </ul>
 	 *
-	 * @param reason 重建原因（可被合并）
-	 * @param progressCallback 进度回调函数，参数为已处理的文件数
+	 * @param reason 重建原因（用于日志记录，可被合并显示）
+	 * @param progressCallback 进度回调函数，参数为已处理的文件数；可为 null
 	 * @param immediate 是否立即执行（跳过防抖）
-	 * @return 重建完成的Future
+	 * @return 重建完成的 Future，调用方可通过它等待或监听重建完成
 	 */
-	private CompletableFuture<Void> scheduleReload(String reason, @Nullable Consumer<Integer> progressCallback, boolean immediate) {
+	public CompletableFuture<Void> scheduleReloadAsync(String reason, @Nullable Consumer<Integer> progressCallback, boolean immediate) {
 		CompletableFuture<Void> future = new CompletableFuture<>();
 		if (project.isDisposed()) {
 			future.completeExceptionally(new CancellationException("Project disposed"));
@@ -1290,13 +1303,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 			logger.error(String.format("project[%s]: Error reloading file cache ( %s )", project.getName(), reason), e);
 		} finally {
-			boolean scheduleNext;
 			synchronized (reloadLock) {
 				reloadInProgress = false;
-				scheduleNext = !pendingReloadReasons.isEmpty();
-			}
-			if (scheduleNext) {
-				synchronized (reloadLock) {
+				if (!pendingReloadReasons.isEmpty()) {
 					scheduleReloadLocked();
 				}
 			}
@@ -1336,29 +1345,38 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param progressCallback 进度回调函数，参数为已处理的文件数
 	 */
 	private void runReloadFileCache(String reason, @Nullable Consumer<Integer> progressCallback) {
-		cacheWriteLock.lock();
 		long startTime = System.currentTimeMillis();
+
+		// ======== 阶段1: 无锁构建新缓存（耗时操作，不阻塞读操作） ========
+		List<String> newSrcRoots = getSourceRoots();
+		Map<String, List<VirtualFile>> newFileCache = new HashMap<>();
+		Map<String, List<VirtualFile>> newFileBaseCache = new HashMap<>();
+
+		// 在临时 Map 中构建缓存，不影响当前正在使用的主缓存
+		ProgressTrackingIterator iterator = new ProgressTrackingIterator(
+				newFileCache, newFileBaseCache, progressCallback
+		);
+		projectRootManager.getFileIndex().iterateContent(iterator);
+
+		int newIgnoredCount = iterator.getIgnoredCount();
+
+		// 最后一次回调，确保显示最终数量
+		if (progressCallback != null) {
+			int totalFiles = newFileCache.values().stream().mapToInt(List::size).sum();
+			progressCallback.accept(totalFiles);
+		}
+
+		// ======== 阶段2: 短暂写锁，原子替换到主缓存（毫秒级） ========
+		cacheWriteLock.lock();
 		try {
-			srcRoots = getSourceRoots();
+			srcRoots = newSrcRoots;
 			fileCache.clear();
+			fileCache.putAll(newFileCache);
 			fileBaseCache.clear();
-			ignoredFilesCount = 0;
+			fileBaseCache.putAll(newFileBaseCache);
+			ignoredFilesCount = newIgnoredCount;
 
-			// 创建统一的迭代器，支持进度回调和忽略统计
-			ProgressTrackingIterator iterator = new ProgressTrackingIterator(
-					fileCache, fileBaseCache, progressCallback
-			);
-			projectRootManager.getFileIndex().iterateContent(iterator);
-
-			// 最后一次回调，确保显示最终数量
-			if (progressCallback != null) {
-				progressCallback.accept(getTotalCachedFiles());
-			}
-
-			// 更新全局忽略计数
-			ignoredFilesCount = iterator.getIgnoredCount();
-
-			// 通知和日志
+			// 在写锁内记录日志，确保 fileCache.size() 等读取一致
 			logCacheRebuild(reason, startTime);
 		} finally {
 			cacheWriteLock.unlock();
@@ -1478,7 +1496,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 这样可以确保缓存始终与项目文件系统保持同步
 	 */
 	private void createFileCache() {
-		scheduleReload("open project", null, true);
+		CompletableFuture<Void> initFuture = scheduleReloadAsync("open project", null, true);
+		// 仅在非 EDT（非 UI 线程）上同步等待缓存构建完成，避免阻塞 UI 导致界面冻结
+		if (!ApplicationManager.getApplication().isDispatchThread()) {
+			awaitReloadCompletion(initFuture, "initial cache build");
+		} else {
+			logger.info(String.format("project[%s]: skip synchronous cache init on EDT, cache will be built asynchronously",
+					project.getName()));
+		}
 
 		// 创建 MessageBus 连接并传入 this 作为父 Disposable，确保在 dispose() 时自动断开连接
 		messageBusConnection = project.getMessageBus().connect(this);
@@ -2198,9 +2223,29 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	private void scheduleManualRebuild(@Nullable Consumer<Integer> progressCallback) {
-		CompletableFuture<Void> future = scheduleReload("manual", progressCallback, true);
+		CompletableFuture<Void> future = scheduleReloadAsync("manual", progressCallback, true);
 		if (!ApplicationManager.getApplication().isDispatchThread()) {
-			future.join();
+			awaitReloadCompletion(future, "manual rebuild");
+		}
+	}
+
+	/**
+	 * 同步等待缓存重建完成（带超时保护）
+	 *
+	 * @param future  缓存重建的 Future
+	 * @param context 操作上下文描述，用于日志输出
+	 */
+	private void awaitReloadCompletion(CompletableFuture<Void> future, String context) {
+		try {
+			future.get(MANUAL_REBUILD_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+		} catch (TimeoutException e) {
+			logger.warn(String.format("project[%s]: %s timed out after %d seconds",
+					project.getName(), context, MANUAL_REBUILD_TIMEOUT_SECONDS));
+		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
+			logger.warn(String.format("project[%s]: %s interrupted", project.getName(), context));
+		} catch (ExecutionException e) {
+			logger.error(String.format("project[%s]: %s failed", project.getName(), context), e.getCause());
 		}
 	}
 
