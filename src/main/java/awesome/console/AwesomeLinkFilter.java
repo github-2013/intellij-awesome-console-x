@@ -8,6 +8,7 @@ import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import awesome.console.util.ExceptionHandling;
 import awesome.console.util.FileUtils;
 import awesome.console.util.HyperlinkUtils;
 import awesome.console.util.IntegerUtil;
@@ -430,6 +431,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			try {
 				prepareFilter();
 			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				logger.error("Error while preparing filter for line: " + truncateLineForLog(line), e);
 				return null;
 			}
@@ -444,6 +446,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			try {
 				chunks = splitLine(line);
 			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				logger.error("Error while splitting line (length=" + line.length() + "): " + truncateLineForLog(line), e);
 				return null;
 			}
@@ -460,6 +463,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					try {
 						results.addAll(extractFileLinksFromLine(chunk, startPoint + offset));
 					} catch (Exception e) {
+						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 						logger.error(String.format(
 							"Error while processing file links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
 							i + 1, chunks.size(), offset, chunk.length(), truncateLineForLog(chunk)
@@ -473,6 +477,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					try {
 						results.addAll(extractUrlLinksFromLine(chunk, startPoint + offset));
 					} catch (Exception e) {
+						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 						logger.error(String.format(
 							"Error while processing URL links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
 							i + 1, chunks.size(), offset, chunk.length(), truncateLineForLog(chunk)
@@ -488,6 +493,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 返回包含所有匹配结果的 Result 对象
 			return new Result(results);
 		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			// 捕获未预期的业务异常，记录详细错误日志但不抛出，避免过滤器崩溃
 			logger.error(String.format(
 				"Unexpected error in applyFilter (endPoint=%d, lineLength=%d): %s",
@@ -1556,6 +1562,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				if (result.directoryDeleted) cleanupInvalidFilesAsync();
 				processAdditions(result.newFiles);
 			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				// 记录错误但不中断VFS事件处理，避免影响其他监听器
 				logger.error(String.format("project[%s]: Error handling VFS events",
 						project.getName()), e);

@@ -2,7 +2,7 @@ package awesome.console.config;
 
 import awesome.console.AwesomeLinkFilter;
 import awesome.console.AwesomeLinkFilterProvider;
-import awesome.console.config.AwesomeConsoleStorage;
+import awesome.console.util.ExceptionHandling;
 import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationGroup;
 import com.intellij.notification.NotificationGroupManager;
@@ -266,6 +266,7 @@ public class IndexManagementService {
                 }, ModalityState.stateForComponent(component));
 
             } catch (Exception e) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
                 // ========== 第五阶段：异常处理 ==========
                 
                 // 记录错误日志
@@ -410,6 +411,7 @@ public class IndexManagementService {
                 }, ModalityState.stateForComponent(component));
 
             } catch (Exception e) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
                 // ========== 第五阶段：异常处理 ==========
                 
                 // 记录错误日志
@@ -462,6 +464,7 @@ public class IndexManagementService {
                 return filter.getIndexStatistics();
             }
         } catch (Exception e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
             logger.error("Failed to get index statistics: " + e.getMessage(), e);
         }
         return null;
