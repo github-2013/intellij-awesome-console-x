@@ -1084,8 +1084,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	// 定义私有方法，根据路径过滤文件列表
 	private List<VirtualFile> filterFilesByPathSuffix(final String generalizedMatchPath, final List<VirtualFile> matchingFiles) {
-		// 使用并行流处理文件列表，提高性能
-		return matchingFiles.parallelStream()
+		// 注意：此方法在 cacheReadLock 内调用，不使用 parallelStream 以避免
+		// ForkJoinPool.commonPool 线程参与导致的潜在阻塞风险
+		return matchingFiles.stream()
 			// 过滤出路径以指定路径结尾的文件
 			.filter(file -> normalizePathSeparators(file.getPath()).endsWith(generalizedMatchPath))
 			// 收集为列表
@@ -1170,7 +1171,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return new ArrayList<>();
 		}
 
-		return fileBaseCache.get(basename).parallelStream()
+		// 注意：此方法在 cacheReadLock 内调用，不使用 parallelStream 以避免
+		// ForkJoinPool.commonPool 线程参与导致的潜在阻塞风险
+		return fileBaseCache.get(basename).stream()
 			.filter(file -> null != file.getParent())
 			.filter(file -> matchesSourceRoot(file.getParent().getPath(), path))
 			.collect(Collectors.toList());
@@ -1496,14 +1499,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 这样可以确保缓存始终与项目文件系统保持同步
 	 */
 	private void createFileCache() {
-		CompletableFuture<Void> initFuture = scheduleReloadAsync("open project", null, true);
-		// 仅在非 EDT（非 UI 线程）上同步等待缓存构建完成，避免阻塞 UI 导致界面冻结
-		if (!ApplicationManager.getApplication().isDispatchThread()) {
-			awaitReloadCompletion(initFuture, "initial cache build");
-		} else {
-			logger.info(String.format("project[%s]: skip synchronous cache init on EDT, cache will be built asynchronously",
-					project.getName()));
-		}
+		// 初始缓存构建始终异步执行，不阻塞任何线程
+		// 原因：此方法在 ConcurrentHashMap.computeIfAbsent 的 lambda 内被调用，
+		// 同步等待会将阻塞传导到 CHM 的桶锁上，导致所有并发调用 getDefaultFilters() 的线程被阻塞
+		// 参考: https://github.com/github-2013/intellij-awesome-console-x/issues/16
+		scheduleReloadAsync("open project", null, true);
+		logger.info(String.format("project[%s]: file cache initialization scheduled asynchronously",
+				project.getName()));
 
 		// 创建 MessageBus 连接并传入 this 作为父 Disposable，确保在 dispose() 时自动断开连接
 		messageBusConnection = project.getMessageBus().connect(this);
@@ -1549,12 +1551,24 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		@Override
 		public void after(@NotNull List<? extends @NotNull VFileEvent> events) {
 			try {
+				// 事件分类在 VFS 线程同步执行（需要访问事件对象）
 				EventClassification result = classifyEvents(events);
 				if (!result.hasChanges()) return;
 
-				processDeletions(result.filesToDelete);
-				if (result.directoryDeleted) cleanupInvalidFilesAsync();
-				processAdditions(result.newFiles);
+				// 缓存更新操作异步执行，避免在 VFS 事件线程上获取写锁导致阻塞
+				// 原因：processDeletions/processAdditions 需要获取 cacheWriteLock，
+				// 如果此时 runReloadFileCache 正在后台持有写锁进行全量重建，
+				// VFS 事件线程会被阻塞，可能导致 UI 冻结
+				ApplicationManager.getApplication().executeOnPooledThread(() -> {
+					try {
+						processDeletions(result.filesToDelete);
+						if (result.directoryDeleted) cleanupInvalidFilesAsync();
+						processAdditions(result.newFiles);
+					} catch (Exception e) {
+						logger.error(String.format("project[%s]: Error processing VFS events asynchronously",
+								project.getName()), e);
+					}
+				});
 			} catch (Exception e) {
 				// 记录错误但不中断VFS事件处理，避免影响其他监听器
 				logger.error(String.format("project[%s]: Error handling VFS events",
@@ -2222,8 +2236,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		scheduleManualRebuild(progressCallback);
 	}
 
+	/**
+	 * 调度手动重建缓存
+	 * <p>
+	 * 线程安全说明：
+	 * <ul>
+	 *   <li>如果在 EDT 上调用（如通知栏的 "Reload file cache" 按钮），则仅异步调度，不阻塞 EDT</li>
+	 *   <li>如果在非 EDT 上调用（如 {@link awesome.console.config.IndexManagementService} 中通过
+	 *       {@code executeOnPooledThread} 调度的后台线程），则同步等待重建完成（带超时保护），
+	 *       阻塞的是后台池化线程，不会影响 UI 响应</li>
+	 * </ul>
+	 *
+	 * @param progressCallback 进度回调函数，参数为已处理的文件数；可为 null
+	 */
 	private void scheduleManualRebuild(@Nullable Consumer<Integer> progressCallback) {
 		CompletableFuture<Void> future = scheduleReloadAsync("manual", progressCallback, true);
+		// 仅在非 EDT 线程上同步等待，避免阻塞 UI
+		// 当前调用路径保障：
+		// 1. IndexManagementService.rebuildIndex() 通过 executeOnPooledThread 在后台线程调用
+		// 2. notifyUser 的 NotificationAction 点击回调在 EDT 上执行，此处会跳过等待
 		if (!ApplicationManager.getApplication().isDispatchThread()) {
 			awaitReloadCompletion(future, "manual rebuild");
 		}
@@ -2310,15 +2341,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 获取索引统计信息
+	 * 注意：直接在锁内访问底层 map，避免调用 getFileCacheSize()/getFileBaseCacheSize()/getTotalCachedFiles()
+	 * 导致的嵌套读锁开销（虽然 ReentrantReadWriteLock 读锁可重入不会死锁，但重复加解锁有不必要的性能开销）
 	 * @return 索引统计对象
 	 */
 	public IndexStatistics getIndexStatistics() {
 		cacheReadLock.lock();
 		try {
+			int totalCachedFiles = fileCache.values().stream()
+				.mapToInt(List::size)
+				.sum();
 			return new IndexStatistics(
-				getFileCacheSize(),
-				getFileBaseCacheSize(),
-				getTotalCachedFiles(),
+				fileCache.size(),
+				fileBaseCache.size(),
+				totalCachedFiles,
 				ignoredFilesCount,
 				lastRebuildTime,
 				lastRebuildDuration

@@ -15,6 +15,14 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.37</b><br/>
+        	<ul>
+        		<li>Fixed potential deadlock by making initial file cache build fully asynchronous (issue #16)</li>
+        		<li>Replaced parallelStream with stream inside cacheReadLock to avoid ForkJoinPool blocking risk</li>
+        		<li>Moved VFS event cache updates to pooled thread to prevent UI freeze from write lock contention</li>
+        		<li>Optimized getIndexStatistics to access maps directly under single lock, avoiding nested read lock overhead</li>
+        		<li>Added detailed thread-safety documentation for scheduleManualRebuild method</li>
+        	</ul>
 	    	<b>0.1337.36</b><br/>
         	<ul>
         		<li>Refactored cache rebuild to two-phase strategy: lock-free build + atomic swap with brief write lock</li>
