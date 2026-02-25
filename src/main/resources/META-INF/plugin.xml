@@ -15,6 +15,14 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.38</b><br/>
+        	<ul>
+        		<li>Added rethrowIfExceptionMustNotBeLogged calls across all catch blocks to prevent swallowing ControlFlowException (issue #17)</li>
+        		<li>Upgraded IntelliJ Platform Gradle Plugin from 2.2.1 to 2.5.0</li>
+        		<li>Removed untilBuild upper limit to support all future IDE versions</li>
+        		<li>Added explicit opentest4j dependency for test framework compatibility (IJPL-157292)</li>
+        		<li>Fixed code indentation in AwesomeLinkFilterProvider and FileUtils.resolveSymlink</li>
+        	</ul>
 	    	<b>0.1337.37</b><br/>
         	<ul>
         		<li>Fixed potential deadlock by making initial file cache build fully asynchronous (issue #16)</li>

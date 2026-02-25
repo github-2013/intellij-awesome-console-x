@@ -16,6 +16,8 @@ import java.util.List;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import static awesome.console.util.ExceptionHandling.rethrowIfExceptionMustNotBeLogged;
+
 
 /**
  * 超链接工具类
@@ -72,7 +74,8 @@ public class HyperlinkUtils {
                     return buildMultipleFilesHyperlinkInfo(project, List.of(virtualFile), row, col, false);
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            rethrowIfExceptionMustNotBeLogged(e);
         }
 
         return new SingleFileFileHyperlinkInfo(project, filePath, row, col, () -> config.resolveSymlink);
@@ -156,6 +159,7 @@ public class HyperlinkUtils {
             attr.setEffectType(EffectType.SEARCH_MATCH);
             return attr;
         } catch (Exception e) {
+            rethrowIfExceptionMustNotBeLogged(e);
             return null;
         }
     }
@@ -170,6 +174,7 @@ public class HyperlinkUtils {
         try {
             return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
         } catch (Exception e) {
+            rethrowIfExceptionMustNotBeLogged(e);
             return null;
         }
     }
@@ -184,6 +189,7 @@ public class HyperlinkUtils {
         try {
             return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES);
         } catch (Exception e) {
+            rethrowIfExceptionMustNotBeLogged(e);
             return null;
         }
     }
@@ -208,6 +214,7 @@ public class HyperlinkUtils {
             }
             return attr;
         } catch (Exception e) {
+            rethrowIfExceptionMustNotBeLogged(e);
             return null;
         }
     }
@@ -232,6 +239,7 @@ public class HyperlinkUtils {
             }
             return attr;
         } catch (Exception e) {
+            rethrowIfExceptionMustNotBeLogged(e);
             return null;
         }
     }

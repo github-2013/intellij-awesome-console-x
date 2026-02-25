@@ -10,7 +10,10 @@ import com.intellij.openapi.project.ProjectManagerListener;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.terminal.TerminalExecutionConsole;
+import com.intellij.openapi.diagnostic.Logger;
 import org.jetbrains.annotations.NotNull;
+
+import static awesome.console.util.ExceptionHandling.rethrowIfExceptionMustNotBeLogged;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,18 +41,18 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 			@Override
 			// 定义项目关闭时的回调方法，接收被关闭的项目作为参数
 			public void projectClosed(@NotNull Project project) {
-				// 从缓存中移除已关闭项目对应的过滤器，并释放资源
-				Filter[] filters = cache.remove(project);
-				// 如果过滤器存在且实现了 Disposable 接口，调用 Disposer.dispose() 释放资源
-				if (filters != null && filters.length > 0 && filters[0] instanceof AwesomeLinkFilter) {
-					try {
-						Disposer.dispose((AwesomeLinkFilter) filters[0]);
-					} catch (Exception e) {
-						// 记录错误但不中断项目关闭流程
-						com.intellij.openapi.diagnostic.Logger.getInstance(AwesomeLinkFilterProvider.class)
-							.warn("Error while disposing AwesomeLinkFilter for project: " + project.getName(), e);
-					}
+			// 从缓存中移除已关闭项目对应的过滤器，并释放资源
+			Filter[] filters = cache.remove(project);
+			// 如果过滤器存在且实现了 Disposable 接口，调用 Disposer.dispose() 释放资源
+			if (filters != null && filters.length > 0 && filters[0] instanceof AwesomeLinkFilter) {
+				try {
+					Disposer.dispose((AwesomeLinkFilter) filters[0]);
+				} catch (Exception e) {
+					rethrowIfExceptionMustNotBeLogged(e);
+					// 记录错误但不中断项目关闭流程
+					Logger.getInstance(AwesomeLinkFilterProvider.class).warn("Error while disposing AwesomeLinkFilter for project: " + project.getName(), e);
 				}
+			}
 			}
 		});
 	}
@@ -76,6 +79,7 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 			// 判断控制台视图是否为TerminalExecutionConsole的实例，以确定是否为终端环境
 			isTerminal = consoleView instanceof TerminalExecutionConsole;
 		} catch (Exception ignored) {
+			rethrowIfExceptionMustNotBeLogged(ignored);
 			// 捕获业务异常并忽略，保持isTerminal为false
 		}
 		// 调用重载的getDefaultFilters方法，传入项目和终端标识，返回过滤器数组

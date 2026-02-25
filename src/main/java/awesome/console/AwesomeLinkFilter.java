@@ -1307,6 +1307,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				future.complete(null);
 			}
 		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			for (CompletableFuture<Void> future : futures) {
 				future.completeExceptionally(e);
 			}
@@ -1331,6 +1332,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				try {
 					callback.accept(count);
 				} catch (Exception e) {
+					ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 					logger.warn(String.format("project[%s]: Error in reload progress callback", project.getName()), e);
 				}
 			}
@@ -1469,6 +1471,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				triggerProgressCallback();
 				return result;
 			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				// 记录错误但不中断整个索引过程，继续处理其他文件
 				logger.error(String.format("project[%s]: Error processing file during indexing: %s",
 						project.getName(), fileOrDir.getPath()), e);
@@ -1571,6 +1574,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 						if (result.directoryDeleted) cleanupInvalidFilesAsync();
 						processAdditions(result.newFiles);
 					} catch (Exception e) {
+						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 						logger.error(String.format("project[%s]: Error processing VFS events asynchronously",
 								project.getName()), e);
 					}
@@ -2412,6 +2416,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					break;
 			}
 		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.error(String.format("project[%s]: Error handling config change (%s)", 
 				project.getName(), changeType), e);
 		}
@@ -2455,6 +2460,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			ignoreMatcher.remove();
 			isTerminal.remove();
 		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.warn(String.format("project[%s]: Error while cleaning up ThreadLocal variables", project.getName()), e);
 		}
 
@@ -2477,6 +2483,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				}
 			}
 		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.warn(String.format("project[%s]: Error while canceling reload requests", project.getName()), e);
 		}
 
@@ -2488,6 +2495,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			cacheInitialized = false;
 			logger.info(String.format("project[%s]: File cache cleared in dispose()", project.getName()));
 		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.warn(String.format("project[%s]: Error while clearing cache", project.getName()), e);
 		} finally {
 			cacheWriteLock.unlock();
@@ -2499,6 +2507,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				messageBusConnection.disconnect();
 				logger.info(String.format("project[%s]: Project MessageBusConnection disconnected", project.getName()));
 			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				logger.warn(String.format("project[%s]: Error while disconnecting project MessageBusConnection", project.getName()), e);
 			}
 		}
@@ -2509,6 +2518,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				appMessageBusConnection.disconnect();
 				logger.info(String.format("project[%s]: Application MessageBusConnection disconnected", project.getName()));
 			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				logger.warn(String.format("project[%s]: Error while disconnecting application MessageBusConnection", project.getName()), e);
 			}
 		}

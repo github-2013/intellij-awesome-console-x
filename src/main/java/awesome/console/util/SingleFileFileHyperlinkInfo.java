@@ -104,6 +104,7 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
         try {
             super.navigate(project);
         } catch (RuntimeException e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
             // 忽略由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
             if (!DISPOSAL_EXCEPTION_MESSAGE.equals(e.getMessage())) {
                 throw e;

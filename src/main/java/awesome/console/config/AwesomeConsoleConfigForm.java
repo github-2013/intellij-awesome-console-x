@@ -1,6 +1,7 @@
 package awesome.console.config;
 
 import awesome.console.AwesomeLinkFilter;
+import awesome.console.util.ExceptionHandling;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
@@ -363,6 +364,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     }, ModalityState.any());
                 }
             } catch (Exception e) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
                 logger.error("Failed to update index status: " + e.getMessage(), e);
                 ApplicationManager.getApplication().invokeLater(() -> {
                     indexStatusLabel.setText("Index Status: Error - " + e.getMessage());

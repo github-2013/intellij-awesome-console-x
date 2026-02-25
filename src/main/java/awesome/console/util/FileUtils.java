@@ -135,6 +135,7 @@ public class FileUtils {
                 return ((Integer) attribute & 0x400) != 0;
             }
         } catch (Exception ignored) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(ignored);
         }
         return false;
     }
@@ -229,11 +230,12 @@ public class FileUtils {
      */
     public static String resolveSymlink(@NotNull final String filePath, final boolean resolveSymlink) {
         if (resolveSymlink) {
-        try {
-            // 避免由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
-            return Paths.get(filePath).toRealPath().toString();
-        } catch (Exception ignored) {
-        }
+            try {
+                // 避免由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
+                return Paths.get(filePath).toRealPath().toString();
+            } catch (Exception ignored) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(ignored);
+            }
         }
         return filePath;
     }
@@ -255,6 +257,7 @@ public class FileUtils {
                             .filter(Objects::nonNull)
                             .collect(Collectors.toList());
             } catch (Exception ignored) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(ignored);
             }
         }
         return files;

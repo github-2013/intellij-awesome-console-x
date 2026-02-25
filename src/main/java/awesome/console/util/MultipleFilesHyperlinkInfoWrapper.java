@@ -6,6 +6,9 @@ import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.wm.WindowManager;
 import com.intellij.ui.awt.RelativePoint;
+
+import static awesome.console.util.ExceptionHandling.rethrowIfExceptionMustNotBeLogged;
+
 import javax.swing.JFrame;
 import javax.swing.JRootPane;
 import javax.swing.SwingUtilities;
@@ -65,6 +68,7 @@ public class MultipleFilesHyperlinkInfoWrapper extends HyperlinkInfoBase impleme
             }
             return RelativePoint.getCenterOf(rootPane);
         } catch (Exception ignored) {
+            rethrowIfExceptionMustNotBeLogged(ignored);
         }
         return null;
     }
