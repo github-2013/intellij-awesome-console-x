@@ -4,10 +4,10 @@ import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 // ==================== 插件配置 ====================
 plugins {
     // 启用 Java 插件，提供 Java 项目的编译、测试、打包等基础能力
-    id "java"
+    id("java")
     // 启用 IntelliJ Platform Gradle 插件 2.5.0 版本
     // 该插件用于开发 IntelliJ IDEA 插件，提供构建、运行、调试、发布等功能
-    id "org.jetbrains.intellij.platform" version "2.5.0"
+    id("org.jetbrains.intellij.platform") version "2.5.0"
 }
 
 // ==================== 仓库配置 ====================
@@ -17,9 +17,9 @@ repositories {
 
     // 配置腾讯云 Maven 镜像仓库，用于加速依赖下载
     maven {
-        url "http://mirrors.tencent.com/nexus/repository/maven-public/"
+        url = uri("http://mirrors.tencent.com/nexus/repository/maven-public/")
         // 允许使用不安全的 HTTP 协议（非 HTTPS）
-        allowInsecureProtocol = true
+        isAllowInsecureProtocol = true
     }
     // 配置 IntelliJ Platform 默认仓库
     // 包含 JetBrains 官方的插件和 IDE 依赖仓库
@@ -37,13 +37,13 @@ dependencies {
         intellijIdeaCommunity("2024.2")
         // 声明依赖 IntelliJ 内置的 Java 插件
         // 这使得本插件可以使用 Java 插件提供的 API
-        bundledPlugin "com.intellij.java"
+        bundledPlugin("com.intellij.java")
         // 启用插件验证器，用于检查插件兼容性
         pluginVerifier()
         // 启用代码插桩工具，用于处理 @NotNull 等注解的运行时检查
         instrumentationTools()
         // 配置测试框架为 Platform 类型，用于编写插件的单元测试
-        testFramework TestFrameworkType.Platform.INSTANCE
+        testFramework(TestFrameworkType.Platform)
     }
     // 添加 JUnit 4.13.2 作为测试依赖
     testImplementation("junit:junit:4.13.2")
@@ -74,8 +74,8 @@ intellijPlatform {
         // IDE 版本兼容性配置
         ideaVersion {
             // 最低支持的 IDE 构建版本号（242 对应 2024.2 版本）
-            sinceBuild = '242'
-            // 最高支持的 IDE 构建版本号（299.* 表示支持到 2029.9 的所有小版本）
+            sinceBuild = "242"
+            // 最高支持的 IDE 构建版本号（不设置上限，支持所有未来版本）
             untilBuild = provider { null }
         }
     }
@@ -92,14 +92,14 @@ java {
 
 // ==================== 任务配置 ====================
 // 配置所有 JavaCompile 类型的任务
-tasks.withType(JavaCompile).configureEach {
+tasks.withType<JavaCompile>().configureEach {
     // 设置源文件编码为 UTF-8，避免中文等字符编译问题
-    options.encoding = 'UTF-8'
+    options.encoding = "UTF-8"
 }
 
 // 配置 buildSearchableOptions 任务
 // 该任务用于构建插件设置页面的可搜索选项索引
-tasks.named('buildSearchableOptions') {
+tasks.named("buildSearchableOptions") {
     // 启用此任务（设为 false 可跳过，加快构建速度，但会影响设置搜索功能）
     enabled = true
 }
