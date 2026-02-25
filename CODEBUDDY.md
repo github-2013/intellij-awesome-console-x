@@ -194,7 +194,7 @@ sequenceDiagram
     participant Regex as 正则匹配引擎
     participant Cache as 文件缓存系统
     participant VFS as VirtualFileSystem
-    participant Link as 超链接创建
+    participant Linker as 超链接创建
 
     Console->>Filter: applyFilter(line, entireLength)
     Filter->>Filter: 行长度检查和分块处理
@@ -212,7 +212,7 @@ sequenceDiagram
             Filter->>VFS: 直接路径解析
             VFS-->>Filter: VirtualFile或null
         end
-        Filter->>Link: 创建HyperlinkInfo
+        Filter->>Linker: 创建HyperlinkInfo
     end
 
     Filter-->>Console: Filter.Result(可点击超链接列表)
