@@ -40,8 +40,6 @@ dependencies {
         bundledPlugin("com.intellij.java")
         // 启用插件验证器，用于检查插件兼容性
         pluginVerifier()
-        // 启用代码插桩工具，用于处理 @NotNull 等注解的运行时检查
-        instrumentationTools()
         // 配置测试框架为 Platform 类型，用于编写插件的单元测试
         testFramework(TestFrameworkType.Platform)
     }

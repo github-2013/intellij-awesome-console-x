@@ -35,3 +35,11 @@ git clone https://github.com/anyesu/intellij-awesome-console
 Build from the Command Line
 
 You can locate the generated JAR file in the build/libs directory.
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [USAGES.md](USAGES.md) | Usage Scenarios & Examples |
+| [CODEBUDDY.md](CODEBUDDY.md) | Project Architecture |
+| [GUIDE.md](GUIDE.md) | Development Configuration & FAQ |
