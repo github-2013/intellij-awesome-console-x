@@ -197,27 +197,25 @@ sequenceDiagram
     participant Link as 超链接创建
 
     Console->>Filter: applyFilter(line, entireLength)
-    Filter->>Filter: 行长度检查 & 分块处理
-    Filter->>Regex: FILE_PATTERN / URL_PATTERN 匹配
+    Filter->>Filter: 行长度检查和分块处理
+    Filter->>Regex: FILE_PATTERN和URL_PATTERN匹配
     Regex-->>Filter: 匹配结果列表
-    
+
     loop 每个文件路径匹配
-        Filter->>Cache: 查找文件 (文件名缓存)
+        Filter->>Cache: 查找文件(文件名缓存)
         alt 缓存命中
             Cache-->>Filter: VirtualFile
-        else 缓存未命中
+        else 缓存未命中-基础名命中
             Filter->>Cache: 基础名查找
-            alt 基础名命中
-                Cache-->>Filter: VirtualFile
-            else 未命中
-                Filter->>VFS: 直接路径解析
-                VFS-->>Filter: VirtualFile / null
-            end
+            Cache-->>Filter: VirtualFile
+        else 缓存未命中-基础名未命中
+            Filter->>VFS: 直接路径解析
+            VFS-->>Filter: VirtualFile或null
         end
-        Filter->>Link: 创建 HyperlinkInfo
+        Filter->>Link: 创建HyperlinkInfo
     end
-    
-    Filter-->>Console: Filter.Result (可点击超链接列表)
+
+    Filter-->>Console: Filter.Result(可点击超链接列表)
 ```
 
 ### 核心组件架构
