@@ -15,6 +15,14 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.39</b><br/>
+        	<ul>
+        		<li>Fixed Windows illegal paths causing excessive SEVERE log errors by adding VALID_WINDOWS_PATH regex pre-check before Paths.get() (PR #18)</li>
+        		<li>Merged duplicate logger.error calls into single statement with exception parameter in resolveFile</li>
+        		<li>Cached SystemUtils.isWindows() result in static final field to avoid repeated System.getProperty() calls on every resolveFile invocation</li>
+        		<li>Added WindowsPathValidationTest with 26 unit tests covering valid paths, URLs, pseudo-schemes, host:port, wildcards and edge cases</li>
+        		<li>Added 9 integration tests in AwesomeLinkFilterTest for PR #18 scenarios including WSL paths, Node.js pseudo-schemes, webpack URIs and mixed content</li>
+        	</ul>
 	    	<b>0.1337.38</b><br/>
         	<ul>
         		<li>Added rethrowIfExceptionMustNotBeLogged calls across all catch blocks to prevent swallowing ControlFlowException (issue #17)</li>

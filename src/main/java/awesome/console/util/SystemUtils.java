@@ -6,6 +6,14 @@ package awesome.console.util;
  * */
 public class SystemUtils {
 
+    /** 缓存 Windows 系统判断结果，操作系统在运行期间不会变化，类加载时计算一次即可 */
+    private static final boolean IS_WINDOWS = initIsWindows();
+
+    private static boolean initIsWindows() {
+        String osName = System.getProperty("os.name");
+        return osName != null && osName.toLowerCase().startsWith("windows");
+    }
+
     /**
      * 获取操作系统名称
      * 
@@ -30,7 +38,6 @@ public class SystemUtils {
      * @return 如果是Windows系统则返回true
      */
     public static boolean isWindows() {
-        String osName = getOsName();
-        return osName != null && osName.toLowerCase().startsWith("windows");
+        return IS_WINDOWS;
     }
 }

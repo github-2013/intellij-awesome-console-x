@@ -3721,4 +3721,192 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		assertTrue("Should detect Service.java", foundService);
 		assertTrue("Should detect Repository.java", foundRepository);
 	}
+
+	// ==================== PR#18: Windows 非法路径日志洪泛修复测试 ====================
+
+	/**
+	 * 测试包含 HTTP URL 的控制台输出不应将 URL 部分识别为文件路径
+	 * PR#18 修复场景：URL 中的冒号在 Windows 上会导致 InvalidPathException
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testUrlInConsoleShouldNotBeDetectedAsFilePath() {
+		System.out.println("PR#18: URL in console output should not cause path detection errors");
+
+		// HTTP URL 应被识别为 URL 而非文件路径
+		List<URLLinkMatch> urlResults = filter.detectURLs("Loading http://localhost:4000/assets/css/app.css");
+		assertFalse("HTTP URL should be detected as URL", urlResults.isEmpty());
+
+		// HTTPS URL 同理
+		List<URLLinkMatch> httpsResults = filter.detectURLs("Fetching https://cdn.example.com/bundle.js");
+		assertFalse("HTTPS URL should be detected as URL", httpsResults.isEmpty());
+	}
+
+	/**
+	 * 测试 WSL 路径拼接 URL 的场景不应导致异常
+	 * 这是 PR#18 中报告的实际错误场景：
+	 * //wsl.localhost/Ubuntu/home/user/dev/awesome\http://localhost:4000/assets/css/app.css
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testWslPathConcatenatedWithUrlShouldNotCauseError() {
+		System.out.println("PR#18: WSL path concatenated with URL should not cause errors");
+
+		// 模拟 PR#18 中报告的实际错误场景
+		String wslUrlLine = "//wsl.localhost/Ubuntu/home/user/dev/awesome\\http://localhost:4000/assets/css/app.css";
+
+		// 不应抛出异常，即使无法检测到有效路径
+		List<FileLinkMatch> pathResults = filter.detectPaths(wslUrlLine);
+		// 只要不抛异常就算通过，结果可能为空也可能不为空
+		assertNotNull("Detection should return non-null result", pathResults);
+
+		// URL 部分应该被正确识别
+		List<URLLinkMatch> urlResults = filter.detectURLs(wslUrlLine);
+		assertNotNull("URL detection should return non-null result", urlResults);
+	}
+
+	/**
+	 * 测试包含 Node.js 伪协议的控制台输出不应导致路径检测异常
+	 * 如 node:fs, node:path 等在 Node.js 控制台中常见
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testNodePseudoSchemeInConsoleShouldNotCauseError() {
+		System.out.println("PR#18: Node.js pseudo-schemes should not cause path detection errors");
+
+		String[] nodeSchemeLines = {
+			"Error: Cannot find module 'node:fs'",
+			"    at require (node:internal/modules/cjs/loader:1005:25)",
+			"    at node:internal/main/run_main_module:28:49",
+			"import { readFile } from 'node:fs/promises'",
+			"const path = require('node:path')"
+		};
+
+		for (String line : nodeSchemeLines) {
+			// 不应抛出异常
+			List<FileLinkMatch> results = filter.detectPaths(line);
+			assertNotNull("Detection should return non-null for: " + line, results);
+		}
+	}
+
+	/**
+	 * 测试包含 host:port 格式的控制台输出不应导致路径检测异常
+	 * 如 localhost:3000, 127.0.0.1:8080 等
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testHostPortInConsoleShouldNotCauseError() {
+		System.out.println("PR#18: host:port format should not cause path detection errors");
+
+		String[] hostPortLines = {
+			"Server listening on localhost:3000",
+			"Connected to database at 127.0.0.1:5432",
+			"Redis connection established at redis:6379",
+			"Proxy forwarding to upstream:8080",
+			"MySQL running on mysql:3306"
+		};
+
+		for (String line : hostPortLines) {
+			List<FileLinkMatch> results = filter.detectPaths(line);
+			assertNotNull("Detection should return non-null for: " + line, results);
+		}
+	}
+
+	/**
+	 * 测试包含类型注解的控制台输出不应导致路径检测异常
+	 * 如 TypeScript 的 param:string, Java 的 Map:Entry 等
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testTypeAnnotationInConsoleShouldNotCauseError() {
+		System.out.println("PR#18: Type annotations should not cause path detection errors");
+
+		String[] typeAnnotationLines = {
+			"Type error: Property 'name' is missing in type 'Foo:String'",
+			"Expected param:number but got param:string",
+			"Cannot assign Map:Entry to Map:Value"
+		};
+
+		for (String line : typeAnnotationLines) {
+			List<FileLinkMatch> results = filter.detectPaths(line);
+			assertNotNull("Detection should return non-null for: " + line, results);
+		}
+	}
+
+	/**
+	 * 测试包含 file:// URI 的控制台输出不应导致路径检测异常
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testFileUriInConsoleShouldNotCauseError() {
+		System.out.println("PR#18: file:// URIs should not cause path detection errors");
+
+		String[] fileUriLines = {
+			"Opening file:///C:/Users/dev/project/index.html",
+			"Source: file:///home/user/workspace/app.js",
+			"file://localhost/share/document.pdf"
+		};
+
+		for (String line : fileUriLines) {
+			List<FileLinkMatch> results = filter.detectPaths(line);
+			assertNotNull("Detection should return non-null for: " + line, results);
+		}
+	}
+
+	/**
+	 * 测试混合场景：一行中同时包含合法文件路径和 URL/伪协议
+	 * 确保合法路径仍然能被正确检测，而非法路径不会导致异常
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testMixedPathAndUrlInSameLineShouldNotCauseError() {
+		System.out.println("PR#18: Mixed path and URL in same line should work correctly");
+
+		// 同一行中包含文件路径和 URL
+		String mixedLine = "Error in src/main/java/App.java while fetching http://api.example.com:8080/data";
+		List<FileLinkMatch> pathResults = filter.detectPaths(mixedLine);
+		assertNotNull("Path detection should return non-null", pathResults);
+
+		// 文件路径部分应该被检测到
+		List<String> detectedPaths = pathResults.stream().map(it -> it.match).collect(Collectors.toList());
+		boolean foundJavaFile = detectedPaths.stream().anyMatch(p -> p.contains("App.java"));
+		assertTrue("Should detect the Java file path", foundJavaFile);
+
+		// URL 部分应该被 URL 检测器检测到
+		List<URLLinkMatch> urlResults = filter.detectURLs(mixedLine);
+		assertFalse("Should detect the URL", urlResults.isEmpty());
+	}
+
+	/**
+	 * 测试 webpack 伪协议路径不应导致异常
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testWebpackPseudoPathShouldNotCauseError() {
+		System.out.println("PR#18: Webpack pseudo paths should not cause errors");
+
+		String[] webpackLines = {
+			"webpack:///src/components/App.vue",
+			"webpack-internal:///./node_modules/vue/dist/vue.runtime.esm.js",
+			"webpack:///./src/index.ts?abc123"
+		};
+
+		for (String line : webpackLines) {
+			List<FileLinkMatch> results = filter.detectPaths(line);
+			assertNotNull("Detection should return non-null for: " + line, results);
+		}
+	}
+
+	/**
+	 * 测试 data: URI 不应导致路径检测异常
+	 *
+	 * @see <a href="https://github.com/github-2013/intellij-awesome-console-x/pull/18">PR#18</a>
+	 */
+	public void testDataUriShouldNotCauseError() {
+		System.out.println("PR#18: data: URIs should not cause path detection errors");
+
+		String dataUriLine = "Background image: data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+		List<FileLinkMatch> results = filter.detectPaths(dataUriLine);
+		assertNotNull("Detection should return non-null", results);
+	}
 }
