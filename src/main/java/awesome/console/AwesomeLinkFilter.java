@@ -240,6 +240,15 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/** 只包含字母的匹配模式 */
 	private static final Pattern ONLY_LETTERS_PATTERN = Pattern.compile("^[A-Za-z]+$");
 
+	/**
+	 * Matches a structurally-valid Windows path: optional drive-letter prefix
+	 * followed by characters legal in every path component. Used by
+	 * {@link #resolveFile(String)} to short-circuit non-path tokens (URLs, URIs,
+	 * pseudo-schemes, {@code host:port}, type annotations, git rename syntax)
+	 * before {@code WindowsPathParser} throws {@code InvalidPathException}.
+	 */
+	private static final Pattern VALID_WINDOWS_PATH = Pattern.compile("^(\\p{Alpha}:)?[^<>|\"*?:]*$");
+
 	/** 最大搜索深度（用于完全限定类名搜索） */
 	// 定义私有静态final常量，限制完全限定类名搜索的递归深度
 	// 当无法找到完整类名对应的文件时，会递归地尝试更短的类名
@@ -767,6 +776,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (FileUtils.isUncPath(path)) {
 			return null;
 		}
+		// On Windows, short-circuit non-path tokens (URLs, URIs, pseudo-schemes,
+		// host:port, type annotations, git rename syntax) before Paths.get() throws.
+		if (SystemUtils.isWindows() && !VALID_WINDOWS_PATH.matcher(path).matches()) {
+			return null;
+		}
 		// 如果是绝对路径，基础路径为空；否则使用项目根目录作为基础路径
 		String basePath = StringUtil.defaultIfEmpty(isAbsolutePath(path) ? null : project.getBasePath(), "");
 		try {
@@ -777,8 +791,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return new File(Paths.get(basePath, path).normalize().toString());
 		} catch (InvalidPathException e) {
 			// 记录错误日志，包含路径和基础路径信息
-			logger.error(String.format("Unable to resolve file path: \"%s\" with basePath \"%s\"", path, basePath));
-			logger.error(e);
+			logger.error(String.format("Unable to resolve file path: \"%s\" with basePath \"%s\"", path, basePath), e);
 			// 返回 null 表示解析失败
 			return null;
 		}
