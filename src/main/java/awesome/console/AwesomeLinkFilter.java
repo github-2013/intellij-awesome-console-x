@@ -981,11 +981,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return;
 		}
 
-		// 查找最佳匹配的文件
+		// 查找最佳匹配的文件。带目录的路径必须命中足够具体的后缀，
+		// 否则会把 git delete 的 e2e/dashboard/package.json 误链到项目中其它 package.json
 		final List<VirtualFile> bestMatchingFiles = findBestMatchingFiles(normalizePathSeparators(matchPath), matchingFiles);
-		if (bestMatchingFiles != null && !bestMatchingFiles.isEmpty()) {
-			matchingFiles = bestMatchingFiles;
+		if (bestMatchingFiles == null || bestMatchingFiles.isEmpty()) {
+			processTruncatedPathOnDisk(match, matchPath, startPoint, results);
+			return;
 		}
+		matchingFiles = bestMatchingFiles;
 
 		// 创建超链接
 		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
@@ -1312,31 +1315,56 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * - a/b/c/file.txt
 	 * - b/c/file.txt
 	 * - c/file.txt
-	 * - file.txt
-	 * 这样可以处理部分路径匹配的情况
+	 * 原始匹配已包含目录时，不再回退到仅文件名（file.txt），
+	 * 以免把已删除的 e2e/dashboard/package.json 链到其它 package.json
 	 *
 	 * @param generalizedMatchPath 标准化后的匹配路径（使用正斜杠）
 	 * @param matchingFiles 候选文件列表
 	 * @return 最佳匹配的文件列表，如果没有匹配则返回null
 	 */
-	// 定义私有方法，查找最佳匹配的文件列表
-	// 递归地从路径中移除最顶层目录，直到找到匹配的文件
 	private List<VirtualFile> findBestMatchingFiles(final String generalizedMatchPath,
 													final List<VirtualFile> matchingFiles) {
-		// 根据路径过滤文件列表
+		return findBestMatchingFiles(
+				generalizedMatchPath,
+				matchingFiles,
+				hasDirectoryComponent(generalizedMatchPath)
+		);
+	}
+
+	private List<VirtualFile> findBestMatchingFiles(final String generalizedMatchPath,
+													final List<VirtualFile> matchingFiles,
+													final boolean requireDirectorySuffix) {
 		final List<VirtualFile> foundFiles = filterFilesByPathSuffix(generalizedMatchPath, matchingFiles);
-		// 如果找到匹配的文件，直接返回
 		if (!foundFiles.isEmpty()) {
 			return foundFiles;
 		}
-		// 从路径中移除最顶层目录，得到更宽泛的匹配路径
 		final String widerMatchingPath = removeFirstDirectory(generalizedMatchPath);
-		// 如果还有更宽泛的路径，递归查找
-		if (widerMatchingPath != null) {
-			return findBestMatchingFiles(widerMatchingPath, matchingFiles);
+		if (widerMatchingPath == null) {
+			return null;
 		}
-		// 如果没有更多层级，返回 null
-		return null;
+		// 原始路径含目录时，禁止回退到仅文件名匹配
+		if (requireDirectorySuffix && !widerMatchingPath.contains("/")) {
+			return null;
+		}
+		return findBestMatchingFiles(widerMatchingPath, matchingFiles, requireDirectorySuffix);
+	}
+
+	/**
+	 * 判断标准化路径在去掉 {@code ./}、{@code ../} 后是否仍包含目录。
+	 * {@code ./package.json} 视为仅文件名；{@code e2e/dashboard/server.js} 视为带目录。
+	 */
+	private boolean hasDirectoryComponent(@NotNull String normalizedPath) {
+		String path = normalizedPath;
+		while (true) {
+			if (path.startsWith("./")) {
+				path = path.substring(2);
+			} else if (path.startsWith("../")) {
+				path = path.substring(3);
+			} else {
+				break;
+			}
+		}
+		return path.contains("/");
 	}
 
 	/**

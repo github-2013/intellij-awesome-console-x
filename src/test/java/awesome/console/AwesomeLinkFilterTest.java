@@ -953,6 +953,70 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				" .../pages/clusterService/serviceController/roleInstance/Add/installedSize.ts | 2",
 				".../pages/clusterService/serviceController/roleInstance/Add/installedSize.ts"
 		);
+
+		// git pull / merge 的 create/delete mode 行：正则应识别路径（与文件是否仍存在无关）
+		assertPathDetection(" create mode 100644 e2e/dashboard/package.json", "e2e/dashboard/package.json");
+		assertPathDetection(" delete mode 100644 e2e/dashboard/package.json", "e2e/dashboard/package.json");
+		assertPathDetection(" delete mode 100644 e2e/dashboard/public/index.html", "e2e/dashboard/public/index.html");
+		assertPathDetection(" delete mode 100644 e2e/dashboard/server.js", "e2e/dashboard/server.js");
+	}
+
+	/**
+	 * git pull 的 delete mode 行：路径已被删除，即使项目中还有同名文件，
+	 * 也不应按文件名回退生成超链接（否则 package.json / index.html 可点，
+	 * 而唯一的 server.js 不可点）。
+	 * <p>
+	 * 先放 decoy 并断言「仅文件名仍可链」，作为 fileCache 已索引的 canary；
+	 * 否则 cache 为空时，带目录的 delete 行在旧逻辑下也会无链，断言会假绿。
+	 */
+	public void testGitPullDeleteModeDoesNotLinkUnrelatedSameNamedFile() throws Exception {
+		myFixture.addFileToProject("other/package.json", "{}\n");
+		myFixture.addFileToProject("other/index.html", "<html></html>\n");
+		myFixture.addFileToProject("other/server.js", "console.log('decoy');\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		for (String fileName : new String[]{"package.json", "index.html", "server.js"}) {
+			List<Filter.ResultItem> filenameLinks = filter.extractFileLinksFromLine("Error in " + fileName, 0);
+			Assert.assertFalse(
+					"Filename-only " + fileName + " should still create a hyperlink (cache canary)",
+					filenameLinks.isEmpty()
+			);
+			Assert.assertNotNull(
+					"Filename-only hyperlink info should be present for " + fileName,
+					filenameLinks.get(0).getHyperlinkInfo()
+			);
+		}
+
+		Assert.assertTrue(
+				"Deleted server.js should not link to an unrelated server.js",
+				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/server.js", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Deleted package.json should not link to an unrelated package.json",
+				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Deleted index.html should not link to an unrelated index.html",
+				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/public/index.html", 0).isEmpty()
+		);
+	}
+
+	/**
+	 * 带目录的相对路径只要后缀仍能对上真实文件，就应继续生成超链接。
+	 * 例如控制台是 e2e/dashboard/server.js，文件在 src/e2e/dashboard/server.js。
+	 */
+	public void testDirectorySuffixStillLinksWhenFileExists() throws Exception {
+		myFixture.addFileToProject("src/e2e/dashboard/server.js", "console.log('ok');\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				" create mode 100644 e2e/dashboard/server.js",
+				0
+		);
+		Assert.assertFalse("Path suffix e2e/dashboard/server.js should become a hyperlink", links.isEmpty());
+		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
 	}
 
 	/**
