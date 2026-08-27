@@ -11,8 +11,11 @@ import static awesome.console.IntegrationTest.parseTemplate;
 import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import com.intellij.execution.filters.Filter;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -932,6 +935,60 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("rename app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json} (100%)", "app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}");
 		assertPathDetection("rename module/statics/tcff3/src/app/{AppRoot.js => AppRoot.jsx}", "module/statics/tcff3/src/app/{AppRoot.js => AppRoot.jsx}");
 		assertPathDetection("rename .../serviceController/{starRocksWork => components}/AppTopo/AppTopo.jsx", ".../serviceController/{starRocksWork => components}/AppTopo/AppTopo.jsx");
+
+		// git diff --stat / git pull --stat 会从左侧截断长路径
+		assertPathDetection(
+				" .../src/pages/clusterService/serviceController/roleInstance/Add/ESTags.tsx | 3",
+				".../src/pages/clusterService/serviceController/roleInstance/Add/ESTags.tsx"
+		);
+		assertPathDetection(
+				" .../pages/clusterService/serviceController/roleInstance/Add/HostModal.tsx | 2",
+				".../pages/clusterService/serviceController/roleInstance/Add/HostModal.tsx"
+		);
+		assertPathDetection(
+				" .../serviceController/roleInstance/Add/__tests__/installedSize.test.ts | 4",
+				".../serviceController/roleInstance/Add/__tests__/installedSize.test.ts"
+		);
+		assertPathDetection(
+				" .../pages/clusterService/serviceController/roleInstance/Add/installedSize.ts | 2",
+				".../pages/clusterService/serviceController/roleInstance/Add/installedSize.ts"
+		);
+	}
+
+	/**
+	 * git --stat 截断路径在 fileCache 未命中时，应能按磁盘后缀解析到真实文件。
+	 * 覆盖「第一段目录不在项目根下」（前面还有被截掉的 src/）以及更深层截断
+	 *（如 .../serviceController/.../installedSize.test.ts）两种 git --stat 形态。
+	 */
+	public void testGitDiffStatTruncatedPathResolvesFromDisk() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+
+		Path sourceFile = Path.of(basePath, "src/pages/clusterService/serviceController/roleInstance/Add/installedSize.ts");
+		Path testFile = Path.of(basePath, "src/pages/clusterService/serviceController/roleInstance/Add/__tests__/installedSize.test.ts");
+		Path decoyPages = Path.of(basePath, "other/pages");
+		Files.createDirectories(testFile.getParent());
+		Files.createDirectories(decoyPages);
+		Files.writeString(sourceFile, "export const installedSize = 1;\n");
+		Files.writeString(testFile, "test('installedSize', () => {});\n");
+		try {
+			List<Filter.ResultItem> sourceLinks = filter.extractFileLinksFromLine(
+					" .../pages/clusterService/serviceController/roleInstance/Add/installedSize.ts | 2",
+					0
+			);
+			Assert.assertFalse("Truncated installedSize.ts should become a hyperlink", sourceLinks.isEmpty());
+			Assert.assertNotNull("Hyperlink info should be present", sourceLinks.get(0).getHyperlinkInfo());
+
+			List<Filter.ResultItem> testLinks = filter.extractFileLinksFromLine(
+					" .../serviceController/roleInstance/Add/__tests__/installedSize.test.ts | 4",
+					0
+			);
+			Assert.assertFalse("Truncated installedSize.test.ts should become a hyperlink", testLinks.isEmpty());
+			Assert.assertNotNull("Hyperlink info should be present", testLinks.get(0).getHyperlinkInfo());
+		} finally {
+			Files.deleteIfExists(sourceFile);
+			Files.deleteIfExists(testFile);
+		}
 	}
 
 

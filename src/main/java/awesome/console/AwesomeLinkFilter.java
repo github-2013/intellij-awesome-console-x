@@ -280,6 +280,12 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	// key 为不含扩展名的文件名（如 "MyClass"），用于支持完全限定类名的查找
 	private final Map<String, List<VirtualFile>> fileBaseCache;
 
+	/**
+	 * git --stat 截断路径的磁盘搜索结果缓存
+	 * key 为去掉 `.../` 后的路径后缀，value 为匹配到的绝对路径列表（空列表表示已搜索但未找到）
+	 */
+	private final Map<String, List<String>> truncatedPathDiskCache;
+
 	/** 项目实例 */
 	// 声明私有final成员变量，存储当前 IntelliJ IDEA 项目的引用
 	private final Project project;
@@ -332,6 +338,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	// 声明私有final成员变量，存储项目文件迭代器
 	// 用于遍历项目中的所有文件，并将它们添加到 fileCache 和 fileBaseCache 中
 	private final AwesomeProjectFilesIterator indexIterator;
+
+	/** 磁盘定位的安全超时（毫秒）。主路径只遍历目录名，超时仅防止异常大仓库卡住终端 */
+	private static final int DISK_SEARCH_TIMEOUT_MS = 100;
+
+	/**
+	 * 磁盘遍历时跳过的工具目录（性能剪枝，不是第二套忽略规则）
+	 * <p>
+	 * 与设置页 Ignore pattern 职责不同：Ignore 决定「匹配结果要不要生成超链接」；
+	 * 这里只决定「walk 要不要进入该目录」。{@code .git} 等目录通常不在项目 content 中，
+	 * Ignore pattern 也不会覆盖它们，但从项目根 walk 时必须跳过，否则会扫到海量无关文件。
+	 */
+	private static final Set<String> DISK_SEARCH_SKIP_DIRS = Set.of(
+			"node_modules", ".git", ".gradle", ".svn", ".hg", ".idea", "bower_components"
+	);
 
 	/** 文件缓存重建防抖间隔（毫秒） */
 	private static final int RELOAD_DEBOUNCE_MS = 250;
@@ -403,6 +423,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		this.fileCache = new ConcurrentHashMap<>();
 		// 初始化文件基础名缓存为线程安全的 ConcurrentHashMap
 		this.fileBaseCache = new ConcurrentHashMap<>();
+		this.truncatedPathDiskCache = new ConcurrentHashMap<>();
 		// 创建项目文件迭代器，传入两个缓存 Map，用于遍历项目文件并填充缓存
 		this.indexIterator = new AwesomeProjectFilesIterator(fileCache, fileBaseCache);
 		// 获取项目根管理器实例，用于访问项目的根目录和文件索引
@@ -953,6 +974,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 在缓存中查找匹配的文件
 		List<VirtualFile> matchingFiles = findMatchingFilesInCache(fileName);
 		if (null == matchingFiles || matchingFiles.isEmpty()) {
+			// git --stat 会把长路径截成 `.../remaining/file.ts`，字面路径在磁盘上不存在，
+			// 只能靠文件名缓存。git pull 刚写入的新文件此时往往还没进入 VFS/fileCache，
+			// 因此在缓存未命中时回退到磁盘按路径后缀查找。
+			processTruncatedPathOnDisk(match, matchPath, startPoint, results);
 			return;
 		}
 
@@ -1002,6 +1027,228 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return fileName.substring(0, fileName.length() - 1);
 		}
 		return fileName;
+	}
+
+	/**
+	 * 判断是否为 git --stat / git log --stat 左侧截断路径（以 `.../` 开头，或解析后仍包含该前缀）
+	 */
+	private boolean isGitTruncatedPath(@NotNull String path) {
+		String normalized = normalizePathSeparators(path);
+		return normalized.startsWith(".../") || normalized.contains("/.../");
+	}
+
+	/**
+	 * 去掉 git 截断前缀 `.../`，得到可用于 endsWith 匹配的路径后缀
+	 */
+	@NotNull
+	private String stripGitTruncationPrefix(@NotNull String path) {
+		String normalized = normalizePathSeparators(path);
+		int index = normalized.indexOf(".../");
+		if (index >= 0) {
+			return normalized.substring(index + 4);
+		}
+		return normalized;
+	}
+
+	/**
+	 * 缓存未命中时，按截断路径后缀在磁盘上查找真实文件并生成超链接
+	 *
+	 * @return 如果已创建超链接则返回 true
+	 */
+	private boolean processTruncatedPathOnDisk(
+			@NotNull FileLinkMatch match,
+			@NotNull String matchPath,
+			int startPoint,
+			@NotNull List<ResultItem> results
+	) {
+		if (!isGitTruncatedPath(match.path) && !isGitTruncatedPath(matchPath)) {
+			return false;
+		}
+		List<String> absolutePaths = findFilesOnDiskByTruncatedPath(matchPath);
+		absolutePaths = absolutePaths.stream()
+				.filter(path -> !shouldIgnorePath(path))
+				.collect(Collectors.toList());
+		if (absolutePaths.isEmpty()) {
+			return false;
+		}
+		String filePath = absolutePaths.get(0);
+		final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
+				project, filePath, match.linkedRow, match.linkedCol
+		);
+		addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
+		return true;
+	}
+
+	/**
+	 * 在项目目录中按截断路径后缀查找文件。
+	 * 例如 {@code .../pages/foo/installedSize.ts} → 定位名为 {@code pages} 的目录，
+	 * 再检查 {@code foo/installedSize.ts} 是否存在于该目录下。
+	 */
+	@NotNull
+	private List<String> findFilesOnDiskByTruncatedPath(@NotNull String matchPath) {
+		String suffix = stripGitTruncationPrefix(matchPath);
+		if (suffix.isEmpty()) {
+			return Collections.emptyList();
+		}
+		String fileName = PathUtil.getFileName(suffix);
+		// 没有扩展名的片段（如 git --stat 行尾的 `2`）不做全盘扫描
+		if (fileName.isEmpty() || fileName.indexOf('.') < 0) {
+			return Collections.emptyList();
+		}
+		return truncatedPathDiskCache.computeIfAbsent(suffix, this::searchProjectDiskForSuffix);
+	}
+
+	/**
+	 * 按截断路径后缀定位磁盘文件。
+	 * <p>
+	 * 不按文件名扫整棵树：先尝试 content root 直接拼接，再只遍历目录，
+	 * 用后缀第一段目录名定位，然后对剩余相对路径做 {@code isFile()}。
+	 * 例如 {@code pages/foo/installedSize.ts} → 找到名为 {@code pages} 的目录，
+	 * 再检查 {@code {该目录}/foo/installedSize.ts}。
+	 */
+	@NotNull
+	private List<String> searchProjectDiskForSuffix(@NotNull String suffix) {
+		List<File> searchRoots = collectDiskSearchRoots();
+		if (searchRoots.isEmpty()) {
+			return Collections.emptyList();
+		}
+
+		List<String> directHits = findDirectSuffixHits(searchRoots, suffix);
+		if (!directHits.isEmpty()) {
+			return directHits;
+		}
+
+		int slash = suffix.indexOf('/');
+		if (slash <= 0 || slash == suffix.length() - 1) {
+			return Collections.emptyList();
+		}
+		String firstDir = suffix.substring(0, slash);
+		String remaining = suffix.substring(slash + 1);
+
+		List<String> found = new ArrayList<>();
+		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_TIMEOUT_MS);
+		Set<String> visited = new HashSet<>();
+		for (File root : searchRoots) {
+			if (found.size() >= 5 || System.nanoTime() > deadline) {
+				break;
+			}
+			locateByFirstDirectory(root, firstDir, remaining, found, 5, deadline, visited);
+		}
+		return found;
+	}
+
+	/**
+	 * 收集项目根与 content root，作为磁盘定位的起点
+	 */
+	@NotNull
+	private List<File> collectDiskSearchRoots() {
+		List<File> roots = new ArrayList<>();
+		Set<String> seen = new HashSet<>();
+		String basePath = project.getBasePath();
+		if (basePath != null && !basePath.isEmpty()) {
+			addDiskSearchRoot(roots, seen, new File(basePath));
+		}
+		try {
+			for (VirtualFile contentRoot : projectRootManager.getContentRoots()) {
+				addDiskSearchRoot(roots, seen, new File(contentRoot.getPath()));
+			}
+		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+			logger.warn(String.format("project[%s]: failed to collect content roots for truncated path search",
+					project.getName()), e);
+		}
+		return roots;
+	}
+
+	private void addDiskSearchRoot(@NotNull List<File> roots, @NotNull Set<String> seen, @NotNull File root) {
+		if (!root.isDirectory()) {
+			return;
+		}
+		String key = normalizePathSeparators(root.getAbsolutePath());
+		if (seen.add(key)) {
+			roots.add(root);
+		}
+	}
+
+	/**
+	 * 后缀相对于搜索根直接存在时的快速命中（未被截掉中间目录）
+	 */
+	@NotNull
+	private List<String> findDirectSuffixHits(@NotNull List<File> searchRoots, @NotNull String suffix) {
+		List<String> hits = new ArrayList<>();
+		try {
+			for (File root : searchRoots) {
+				File candidate = new File(root, suffix);
+				if (candidate.isFile()) {
+					String absolute = candidate.getAbsolutePath();
+					if (!hits.contains(absolute)) {
+						hits.add(absolute);
+					}
+				}
+			}
+		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+			logger.warn(String.format("project[%s]: direct disk lookup failed for truncated path suffix '%s'",
+					project.getName(), suffix), e);
+		}
+		return hits;
+	}
+
+	/**
+	 * 只遍历目录：找到名为 firstDir 的目录后，检查 remaining 是否为其中的真实文件。
+	 * 不递归进入文件，从而避免按文件名扫整棵树。
+	 */
+	private void locateByFirstDirectory(
+			@NotNull File dir,
+			@NotNull String firstDir,
+			@NotNull String remaining,
+			@NotNull List<String> found,
+			int limit,
+			long deadline,
+			@NotNull Set<String> visited
+	) {
+		if (found.size() >= limit || System.nanoTime() > deadline) {
+			return;
+		}
+		String canonical;
+		try {
+			canonical = dir.getCanonicalPath();
+		} catch (Exception e) {
+			return;
+		}
+		if (!visited.add(normalizePathSeparators(canonical))) {
+			return;
+		}
+		if (DISK_SEARCH_SKIP_DIRS.contains(dir.getName())) {
+			return;
+		}
+
+		if (firstDir.equals(dir.getName())) {
+			File candidate = new File(dir, remaining);
+			if (candidate.isFile()) {
+				String absolute = candidate.getAbsolutePath();
+				if (!found.contains(absolute)) {
+					found.add(absolute);
+				}
+				if (found.size() >= limit) {
+					return;
+				}
+			}
+		}
+
+		File[] children = dir.listFiles(File::isDirectory);
+		if (children == null) {
+			return;
+		}
+		for (File child : children) {
+			if (found.size() >= limit || System.nanoTime() > deadline) {
+				return;
+			}
+			if (DISK_SEARCH_SKIP_DIRS.contains(child.getName())) {
+				continue;
+			}
+			locateByFirstDirectory(child, firstDir, remaining, found, limit, deadline, visited);
+		}
 	}
 
 	/**
@@ -1398,6 +1645,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			fileCache.putAll(newFileCache);
 			fileBaseCache.clear();
 			fileBaseCache.putAll(newFileBaseCache);
+			truncatedPathDiskCache.clear();
 			ignoredFilesCount = newIgnoredCount;
 
 			// 在写锁内记录日志，确保 fileCache.size() 等读取一致
@@ -1616,6 +1864,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		// 遍历所有文件事件
 		for (VFileEvent event : events) {
+			if (event instanceof VFileCreateEvent createEvent) {
+				VirtualFile created = resolveCreatedFile(createEvent);
+				if (created != null && !created.isDirectory()) {
+					newFiles.add(created);
+				}
+				continue;
+			}
+
 			// 获取事件关联的文件
 			final VirtualFile file = event.getFile();
 			// 跳过空文件或不在内容根目录中的文件
@@ -1625,8 +1881,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			switch (event) {
 				// 文件复制事件：将复制后创建的新文件添加到新文件列表
 				case VFileCopyEvent e -> newFiles.add(e.findCreatedFile());
-				// 文件创建事件：将新创建的文件添加到新文件列表
-				case VFileCreateEvent e -> newFiles.add(file);
 				// 文件删除事件：区分目录和普通文件
 				case VFileDeleteEvent e -> {
 					// 如果删除的是目录，设置目录删除标志
@@ -1653,6 +1907,36 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 返回分类结果
 		return new EventClassification(newFiles, filesToDelete, directoryDeleted);
 	}
+
+		/**
+		 * 解析 VFileCreateEvent 对应的文件
+		 * git pull 等外部写入时，getFile() 可能为 null，且 isInContent 可能尚未更新，
+		 * 此时回退到 parent.findChild，并以父目录是否在项目内容中作为范围判断
+		 */
+		@Nullable
+		private VirtualFile resolveCreatedFile(@NotNull VFileCreateEvent event) {
+			if (event.isDirectory()) {
+				return null;
+			}
+			VirtualFile created = event.getFile();
+			if (created == null) {
+				VirtualFile parent = event.getParent();
+				if (parent != null) {
+					created = parent.findChild(event.getChildName());
+				}
+			}
+			if (created == null) {
+				return null;
+			}
+			if (isFileInProjectScope(created, false)) {
+				return created;
+			}
+			VirtualFile parent = event.getParent();
+			if (parent != null && projectRootManager.getFileIndex().isInContent(parent)) {
+				return created;
+			}
+			return null;
+		}
 
 		/** 判断是否为重命名事件 */
 		private boolean isRenameEvent(VFilePropertyChangeEvent e) {
@@ -1682,8 +1966,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				int addedCount = 0;
 				int ignoredCount = 0;
 				for (VirtualFile file : newFiles) {
-					// 跳过目录
-					if (file.isDirectory()) continue;
+					if (file == null || file.isDirectory()) continue;
 					
 					// 应用忽略模式过滤，与索引阶段保持一致
 					if (shouldIgnoreFile(file)) {
@@ -1694,6 +1977,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					// 只有通过过滤的文件才添加到缓存
 					indexIterator.processFile(file);
 					addedCount++;
+				}
+				if (addedCount > 0) {
+					truncatedPathDiskCache.clear();
 				}
 				if (addedCount > 0 || ignoredCount > 0) {
 					logger.info(String.format("project[%s]: add %d file(s), ignored %d file(s)", 
@@ -2313,6 +2599,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			fileCache.clear();
 			fileBaseCache.clear();
+			truncatedPathDiskCache.clear();
 			cacheInitialized = false;
 			lastRebuildTime = 0;
 			lastRebuildDuration = 0;
@@ -2452,6 +2739,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		return shouldIgnore(fileName) || shouldIgnore(relativePath);
 	}
 
+	/**
+	 * 对磁盘回退找到的绝对路径应用与 {@link #shouldIgnoreFile(VirtualFile)} 相同的忽略规则，
+	 * 避免截断路径绕过 fileCache 阶段的 Ignore pattern
+	 */
+	private boolean shouldIgnorePath(@NotNull String absolutePath) {
+		if (!config.useIgnorePattern) {
+			return false;
+		}
+		String fileName = PathUtil.getFileName(absolutePath);
+		String relativePath = getRelativePath(absolutePath);
+		return shouldIgnore(fileName) || shouldIgnore(relativePath);
+	}
+
 	// ==================== Disposable 接口实现 ====================
 
 	/**
@@ -2505,6 +2805,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			fileCache.clear();
 			fileBaseCache.clear();
+			truncatedPathDiskCache.clear();
 			cacheInitialized = false;
 			logger.info(String.format("project[%s]: File cache cleared in dispose()", project.getName()));
 		} catch (Exception e) {
