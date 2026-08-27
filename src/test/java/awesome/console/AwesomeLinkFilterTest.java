@@ -937,6 +937,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("rename app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json} (100%)", "app/tbds-manager-web/{jsconfig_bak.json => jsconfig.json}");
 		assertPathDetection("rename module/statics/tcff3/src/app/{AppRoot.js => AppRoot.jsx}", "module/statics/tcff3/src/app/{AppRoot.js => AppRoot.jsx}");
 		assertPathDetection("rename .../serviceController/{starRocksWork => components}/AppTopo/AppTopo.jsx", ".../serviceController/{starRocksWork => components}/AppTopo/AppTopo.jsx");
+		assertPathDetection(
+				"rename web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)",
+				"web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx}"
+		);
+		assertPathDetection("rename {old-pkg => new-pkg}/src/index.ts (100%)", "{old-pkg => new-pkg}/src/index.ts");
+		assertPathDetection("rename packages/@scope/pkg/{a.ts => b.ts}", "packages/@scope/pkg/{a.ts => b.ts}");
 
 		// git diff --stat / git pull --stat 会从左侧截断长路径
 		assertPathDetection(
@@ -1002,6 +1008,149 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"Deleted index.html should not link to an unrelated index.html",
 				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/public/index.html", 0).isEmpty()
 		);
+	}
+
+	/**
+	 * git pprint_rename 花括号简写应展开为新路径优先、旧路径回退。
+	 */
+	public void testGitRenameCandidatePaths() {
+		Assert.assertEquals(
+				List.of("web/src/components/visualizations/s08-context-compact.tsx",
+						"web/src/components/visualizations/s06-context-compact.tsx"),
+				AwesomeLinkFilter.gitRenameCandidatePaths(
+						"web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx}")
+		);
+		Assert.assertEquals(
+				List.of("packages/frontend/core/src/blocksuite/ai/components/ai-chat-chips/file-chip.ts",
+						"packages/frontend/core/src/blocksuite/ai/chat-panel/components/file-chip.ts"),
+				AwesomeLinkFilter.gitRenameCandidatePaths(
+						"packages/frontend/core/src/blocksuite/ai/{chat-panel/components => components/ai-chat-chips}/file-chip.ts")
+		);
+		Assert.assertEquals(
+				List.of("new-pkg/src/index.ts", "old-pkg/src/index.ts"),
+				AwesomeLinkFilter.gitRenameCandidatePaths("{old-pkg => new-pkg}/src/index.ts")
+		);
+		Assert.assertEquals(
+				List.of(".../serviceController/components/AppTopo/AppTopo.jsx",
+						".../serviceController/starRocksWork/AppTopo/AppTopo.jsx"),
+				AwesomeLinkFilter.gitRenameCandidatePaths(
+						".../serviceController/{starRocksWork => components}/AppTopo/AppTopo.jsx")
+		);
+		Assert.assertEquals(
+				List.of("e2e/dashboard/server.js"),
+				AwesomeLinkFilter.gitRenameCandidatePaths("e2e/dashboard/server.js")
+		);
+	}
+
+	/**
+	 * git pull 的 rename 行：花括号简写不是真实路径，应链到展开后的新文件。
+	 */
+	public void testGitPullRenameLinksToNewFile() throws Exception {
+		myFixture.addFileToProject(
+				"web/src/components/visualizations/s08-context-compact.tsx",
+				"export const ContextCompact = () => null;\n"
+		);
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String line = " rename web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)";
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+		Assert.assertFalse("git rename line should become a hyperlink", links.isEmpty());
+		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		Assert.assertTrue(
+				"Renamed file should use single-file hyperlink",
+				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+		);
+
+		List<VirtualFile> resolved = filter.resolveCachedFilesForPath(
+				"web/src/components/visualizations/s08-context-compact.tsx"
+		);
+		Assert.assertEquals("Expanded new path should unique-match", 1, resolved.size());
+		Assert.assertTrue(
+				resolved.get(0).getPath().replace('\\', '/').endsWith(
+						"web/src/components/visualizations/s08-context-compact.tsx")
+		);
+	}
+
+	/**
+	 * 目录重命名：{oldDir => newDir}/file 应链到新目录下的文件。
+	 */
+	public void testGitPullRenameDirectoryLinksToNewPath() throws Exception {
+		myFixture.addFileToProject(
+				"packages/frontend/admin/src/modules/about/index.tsx",
+				"export default function About() { return null; }\n"
+		);
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				"rename packages/frontend/admin/src/modules/{config => about}/index.tsx",
+				0
+		);
+		Assert.assertFalse("Directory rename should become a hyperlink", links.isEmpty());
+		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+	}
+
+	/**
+	 * 新文件不存在、旧文件仍在时，rename 行应回退链到旧路径。
+	 */
+	public void testGitPullRenameFallsBackToOldFile() throws Exception {
+		myFixture.addFileToProject(
+				"web/src/components/visualizations/s06-context-compact.tsx",
+				"export const Old = () => null;\n"
+		);
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				" rename web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)",
+				0
+		);
+		Assert.assertFalse("git rename should fall back to the old file", links.isEmpty());
+		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+	}
+
+	/**
+	 * 新旧路径都不存在时，即使项目里有同名诱饵文件，也不应按文件名误链。
+	 */
+	public void testGitPullRenameDoesNotLinkUnrelatedHomonym() throws Exception {
+		myFixture.addFileToProject("other/s08-context-compact.tsx", "export const Decoy = () => null;\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"Filename-only decoy should still be linkable (cache canary)",
+				filter.extractFileLinksFromLine("Error in s08-context-compact.tsx", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Rename of a missing path should not link to an unrelated homonym",
+				filter.extractFileLinksFromLine(
+						" rename web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)",
+						0
+				).isEmpty()
+		);
+	}
+
+	/**
+	 * git --stat 截断 + rename 花括号：展开新路径后应仍能按磁盘后缀解析。
+	 */
+	public void testGitPullRenameTruncatedPathResolvesFromDisk() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+
+		Path newFile = Path.of(basePath, "web/src/components/visualizations/s08-context-compact.tsx");
+		Files.createDirectories(newFile.getParent());
+		Files.writeString(newFile, "export const ContextCompact = () => null;\n");
+		try {
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					" rename .../visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)",
+					0
+			);
+			Assert.assertFalse("Truncated git rename should become a hyperlink", links.isEmpty());
+			Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		} finally {
+			Files.deleteIfExists(newFile);
+		}
 	}
 
 	/**

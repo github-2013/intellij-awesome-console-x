@@ -200,12 +200,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		REGEX_PROTOCOL, REGEX_DRIVE, REGEX_SEPARATOR, REGEX_FILE_NAME, REGEX_DOTS_PATH
 	);
 
+	/**
+	 * git rename 花括号外允许的字符。
+	 * 比 {@code [\w./-]} 更宽，以覆盖 {@code @scope}、空前缀 {@code {old => new}/file} 等真实 git 输出；
+	 * 排除花括号本身，避免把花括号吃进前缀。
+	 */
+	public static final String REGEX_GIT_RENAME_CHAR = "[^\\s\\x00-\\x1F\"*:<>?\\\\|\\x7F{}]";
+
 	/** Git重命名格式路径正则表达式 */
-	// 定义公共静态final常量，匹配Git重命名格式的路径（如 path/{old => new}/file）
-	// 这种格式在Git输出中用于表示文件重命名，花括号内包含 "旧名 => 新名" 的格式
+	// 匹配 git pprint_rename 输出：prefix{old => new}suffix
+	// 前缀/后缀均可为空（仓库根目录下的目录重命名：{old => new}/file.ts）
 	// 捕获组 path3 用于提取完整的路径（包括花括号部分）
-	// 匹配模式：[\w./-]+ 匹配路径前缀，\{[^}]+=>\s*[^}]+\} 匹配重命名部分，[\w./-]* 匹配路径后缀
-	public static final String REGEX_GIT_RENAME = "(?<path3>[\\w./-]+\\{[^}]+=>[\\s]*[^}]+\\}[\\w./-]*)";
+	public static final String REGEX_GIT_RENAME =
+			"(?<path3>" + REGEX_GIT_RENAME_CHAR + "*+\\{[^}]+=>[\\s]*[^}]+\\}" + REGEX_GIT_RENAME_CHAR + "*+)";
 
 	/** 文件路径匹配模式 */
 	// 定义公共静态final模式，编译文件路径正则表达式
@@ -866,13 +873,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				continue;
 			}
 
-			// 尝试处理实际存在的文件
-			if (processExistingFile(match, startPoint, results)) {
-				continue;
+			// git rename 的 {old => new} 不是真实路径，按新路径优先、旧路径回退依次解析
+			for (FileLinkMatch candidate : gitRenameResolutionCandidates(match)) {
+				if (processExistingFile(candidate, startPoint, results)) {
+					break;
+				}
+				int sizeBefore = results.size();
+				processCachedFiles(candidate, startPoint, results);
+				if (results.size() > sizeBefore) {
+					break;
+				}
 			}
-
-			// 在缓存中查找匹配的文件
-			processCachedFiles(match, startPoint, results);
 		}
 
 		return results;
@@ -1009,6 +1020,64 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				project, filesForLink, match.linkedRow, match.linkedCol
 		);
 		addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
+	}
+
+	/**
+	 * 将 git rename 匹配展开为可解析的真实路径候选（新路径优先，旧路径回退）。
+	 * 超链接的显示范围仍覆盖整段 {@code prefix{old => new}suffix}。
+	 */
+	@NotNull
+	List<FileLinkMatch> gitRenameResolutionCandidates(@NotNull FileLinkMatch match) {
+		List<String> paths = gitRenameCandidatePaths(match.path);
+		if (paths.size() == 1 && paths.get(0).equals(match.path)) {
+			return Collections.singletonList(match);
+		}
+		List<FileLinkMatch> candidates = new ArrayList<>(paths.size());
+		for (String path : paths) {
+			candidates.add(new FileLinkMatch(
+					match.match, path, match.start, match.end, match.linkedRow, match.linkedCol
+			));
+		}
+		return candidates;
+	}
+
+	/**
+	 * 展开 git {@code pprint_rename} 花括号简写。
+	 * {@code prefix{old => new}suffix} → 新路径 {@code prefix+new+suffix}，再回退旧路径。
+	 * 不含该语法时返回原路径。
+	 */
+	@NotNull
+	static List<String> gitRenameCandidatePaths(@NotNull String path) {
+		int braceStart = path.indexOf('{');
+		if (braceStart < 0) {
+			return Collections.singletonList(path);
+		}
+		int arrow = path.indexOf("=>", braceStart + 1);
+		if (arrow < 0) {
+			return Collections.singletonList(path);
+		}
+		int braceEnd = path.indexOf('}', arrow + 2);
+		if (braceEnd < 0) {
+			return Collections.singletonList(path);
+		}
+		String prefix = path.substring(0, braceStart);
+		String oldPart = path.substring(braceStart + 1, arrow).trim();
+		String newPart = path.substring(arrow + 2, braceEnd).trim();
+		String suffix = path.substring(braceEnd + 1);
+		if (oldPart.isEmpty() && newPart.isEmpty()) {
+			return Collections.singletonList(path);
+		}
+		List<String> candidates = new ArrayList<>(2);
+		if (!newPart.isEmpty()) {
+			candidates.add(prefix + newPart + suffix);
+		}
+		if (!oldPart.isEmpty()) {
+			String oldPath = prefix + oldPart + suffix;
+			if (!candidates.contains(oldPath)) {
+				candidates.add(oldPath);
+			}
+		}
+		return candidates.isEmpty() ? Collections.singletonList(path) : candidates;
 	}
 
 	/**
