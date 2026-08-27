@@ -11,7 +11,9 @@ import static awesome.console.IntegrationTest.parseTemplate;
 import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import awesome.console.util.SingleFileFileHyperlinkInfo;
 import com.intellij.execution.filters.Filter;
+import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.nio.file.Files;
@@ -1053,6 +1055,65 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			Files.deleteIfExists(sourceFile);
 			Files.deleteIfExists(testFile);
 		}
+	}
+
+	/**
+	 * git --stat 截断的 index.tsx：项目里有大量同名文件时，必须按路径后缀唯一命中，
+	 * 不能退化成 Choose Target File（按文件名列出全部 index.tsx）。
+	 */
+	public void testGitDiffStatTruncatedIndexTsxResolvesUniquelyAmongHomonyms() throws Exception {
+		String[] decoyDirs = {
+				"src/pages/tce/cluster/framework",
+				"src/pages/tce/cluster/framework/cluster-detail/basic",
+				"src/pages/tce/cluster/framework/cluster-detail",
+				"src/pages/tce/cluster",
+				"src/pages/tce/components/CvmSelectModule/CvmSelect",
+				"src/pages/tce/components/CvmSelectModule",
+				"src/pages/tce/components/CvmSelectModule/CvmSelectModal",
+				"src/pages/tce/commonCluster",
+				"src/pages/tce/standardCluster/create",
+				"src/pages/tce/standardCluster/create/components/TMStepper",
+				"src/pages/tce/standardCluster/create/containers/nodeDeploy"
+		};
+		for (String dir : decoyDirs) {
+			myFixture.addFileToProject(dir + "/index.tsx", "export default function Decoy() { return null; }\n");
+		}
+		// 超过默认 resultLimit(100) 的同名诱饵，且先于目标文件写入缓存
+		int extraDecoys = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_RESULT_LIMIT;
+		for (int i = 0; i < extraDecoys; i++) {
+			myFixture.addFileToProject(
+					"src/pages/tce/decoy/" + i + "/index.tsx",
+					"export default function D" + i + "() { return null; }\n"
+			);
+		}
+		String targetRel = "src/pages/tce/yarn/CapacitySchedulerV2/ResourceQueue/components/EditQueueDrawer/index.tsx";
+		myFixture.addFileToProject(targetRel, "export default function EditQueueDrawer() { return null; }\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String truncated = ".../CapacitySchedulerV2/ResourceQueue/components/EditQueueDrawer/index.tsx";
+		List<VirtualFile> resolved = filter.resolveCachedFilesForPath(truncated);
+		Assert.assertEquals(
+				"Truncated git --stat index.tsx should unique-match, not all homonyms",
+				1,
+				resolved.size()
+		);
+		String resolvedPath = resolved.get(0).getPath().replace('\\', '/');
+		Assert.assertTrue(
+				"Unique match should be EditQueueDrawer/index.tsx, got: " + resolvedPath,
+				resolvedPath.endsWith("CapacitySchedulerV2/ResourceQueue/components/EditQueueDrawer/index.tsx")
+		);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				" " + truncated + " | 5 +-",
+				0
+		);
+		Assert.assertFalse("Truncated index.tsx should become a hyperlink", links.isEmpty());
+		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		Assert.assertTrue(
+				"Unique file should use single-file hyperlink, not Choose Target File",
+				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+		);
 	}
 
 

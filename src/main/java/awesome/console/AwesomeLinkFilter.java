@@ -967,12 +967,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	private void processCachedFiles(final FileLinkMatch match, final int startPoint, final List<ResultItem> results) {
 		// 解析并标准化匹配路径
 		String matchPath = resolveAndNormalizeMatchPath(match.path);
-		
+		// git --stat 的 `.../` 不是真实目录，必须先剥掉再做 endsWith，
+		// 否则会退化成按文件名匹配，index.tsx 这类同名文件会弹出 Choose Target File
+		String suffixPath = suffixPathForCacheMatch(match.path, matchPath);
+
 		// 提取文件名
-		String fileName = extractFileName(matchPath);
-		
-		// 在缓存中查找匹配的文件
-		List<VirtualFile> matchingFiles = findMatchingFilesInCache(fileName);
+		String fileName = extractFileName(suffixPath);
+
+		// 带目录后缀时先不按 resultLimit 裁剪：正确文件可能排在第 100 个同名文件之后
+		boolean hasDirs = hasDirectoryComponent(suffixPath);
+		List<VirtualFile> matchingFiles = findMatchingFilesInCache(fileName, !hasDirs);
 		if (null == matchingFiles || matchingFiles.isEmpty()) {
 			// git --stat 会把长路径截成 `.../remaining/file.ts`，字面路径在磁盘上不存在，
 			// 只能靠文件名缓存。git pull 刚写入的新文件此时往往还没进入 VFS/fileCache，
@@ -983,18 +987,61 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		// 查找最佳匹配的文件。带目录的路径必须命中足够具体的后缀，
 		// 否则会把 git delete 的 e2e/dashboard/package.json 误链到项目中其它 package.json
-		final List<VirtualFile> bestMatchingFiles = findBestMatchingFiles(normalizePathSeparators(matchPath), matchingFiles);
+		final List<VirtualFile> bestMatchingFiles = findBestMatchingFiles(suffixPath, matchingFiles);
 		if (bestMatchingFiles == null || bestMatchingFiles.isEmpty()) {
 			processTruncatedPathOnDisk(match, matchPath, startPoint, results);
 			return;
 		}
-		matchingFiles = bestMatchingFiles;
 
-		// 创建超链接
+		if (bestMatchingFiles.size() == 1) {
+			final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
+					project, bestMatchingFiles.get(0).getPath(), match.linkedRow, match.linkedCol
+			);
+			addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
+			return;
+		}
+
+		List<VirtualFile> filesForLink = bestMatchingFiles;
+		if (config.useResultLimit && filesForLink.size() > config.getResultLimit()) {
+			filesForLink = filesForLink.subList(0, config.getResultLimit());
+		}
 		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
-				project, matchingFiles, match.linkedRow, match.linkedCol
+				project, filesForLink, match.linkedRow, match.linkedCol
 		);
 		addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
+	}
+
+	/**
+	 * 得到用于缓存 suffix 匹配的路径：git --stat 截断前缀 {@code .../} 不是真实目录，必须去掉。
+	 */
+	@NotNull
+	private String suffixPathForCacheMatch(@NotNull String originalPath, @NotNull String normalizedMatchPath) {
+		String fromOriginal = normalizePathSeparators(originalPath);
+		if (isGitTruncatedPath(fromOriginal)) {
+			return stripGitTruncationPrefix(fromOriginal);
+		}
+		String fromNormalized = normalizePathSeparators(normalizedMatchPath);
+		if (isGitTruncatedPath(fromNormalized)) {
+			return stripGitTruncationPrefix(fromNormalized);
+		}
+		return fromNormalized;
+	}
+
+	/**
+	 * 按路径解析缓存中的最佳匹配文件，供测试验证不会退化成同名文件列表。
+	 */
+	@NotNull
+	List<VirtualFile> resolveCachedFilesForPath(@NotNull String path) {
+		String suffixPath = suffixPathForCacheMatch(path, resolveAndNormalizeMatchPath(path));
+		String fileName = extractFileName(suffixPath);
+		List<VirtualFile> matchingFiles = findMatchingFilesInCache(
+				fileName, !hasDirectoryComponent(suffixPath)
+		);
+		if (matchingFiles == null || matchingFiles.isEmpty()) {
+			return Collections.emptyList();
+		}
+		List<VirtualFile> best = findBestMatchingFiles(suffixPath, matchingFiles);
+		return best == null ? Collections.emptyList() : best;
 	}
 
 	/**
@@ -1258,9 +1305,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 在缓存中查找匹配的文件
 	 *
 	 * @param fileName 文件名
+	 * @param applyResultLimit 为 true 时按配置截断结果（仅文件名匹配时使用）；
+	 *                         带目录后缀时应为 false，以免正确文件被挡在 limit 之外
 	 * @return 匹配的文件列表，如果没有找到则返回null
 	 */
-	private List<VirtualFile> findMatchingFilesInCache(final String fileName) {
+	private List<VirtualFile> findMatchingFilesInCache(final String fileName, final boolean applyResultLimit) {
 		List<VirtualFile> matchingFiles;
 		cacheReadLock.lock();
 		try {
@@ -1273,7 +1322,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				matchingFiles = matchingFiles.stream()
 						.filter(VirtualFile::isValid)  // 惰性验证：过滤已失效的文件
 						.filter(f -> !shouldIgnoreFile(f))  // 使用统一的忽略检查方法
-						.limit(config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
+						.limit(applyResultLimit && config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
 						.collect(Collectors.toList());
 			}
 		} finally {
