@@ -15,14 +15,17 @@ import awesome.console.util.SingleFileFileHyperlinkInfo;
 import com.intellij.execution.filters.Filter;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
@@ -1012,6 +1015,26 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * git delete 的根因不是「剥到纯文件名」，而是逐级剥前缀：
+	 * {@code e2e/dashboard/package.json} 仍会命中 {@code apps/dashboard/package.json}。
+	 * 带目录时必须按完整后缀匹配。
+	 */
+	public void testGitPullDeleteModeDoesNotLinkSameDirectorySuffix() throws Exception {
+		myFixture.addFileToProject("apps/dashboard/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"Existing apps/dashboard/package.json should still be linkable (cache canary)",
+				filter.extractFileLinksFromLine("Error in apps/dashboard/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Deleted e2e/dashboard/package.json should not link to apps/dashboard/package.json",
+				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/package.json", 0).isEmpty()
+		);
+	}
+
+	/**
 	 * git pprint_rename 花括号简写应展开为新路径优先、旧路径回退。
 	 */
 	public void testGitRenameCandidatePaths() {
@@ -1062,15 +1085,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"Renamed file should use single-file hyperlink",
 				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
 		);
-
-		List<VirtualFile> resolved = filter.resolveCachedFilesForPath(
-				"web/src/components/visualizations/s08-context-compact.tsx"
-		);
-		Assert.assertEquals("Expanded new path should unique-match", 1, resolved.size());
-		Assert.assertTrue(
-				resolved.get(0).getPath().replace('\\', '/').endsWith(
-						"web/src/components/visualizations/s08-context-compact.tsx")
-		);
+		assertSingleHyperlinkEndsWith(links, "web/src/components/visualizations/s08-context-compact.tsx");
 	}
 
 	/**
@@ -1089,7 +1104,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				0
 		);
 		Assert.assertFalse("Directory rename should become a hyperlink", links.isEmpty());
-		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		assertSingleHyperlinkEndsWith(links, "packages/frontend/admin/src/modules/about/index.tsx");
 	}
 
 	/**
@@ -1108,7 +1123,29 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				0
 		);
 		Assert.assertFalse("git rename should fall back to the old file", links.isEmpty());
-		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		assertSingleHyperlinkEndsWith(links, "web/src/components/visualizations/s06-context-compact.tsx");
+	}
+
+	/**
+	 * 新旧文件都在时，rename 行必须链到新路径，而不是碰巧命中的旧文件。
+	 */
+	public void testGitPullRenamePrefersNewFileWhenBothExist() throws Exception {
+		myFixture.addFileToProject(
+				"web/src/components/visualizations/s06-context-compact.tsx",
+				"export const Old = () => null;\n"
+		);
+		myFixture.addFileToProject(
+				"web/src/components/visualizations/s08-context-compact.tsx",
+				"export const ContextCompact = () => null;\n"
+		);
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				" rename web/src/components/visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)",
+				0
+		);
+		assertSingleHyperlinkEndsWith(links, "web/src/components/visualizations/s08-context-compact.tsx");
 	}
 
 	/**
@@ -1144,11 +1181,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		Files.writeString(newFile, "export const ContextCompact = () => null;\n");
 		try {
 			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
-					" rename .../visualizations/{s06-context-compact.tsx => s08-context-compact.tsx} (77%)",
+					" .../visualizations/{s06-context-compact.tsx => s08-context-compact.tsx}          | 10 +++++++---",
 					0
 			);
-			Assert.assertFalse("Truncated git rename should become a hyperlink", links.isEmpty());
-			Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+			assertSingleHyperlinkEndsWith(
+					links,
+					"web/src/components/visualizations/s08-context-compact.tsx"
+			);
 		} finally {
 			Files.deleteIfExists(newFile);
 		}
@@ -1168,7 +1207,69 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				0
 		);
 		Assert.assertFalse("Path suffix e2e/dashboard/server.js should become a hyperlink", links.isEmpty());
-		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		assertSingleHyperlinkEndsWith(links, "src/e2e/dashboard/server.js");
+	}
+
+	/**
+	 * 真实 git --stat rename 行（左截断、对齐空格、histogram，无 rename 前缀）。
+	 * 新旧文件都在时必须链到新文件。
+	 */
+	public void testGitDiffStatRenameTruncatedLineLinksToNewFile() throws Exception {
+		myFixture.addFileToProject(
+				"web/src/components/visualizations/s06-context-compact.tsx",
+				"export const Old = () => null;\n"
+		);
+		myFixture.addFileToProject(
+				"web/src/components/visualizations/s08-context-compact.tsx",
+				"export const ContextCompact = () => null;\n"
+		);
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				" .../visualizations/{s06-context-compact.tsx => s08-context-compact.tsx}          | 10 +++++++---",
+				0
+		);
+		assertSingleHyperlinkEndsWith(
+				links,
+				"web/src/components/visualizations/s08-context-compact.tsx"
+		);
+	}
+
+	/**
+	 * 截断路径目标不存在时，即使 cache 里有同名诱饵，也不应回退成文件名链接。
+	 */
+	public void testGitStatTruncatedMissingPathDoesNotLinkHomonym() throws Exception {
+		myFixture.addFileToProject("other/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"Filename-only package.json should still create a hyperlink (cache canary)",
+				filter.extractFileLinksFromLine("Error in package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Truncated missing e2e/dashboard/package.json should not link to an unrelated homonym",
+				filter.extractFileLinksFromLine(" .../e2e/dashboard/package.json | 2", 0).isEmpty()
+		);
+	}
+
+	/**
+	 * 截断路径同样不能靠剥前缀链到「目录后缀碰巧相同」的活文件。
+	 */
+	public void testGitStatTruncatedPathDoesNotLinkSameDirectorySuffixHomonym() throws Exception {
+		myFixture.addFileToProject("apps/dashboard/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"Existing apps/dashboard/package.json should still be linkable (cache canary)",
+				filter.extractFileLinksFromLine("Error in apps/dashboard/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Truncated e2e/dashboard/package.json should not link to apps/dashboard/package.json",
+				filter.extractFileLinksFromLine(" .../e2e/dashboard/package.json | 2", 0).isEmpty()
+		);
 	}
 
 	/**
@@ -1192,18 +1293,108 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 					" .../pages/clusterService/serviceController/roleInstance/Add/installedSize.ts | 2",
 					0
 			);
-			Assert.assertFalse("Truncated installedSize.ts should become a hyperlink", sourceLinks.isEmpty());
-			Assert.assertNotNull("Hyperlink info should be present", sourceLinks.get(0).getHyperlinkInfo());
+			assertSingleHyperlinkEndsWith(
+					sourceLinks,
+					"src/pages/clusterService/serviceController/roleInstance/Add/installedSize.ts"
+			);
 
 			List<Filter.ResultItem> testLinks = filter.extractFileLinksFromLine(
 					" .../serviceController/roleInstance/Add/__tests__/installedSize.test.ts | 4",
 					0
 			);
-			Assert.assertFalse("Truncated installedSize.test.ts should become a hyperlink", testLinks.isEmpty());
-			Assert.assertNotNull("Hyperlink info should be present", testLinks.get(0).getHyperlinkInfo());
+			assertSingleHyperlinkEndsWith(
+					testLinks,
+					"src/pages/clusterService/serviceController/roleInstance/Add/__tests__/installedSize.test.ts"
+			);
 		} finally {
 			Files.deleteIfExists(sourceFile);
 			Files.deleteIfExists(testFile);
+		}
+	}
+
+	/**
+	 * 磁盘回退找到多个相同后缀时，不得静默取第一个做成单文件链接。
+	 * 文件进 VFS/cache 后走缓存 chooser 也必须不是单链。
+	 */
+	public void testGitDiffStatTruncatedPathDoesNotSilentLinkFirstDiskHomonym() throws Exception {
+		myFixture.addFileToProject("mod-a/pages/foo/installedSize.ts", "export const a = 1;\n");
+		myFixture.addFileToProject("mod-b/pages/foo/installedSize.ts", "export const b = 1;\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				" .../pages/foo/installedSize.ts | 2",
+				0
+		);
+		Assert.assertFalse(
+				"Two same-suffix files should still produce a hyperlink",
+				links.isEmpty()
+		);
+		Assert.assertFalse(
+				"Multiple hits must not silent-link the first file",
+				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+		);
+	}
+
+	/**
+	 * 磁盘搜索触达命中上限时匹配集未闭合：不得写入「唯一」单链，也不得弹残缺 chooser。
+	 */
+	public void testGitDiffStatTruncatedPathDoesNotLinkWhenDiskSearchHitsCap() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+
+		List<Path> created = new ArrayList<>();
+		int fileCount = AwesomeLinkFilter.DISK_SEARCH_MAX_HITS + 1;
+		for (int i = 0; i < fileCount; i++) {
+			Path file = Path.of(basePath, "mod-" + i + "/pages/cap/hit.ts");
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, "export const n = " + i + ";\n");
+			created.add(file);
+		}
+		try {
+			AwesomeLinkFilter.DiskSearchResult result = filter.searchProjectDiskForSuffix("pages/cap/hit.ts");
+			Assert.assertFalse(
+					"Hitting DISK_SEARCH_MAX_HITS means the match set is not closed",
+					result.complete()
+			);
+			Assert.assertFalse("Cap should leave at least one observed hit", result.paths().isEmpty());
+
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					" .../pages/cap/hit.ts | 2",
+					0
+			);
+			Assert.assertTrue(
+					"Incomplete disk search must not create a hyperlink",
+					links.isEmpty()
+			);
+		} finally {
+			for (Path file : created) {
+				Files.deleteIfExists(file);
+			}
+		}
+	}
+
+	/**
+	 * 闭合的双命中磁盘搜索必须报告 complete 且不少于 2 条路径。
+	 */
+	public void testSearchProjectDiskForSuffixReportsCompletePair() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+
+		Path moduleA = Path.of(basePath, "mod-a/pages/pair/installedSize.ts");
+		Path moduleB = Path.of(basePath, "mod-b/pages/pair/installedSize.ts");
+		Files.createDirectories(moduleA.getParent());
+		Files.createDirectories(moduleB.getParent());
+		Files.writeString(moduleA, "export const a = 1;\n");
+		Files.writeString(moduleB, "export const b = 1;\n");
+		try {
+			AwesomeLinkFilter.DiskSearchResult result =
+					filter.searchProjectDiskForSuffix("pages/pair/installedSize.ts");
+			Assert.assertTrue("Two nested hits should be a closed search in a tiny fixture", result.complete());
+			Assert.assertEquals("Closed pair should report both files", 2, result.paths().size());
+		} finally {
+			Files.deleteIfExists(moduleA);
+			Files.deleteIfExists(moduleB);
 		}
 	}
 
@@ -1258,11 +1449,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				" " + truncated + " | 5 +-",
 				0
 		);
-		Assert.assertFalse("Truncated index.tsx should become a hyperlink", links.isEmpty());
-		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
-		Assert.assertTrue(
-				"Unique file should use single-file hyperlink, not Choose Target File",
-				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+		assertSingleHyperlinkEndsWith(
+				links,
+				"CapacitySchedulerV2/ResourceQueue/components/EditQueueDrawer/index.tsx"
 		);
 	}
 
@@ -3300,6 +3489,84 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
+	 * rebuild 进行中创建的文件不得被 VFS 增量路径静默丢掉。
+	 */
+	public void testVfsCreateDuringReloadIsNotDropped() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		String relativePath = "vfs-during-reload/unique-created-file-xyz123.ts";
+
+		CompletableFuture<Void> reload = filter.scheduleReloadAsync("reload before create", null, true);
+		myFixture.addFileToProject(relativePath, "export {};\n");
+		reload.get(10, TimeUnit.SECONDS);
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		waitForReloadsToQuiesce(500, 8000);
+
+		List<VirtualFile> resolved = filter.resolveCachedFilesForPath(relativePath);
+		Assert.assertFalse(
+				"File created during reload should be in the cache after rebuilds quiesce",
+				resolved.isEmpty()
+		);
+		Assert.assertTrue(
+				resolved.get(0).getPath().replace('\\', '/').endsWith(relativePath)
+		);
+	}
+
+	/**
+	 * 增量写入 live cache 的文件，不得被一份不含该文件的 FileIndex snapshot 换表后永远消失。
+	 * 用 exclusion 模拟 FileIndex 滞后，用 swap 前 hook 停车，避免走 after() 的排队全量把旧实现救绿。
+	 */
+	public void testUnabsorbedVfsDeltaSurvivesStaleSnapshotSwap() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		assertFalse("Reload should be idle before TOCTOU fixture", filter.isReloadScheduledOrRunning());
+
+		String relativePath = "vfs-swap-toctou/unique-created-file-xyz123.ts";
+		PsiFile createdPsi = myFixture.addFileToProject(relativePath, "export {};\n");
+		VirtualFile created = createdPsi.getVirtualFile();
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		waitForReloadsToQuiesce(500, 5000);
+
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.reloadSnapshotExclusion = file ->
+				file.getPath().replace('\\', '/').endsWith(relativePath);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+		try {
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("toctou swap", null, true);
+			Assert.assertTrue("Reload should reach swap hook", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+
+			// 保持 exclusion：本轮 snapshot 已建完，清不掉；且避免第二次全量把旧实现救绿。
+			filter.addToLiveFileCache(created);
+
+			releaseSwap.countDown();
+			reload.get(10, TimeUnit.SECONDS);
+
+			List<VirtualFile> resolved = filter.resolveCachedFilesForPath(relativePath);
+			Assert.assertFalse(
+					"Incrementally accepted file must survive a stale FileIndex snapshot swap",
+					resolved.isEmpty()
+			);
+			Assert.assertTrue(
+					resolved.get(0).getPath().replace('\\', '/').endsWith(relativePath)
+			);
+		} finally {
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
+			filter.reloadSnapshotExclusion = null;
+			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		}
+	}
+
+	/**
 	 * 测试获取缓存大小功能
 	 * 验证各种缓存大小统计方法返回正确的值
 	 */
@@ -3643,6 +3910,21 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			},
 			timeout
 		);
+	}
+
+	/**
+	 * 断言控制台解析出的超链接指向以 suffix 结尾的文件，而不是「有链即可」。
+	 */
+	private void assertSingleHyperlinkEndsWith(List<Filter.ResultItem> links, String suffix) {
+		Assert.assertFalse("Expected a hyperlink", links.isEmpty());
+		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());
+		Assert.assertTrue(
+				"Expected SingleFileFileHyperlinkInfo, got " + links.get(0).getHyperlinkInfo().getClass().getName(),
+				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+		);
+		String path = ((SingleFileFileHyperlinkInfo) links.get(0).getHyperlinkInfo()).getFilePath()
+				.replace('\\', '/');
+		Assert.assertTrue("Expected hyperlink to end with " + suffix + ", got: " + path, path.endsWith(suffix));
 	}
 
 	// ========== Go语言测试用例 ==========

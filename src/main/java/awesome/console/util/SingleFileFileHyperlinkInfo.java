@@ -73,6 +73,14 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
     }
 
     /**
+     * 超链接指向的文件路径（创建时写入，不依赖 VFS 是否已刷新）。
+     */
+    @NotNull
+    public String getFilePath() {
+        return filePath;
+    }
+
+    /**
      * 获取虚拟文件对象
      * 根据resolveSymlink配置决定返回原始文件还是解析后的文件
      * 
