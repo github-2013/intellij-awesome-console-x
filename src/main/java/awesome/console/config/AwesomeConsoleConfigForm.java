@@ -553,6 +553,22 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     }
 
     /**
+     * Last rebuild 等诊断信息放到 tooltip，避免单行 JLabel 把 Settings 对话框撑宽。
+     */
+    private String buildIndexStatusToolTip(String statusText, AwesomeLinkFilter.IndexStatistics stats) {
+        if (stats.getLastRebuildTime() <= 0) {
+            return statusText;
+        }
+        StringBuilder tooltip = new StringBuilder(statusText);
+        long elapsed = System.currentTimeMillis() - stats.getLastRebuildTime();
+        tooltip.append(String.format(" - Last rebuild: %s ago", indexManagementService.formatDuration(elapsed)));
+        if (stats.getLastRebuildDuration() > 0) {
+            tooltip.append(String.format(" (took %s)", indexManagementService.formatDuration(stats.getLastRebuildDuration())));
+        }
+        return tooltip.toString();
+    }
+
+    /**
      * 更新索引状态 UI
      */
     private void updateIndexStatusUI(String projectName, AwesomeLinkFilter.IndexStatistics stats) {
@@ -565,16 +581,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     stats.getMatchedFiles(), stats.getIgnoredFiles()));
         }
 
-        if (stats.getLastRebuildTime() > 0) {
-            long elapsed = System.currentTimeMillis() - stats.getLastRebuildTime();
-            sb.append(String.format(" - Last rebuild: %s ago", indexManagementService.formatDuration(elapsed)));
-
-            if (stats.getLastRebuildDuration() > 0) {
-                sb.append(String.format(" (took %s)", indexManagementService.formatDuration(stats.getLastRebuildDuration())));
-            }
-        }
-
-        indexStatusLabel.setText(sb.toString());
+        String statusText = sb.toString();
+        indexStatusLabel.setText(statusText);
+        indexStatusLabel.setToolTipText(buildIndexStatusToolTip(statusText, stats));
         indexStatusLabel.setForeground(new JBColor(new Color(76, 175, 80), new Color(129, 199, 132)));
 
         // 更新进度条

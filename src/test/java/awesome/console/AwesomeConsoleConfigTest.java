@@ -1424,7 +1424,10 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         while (System.currentTimeMillis() < deadline) {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
             statusText = form.indexStatusLabel.getText();
-            if (statusText.contains("Last rebuild")) {
+            String toolTip = form.indexStatusLabel.getToolTipText();
+            if (statusText.contains("files indexed")
+                    && toolTip != null
+                    && toolTip.contains("Last rebuild")) {
                 break;
             }
             Thread.sleep(50);
@@ -1436,9 +1439,38 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                 statusText.contains("Building file index"));
         assertTrue("Status should show completed index stats, got: " + statusText,
                 statusText.contains("files indexed"));
-        assertTrue("Completed index should record last rebuild time, got: " + statusText,
+        assertFalse("Last rebuild must not appear on the status label (it stretches Settings), got: " + statusText,
                 statusText.contains("Last rebuild"));
+        assertTrue("Last rebuild details should remain available on tooltip, got: " + form.indexStatusLabel.getToolTipText(),
+                form.indexStatusLabel.getToolTipText() != null
+                        && form.indexStatusLabel.getToolTipText().contains("Last rebuild"));
         form.dispose();
+    }
+
+    /**
+     * 超长状态文案不得增加 Settings 面板的 preferred width。
+     * GridLayoutManager 在 JLabel 为 SIZEPOLICY_FIXED 时会把全文宽度当成对话框宽度。
+     */
+    public void testIndexStatusLabelDoesNotStretchSettingsPanel() {
+        awesome.console.config.AwesomeConsoleConfigForm form =
+                new awesome.console.config.AwesomeConsoleConfigForm();
+        try {
+            assertNotNull("Form layout should initialize mainPanel", form.mainPanel);
+            int widthBefore = form.mainPanel.getPreferredSize().width;
+            form.indexStatusLabel.setText(
+                    "Index Status [very-long-project-name-that-would-stretch]: "
+                            + "99999 files indexed (99999 filenames, 99999 basenames)"
+                            + " - Last rebuild: 2ms ago (took 82ms)");
+            int widthAfter = form.mainPanel.getPreferredSize().width;
+            int labelTextWidth = form.indexStatusLabel.getPreferredSize().width;
+            assertTrue("Fixture text must be wider than the panel to expose the layout bug, label="
+                            + labelTextWidth + ", panel=" + widthBefore,
+                    labelTextWidth > widthBefore);
+            assertEquals("Long status text must not increase settings panel preferred width",
+                    widthBefore, widthAfter);
+        } finally {
+            form.dispose();
+        }
     }
 
     /**
