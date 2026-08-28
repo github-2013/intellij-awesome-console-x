@@ -2002,14 +2002,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 文件缓存更新监听器，处理文件系统事件并增量更新缓存
 	 */
 	private class FileCacheUpdateListener implements BulkFileListener {
-		/** 事件分类结果 */
+		/**
+		 * 事件分类结果。
+		 * needsFullRebuild：rename/move/整目录删除会丢掉忽略文件身份，标量 ignoredFilesCount 无法增量做准。
+		 */
 		private record EventClassification(
 				List<VirtualFile> newFiles,
 				List<VirtualFile> filesToDelete,
-				boolean directoryDeleted
+				boolean needsFullRebuild
 		) {
 			boolean hasChanges() {
-				return !newFiles.isEmpty() || !filesToDelete.isEmpty() || directoryDeleted;
+				return needsFullRebuild || !newFiles.isEmpty() || !filesToDelete.isEmpty();
 			}
 		}
 
@@ -2020,14 +2023,23 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				EventClassification result = classifyEvents(events);
 				if (!result.hasChanges()) return;
 
+				// Clear 之后没有完整基数，增量 I++/I-- 会对空快照记账；等下次需要时再全量重建
+				if (!isCacheInitialized()) {
+					return;
+				}
+				// 结构变化，或全量重建已在排队/执行：只走 rebuild，避免增量在 swap 之后把忽略数再改坏
+				if (result.needsFullRebuild || isReloadScheduledOrRunning()) {
+					reloadFileCache("vfs change");
+					return;
+				}
+
 				// 缓存更新操作异步执行，避免在 VFS 事件线程上获取写锁导致阻塞
-				// 原因：processDeletions/processAdditions 需要获取 cacheWriteLock，
-				// 如果此时 runReloadFileCache 正在后台持有写锁进行全量重建，
-				// VFS 事件线程会被阻塞，可能导致 UI 冻结
 				ApplicationManager.getApplication().executeOnPooledThread(() -> {
 					try {
+						if (isReloadScheduledOrRunning()) {
+							return;
+						}
 						processDeletions(result.filesToDelete);
-						if (result.directoryDeleted) cleanupInvalidFilesAsync();
 						processAdditions(result.newFiles);
 					} catch (Exception e) {
 						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
@@ -2037,27 +2049,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				});
 			} catch (Exception e) {
 				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
-				// 记录错误但不中断VFS事件处理，避免影响其他监听器
 				logger.error(String.format("project[%s]: Error handling VFS events",
 						project.getName()), e);
 			}
 		}
 
-		/** 分类处理所有VFS事件 */
-	/**
-	 * 对虚拟文件事件进行分类处理
-	 * @param events 虚拟文件事件列表
-	 * @return 事件分类结果，包含新增文件、待删除文件和目录删除标志
-	 */
-	private EventClassification classifyEvents(List<? extends VFileEvent> events) {
-		// 存储新创建或新增的文件
+		/**
+		 * 对虚拟文件事件进行分类。
+		 * rename/move/整目录删除会丢掉忽略文件身份，标为 needsFullRebuild。
+		 */
+		private EventClassification classifyEvents(List<? extends VFileEvent> events) {
 		List<VirtualFile> newFiles = new ArrayList<>();
-		// 存储需要删除的文件
 		List<VirtualFile> filesToDelete = new ArrayList<>();
-		// 标记是否有目录被删除
-		boolean directoryDeleted = false;
+		boolean needsFullRebuild = false;
 
-		// 遍历所有文件事件
 		for (VFileEvent event : events) {
 			if (event instanceof VFileCreateEvent createEvent) {
 				VirtualFile created = resolveCreatedFile(createEvent);
@@ -2067,40 +2072,38 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				continue;
 			}
 
-			// 获取事件关联的文件
 			final VirtualFile file = event.getFile();
-			// 跳过空文件或不在内容根目录中的文件
 			if (file == null || !this.isFileInProjectScope(file, event instanceof VFileDeleteEvent)) continue;
 
-			// 根据事件类型进行分类处理
 			switch (event) {
-				// 文件复制事件：将复制后创建的新文件添加到新文件列表
-				case VFileCopyEvent e -> newFiles.add(e.findCreatedFile());
-				// 文件删除事件：区分目录和普通文件
-				case VFileDeleteEvent e -> {
-					// 如果删除的是目录，设置目录删除标志
-					if (file.isDirectory()) directoryDeleted = true;
-					// 如果删除的是普通文件，添加到待删除文件列表
-					else filesToDelete.add(file);
-				}
-				// 文件移动事件：无需处理，因为文件路径会自动更新
-				case VFileMoveEvent e -> { /* 文件移动无需处理，路径自动更新 */ }
-				// 文件属性变更事件：主要处理文件重命名
-				case VFilePropertyChangeEvent e -> {
-					// 判断是否为重命名事件
-					if (isRenameEvent(e)) {
-						// 将旧文件名添加到待删除列表
-						filesToDelete.add(file);  // 删除旧名
-						// 将新文件名添加到新文件列表
-						newFiles.add(file);       // 添加新名
+				case VFileCopyEvent e -> {
+					VirtualFile copied = e.findCreatedFile();
+					if (copied == null) {
+						break;
+					}
+					if (copied.isDirectory()) {
+						needsFullRebuild = true;
+					} else {
+						newFiles.add(copied);
 					}
 				}
-				// 其他未处理的事件类型
+				case VFileDeleteEvent e -> {
+					if (file.isDirectory()) {
+						needsFullRebuild = true;
+					} else {
+						filesToDelete.add(file);
+					}
+				}
+				case VFileMoveEvent e -> needsFullRebuild = true;
+				case VFilePropertyChangeEvent e -> {
+					if (isRenameEvent(e)) {
+						needsFullRebuild = true;
+					}
+				}
 				default -> { }
 			}
 		}
-		// 返回分类结果
-		return new EventClassification(newFiles, filesToDelete, directoryDeleted);
+		return new EventClassification(newFiles, filesToDelete, needsFullRebuild);
 	}
 
 		/**
@@ -2140,20 +2143,27 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					&& e.getOldValue() != null;
 		}
 
-		/** 精准删除单文件 */
+		/** 精准删除单文件：命中缓存则只删条目，未命中则按被忽略文件递减计数 */
 		private void processDeletions(List<VirtualFile> filesToDelete) {
 			if (filesToDelete.isEmpty()) return;
 			cacheWriteLock.lock();
 			try {
-				filesToDelete.forEach(this::removeFileFromCache);
-				logger.info(String.format("project[%s]: precise delete %d file(s)", 
-						project.getName(), filesToDelete.size()));
+				int removedCount = 0;
+				for (VirtualFile file : filesToDelete) {
+					boolean removed = removeFileFromCache(file);
+					if (removed) {
+						removedCount++;
+					}
+					ignoredFilesCount = adjustIgnoredCountAfterRemoval(removed, ignoredFilesCount);
+				}
+				logger.info(String.format("project[%s]: precise delete %d file(s), ignored now [%d]",
+						project.getName(), removedCount, ignoredFilesCount));
 			} finally {
 				cacheWriteLock.unlock();
 			}
 		}
 
-		/** 处理新增文件（应用忽略模式过滤） */
+		/** 处理新增文件（应用忽略模式过滤），被忽略的文件计入 ignoredFilesCount */
 		private void processAdditions(List<VirtualFile> newFiles) {
 			if (newFiles.isEmpty()) return;
 			cacheWriteLock.lock();
@@ -2162,14 +2172,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				int ignoredCount = 0;
 				for (VirtualFile file : newFiles) {
 					if (file == null || file.isDirectory()) continue;
-					
-					// 应用忽略模式过滤，与索引阶段保持一致
+
 					if (shouldIgnoreFile(file)) {
 						ignoredCount++;
+						ignoredFilesCount++;
 						continue;
 					}
-					
-					// 只有通过过滤的文件才添加到缓存
+
 					indexIterator.processFile(file);
 					addedCount++;
 				}
@@ -2177,57 +2186,32 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					truncatedPathDiskCache.clear();
 				}
 				if (addedCount > 0 || ignoredCount > 0) {
-					logger.info(String.format("project[%s]: add %d file(s), ignored %d file(s)", 
-							project.getName(), addedCount, ignoredCount));
+					logger.info(String.format("project[%s]: add %d file(s), ignored %d file(s), ignored total [%d]",
+							project.getName(), addedCount, ignoredCount, ignoredFilesCount));
 				}
 			} finally {
 				cacheWriteLock.unlock();
 			}
 		}
 
-		/** 从缓存中精准删除单个文件 */
-		private void removeFileFromCache(@NotNull VirtualFile file) {
-			removeFromCacheMap(fileCache, file.getName(), file);
-			removeFromCacheMap(fileBaseCache, file.getNameWithoutExtension(), file);
+		/** 按写入缓存时的文件名移除条目。@return 任一缓存命中并移除了该文件 */
+		private boolean removeFileFromCache(@NotNull VirtualFile file) {
+			boolean removedFromName = removeFromCacheMap(fileCache, file.getName(), file);
+			boolean removedFromBase = removeFromCacheMap(fileBaseCache, file.getNameWithoutExtension(), file);
+			return removedFromName || removedFromBase;
 		}
 
 		/** 从指定缓存Map中移除文件 */
-		private void removeFromCacheMap(Map<String, List<VirtualFile>> cache, String key, VirtualFile file) {
+		private boolean removeFromCacheMap(Map<String, List<VirtualFile>> cache, String key, VirtualFile file) {
 			List<VirtualFile> list = cache.get(key);
-			if (list != null) {
-				list.remove(file);
-				if (list.isEmpty()) cache.remove(key);
+			if (list == null) {
+				return false;
 			}
-		}
-
-		/** 异步清理所有无效文件，不阻塞UI线程 */
-		private void cleanupInvalidFilesAsync() {
-			ApplicationManager.getApplication().executeOnPooledThread(() -> {
-				cacheWriteLock.lock();
-				try {
-					int removedCount = cleanupCacheMap(fileCache, VirtualFile::getName)
-							+ cleanupCacheMap(fileBaseCache, VirtualFile::getNameWithoutExtension);
-					logger.info(String.format("project[%s]: async cleanup removed %d invalid file(s)", 
-							project.getName(), removedCount));
-				} finally {
-					cacheWriteLock.unlock();
-				}
-			});
-		}
-
-		/** 清理缓存Map中的无效文件，返回移除数量 */
-		private int cleanupCacheMap(Map<String, List<VirtualFile>> cache, 
-									 java.util.function.Function<VirtualFile, String> keyExtractor) {
-			int removedCount = 0;
-			for (Map.Entry<String, List<VirtualFile>> entry : cache.entrySet()) {
-				String key = entry.getKey();
-				List<VirtualFile> value = entry.getValue();
-				int sizeBefore = value.size();
-				value.removeIf(f -> !f.isValid() || !key.equals(keyExtractor.apply(f)));
-				removedCount += sizeBefore - value.size();
+			boolean removed = list.remove(file);
+			if (list.isEmpty()) {
+				cache.remove(key);
 			}
-			cache.entrySet().removeIf(entry -> entry.getValue().isEmpty());
-			return removedCount;
+			return removed;
 		}
 
 		/** 判断文件是否在项目内容中 */
@@ -2787,7 +2771,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 清除文件缓存
-	 * 删除所有索引数据，将在下次需要时自动重建
+	 * 删除所有索引数据，将在下次需要时自动重建。
+	 * 忽略计数来自同一次重建，必须与 map 一起归零，否则扫描总数会变成「空缓存 + 过时忽略数」。
 	 */
 	public void clearCache() {
 		cacheWriteLock.lock();
@@ -2798,6 +2783,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			cacheInitialized = false;
 			lastRebuildTime = 0;
 			lastRebuildDuration = 0;
+			ignoredFilesCount = 0;
 			logger.info(String.format("project[%s]: cache cleared manually", project.getName()));
 		} finally {
 			cacheWriteLock.unlock();
@@ -3006,6 +2992,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
+	 * 单文件删除后的忽略计数。
+	 * 命中缓存说明当初是匹配文件，不能减忽略数；未命中才可能是被忽略的文件。
+	 */
+	static int adjustIgnoredCountAfterRemoval(boolean removedFromCache, int ignoredCount) {
+		if (removedFromCache || ignoredCount <= 0) {
+			return ignoredCount;
+		}
+		return ignoredCount - 1;
+	}
+
+	/**
 	 * 统一的忽略检查方法
 	 * 检查文件是否应该被忽略（根据文件名和相对路径）
 	 * 确保在索引阶段、VFS增量更新、缓存查询等所有位置使用一致的忽略逻辑
@@ -3130,16 +3127,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	public static class IndexStatistics {
 		private final int fileCacheSize;
 		private final int fileBaseCacheSize;
-		private final int totalFiles;
+		private final int totalCachedFiles;
 		private final int ignoredFiles;
 		private final long lastRebuildTime;
 		private final long lastRebuildDuration;
 
 		public IndexStatistics(int fileCacheSize, int fileBaseCacheSize,
-						  int totalFiles, int ignoredFiles, long lastRebuildTime, long lastRebuildDuration) {
+						  int totalCachedFiles, int ignoredFiles, long lastRebuildTime, long lastRebuildDuration) {
 			this.fileCacheSize = fileCacheSize;
 			this.fileBaseCacheSize = fileBaseCacheSize;
-			this.totalFiles = totalFiles;
+			this.totalCachedFiles = totalCachedFiles;
 			this.ignoredFiles = ignoredFiles;
 			this.lastRebuildTime = lastRebuildTime;
 			this.lastRebuildDuration = lastRebuildDuration;
@@ -3147,17 +3144,54 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		public int getFileCacheSize() { return fileCacheSize; }
 		public int getFileBaseCacheSize() { return fileBaseCacheSize; }
-		public int getTotalFiles() { return totalFiles; }
+
+		/**
+		 * 缓存中的文件总数（含同名多路径）。忽略文件不会进入缓存。
+		 */
+		public int getTotalCachedFiles() { return totalCachedFiles; }
+
 		public int getIgnoredFiles() { return ignoredFiles; }
 		public long getLastRebuildTime() { return lastRebuildTime; }
 		public long getLastRebuildDuration() { return lastRebuildDuration; }
 
 		/**
-		 * 获取匹配的文件数量（总文件数减去忽略的文件数）
-		 * @return 匹配的文件数量
+		 * 匹配文件数，即已写入缓存的文件数。
+		 * 忽略文件在索引阶段已被跳过，不能再从缓存数里减一次。
 		 */
 		public int getMatchedFiles() {
-			return Math.max(0, totalFiles - ignoredFiles);
+			return Math.max(0, totalCachedFiles);
+		}
+
+		/**
+		 * 扫描过的文件总数（缓存文件 + 忽略文件），用作匹配/忽略占比的分母。
+		 */
+		public int getScannedFiles() {
+			return Math.max(0, totalCachedFiles) + Math.max(0, ignoredFiles);
+		}
+
+		/**
+		 * 匹配文件占扫描总数的百分比。
+		 */
+		public int getMatchedPercentage() {
+			int scanned = getScannedFiles();
+			if (scanned <= 0) {
+				return 0;
+			}
+			return (int) ((long) getMatchedFiles() * 100 / scanned);
+		}
+
+		/**
+		 * 忽略文件占扫描总数的百分比，与 {@link #getMatchedPercentage()} 互补为 100。
+		 */
+		public int getIgnoredPercentage() {
+			if (ignoredFiles <= 0) {
+				return 0;
+			}
+			int scanned = getScannedFiles();
+			if (scanned <= 0) {
+				return 0;
+			}
+			return 100 - getMatchedPercentage();
 		}
 
 		/**

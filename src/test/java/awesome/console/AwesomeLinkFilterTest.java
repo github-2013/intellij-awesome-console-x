@@ -3058,7 +3058,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		assertNotNull("Statistics should not be null", stats);
 		assertTrue("File cache size should be non-negative", stats.getFileCacheSize() >= 0);
 		assertTrue("Base cache size should be non-negative", stats.getFileBaseCacheSize() >= 0);
-		assertTrue("Total files should be non-negative", stats.getTotalFiles() >= 0);
+		assertTrue("Total files should be non-negative", stats.getTotalCachedFiles() >= 0);
 	}
 
 	/**
@@ -3149,11 +3149,15 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		assertEquals("File base cache should be empty", 0, filter.getFileBaseCacheSize());
 		assertEquals("Total files should be 0", 0, filter.getTotalCachedFiles());
 		
-		// 验证统计信息也被重置
+		// 验证统计信息也被重置（含忽略计数，否则扫描总数会残留上一轮忽略数）
 		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
-		assertEquals("Statistics should show 0 files", 0, stats.getTotalFiles());
+		assertEquals("Statistics should show 0 files", 0, stats.getTotalCachedFiles());
 		assertEquals("Statistics should show 0 file cache", 0, stats.getFileCacheSize());
 		assertEquals("Statistics should show 0 base cache", 0, stats.getFileBaseCacheSize());
+		assertEquals("Clear must reset ignored count with the maps", 0, stats.getIgnoredFiles());
+		assertEquals("Cleared index has nothing scanned", 0, stats.getScannedFiles());
+		assertFalse("Cleared index must not keep ignore statistics", stats.hasIgnoreStatistics());
+		assertEquals("Last rebuild time should be cleared", 0, stats.getLastRebuildTime());
 		
 		// 验证清除后路径检测仍然可以工作（会触发自动重建）
 		List<FileLinkMatch> results = filter.detectPaths("Error in test.java:10");
@@ -3176,7 +3180,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		if (fresh.isCacheBuilding()) {
 			AwesomeLinkFilter.IndexStatistics before = fresh.getIndexStatistics();
 			assertEquals("Last rebuild time should be 0 before init completes", 0, before.getLastRebuildTime());
-			assertEquals("File cache should be empty before init completes", 0, before.getTotalFiles());
+			assertEquals("File cache should be empty before init completes", 0, before.getTotalCachedFiles());
 		}
 
 		fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
@@ -3332,7 +3336,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		assertEquals("Statistics base cache should match", 
 			fileBaseCacheSize, stats.getFileBaseCacheSize());
 		assertEquals("Statistics total files should match", 
-			totalFiles, stats.getTotalFiles());
+			totalFiles, stats.getTotalCachedFiles());
 	}
 
 	/**
@@ -3351,7 +3355,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		assertNotNull("Statistics should not be null", stats);
 		
 		// 验证基本统计信息（非负数）
-		assertTrue("Total files should be non-negative", stats.getTotalFiles() >= 0);
+		assertTrue("Total files should be non-negative", stats.getTotalCachedFiles() >= 0);
 		assertTrue("File cache size should be non-negative", stats.getFileCacheSize() >= 0);
 		assertTrue("Base cache size should be non-negative", stats.getFileBaseCacheSize() >= 0);
 		
@@ -3366,7 +3370,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		
 		// 验证统计信息的一致性
 		assertEquals("Total files should match", 
-			stats.getTotalFiles(), filter.getTotalCachedFiles());
+			stats.getTotalCachedFiles(), filter.getTotalCachedFiles());
 		assertEquals("File cache size should match", 
 			stats.getFileCacheSize(), filter.getFileCacheSize());
 		assertEquals("File base cache size should match", 
@@ -3374,9 +3378,99 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		
 		// 验证统计信息的逻辑关系
 		assertTrue("Total files should >= file cache size", 
-			stats.getTotalFiles() >= stats.getFileCacheSize());
+			stats.getTotalCachedFiles() >= stats.getFileCacheSize());
 		assertTrue("File cache size should >= base cache size", 
 			stats.getFileCacheSize() >= stats.getFileBaseCacheSize());
+		assertEquals("Matched files should equal cached files",
+			stats.getTotalCachedFiles(), stats.getMatchedFiles());
+		assertEquals("Scanned files should be cached plus ignored",
+			stats.getMatchedFiles() + stats.getIgnoredFiles(), stats.getScannedFiles());
+	}
+
+	/**
+	 * 验证 IndexStatistics 口径：缓存数即匹配数，扫描总数为匹配+忽略。
+	 * 进度条百分比必须以扫描总数为分母，不能再用缓存数减忽略数。
+	 */
+	public void testIndexStatisticsTreatsCachedFilesAsMatched() {
+		AwesomeLinkFilter.IndexStatistics mixed = new AwesomeLinkFilter.IndexStatistics(80, 70, 80, 20, 0, 0);
+		assertEquals(80, mixed.getTotalCachedFiles());
+		assertEquals(80, mixed.getMatchedFiles());
+		assertEquals(20, mixed.getIgnoredFiles());
+		assertEquals(100, mixed.getScannedFiles());
+		assertEquals("匹配百分比分母必须是扫描总数", 80, mixed.getMatchedPercentage());
+		assertEquals("忽略百分比分母必须是扫描总数", 20, mixed.getIgnoredPercentage());
+		assertEquals("匹配+忽略百分比应互补为 100", 100,
+			mixed.getMatchedPercentage() + mixed.getIgnoredPercentage());
+
+		AwesomeLinkFilter.IndexStatistics allIgnored = new AwesomeLinkFilter.IndexStatistics(0, 0, 0, 50, 0, 0);
+		assertEquals(0, allIgnored.getMatchedFiles());
+		assertEquals(50, allIgnored.getScannedFiles());
+		assertEquals(0, allIgnored.getMatchedPercentage());
+		assertEquals(100, allIgnored.getIgnoredPercentage());
+
+		AwesomeLinkFilter.IndexStatistics ignoredExceedsCached = new AwesomeLinkFilter.IndexStatistics(50, 40, 50, 200, 0, 0);
+		assertEquals("忽略多于缓存时匹配数仍是缓存数，不能减成 0", 50, ignoredExceedsCached.getMatchedFiles());
+		assertEquals(20, ignoredExceedsCached.getMatchedPercentage());
+		assertEquals(80, ignoredExceedsCached.getIgnoredPercentage());
+		assertTrue("忽略占比不得超过 100", ignoredExceedsCached.getIgnoredPercentage() <= 100);
+
+		// 全部忽略是重建完成后的合法态，不能和 Clear 后的全 0 快照混为一谈
+		AwesomeLinkFilter.IndexStatistics cleared = new AwesomeLinkFilter.IndexStatistics(0, 0, 0, 0, 0, 0);
+		assertEquals(0, cleared.getScannedFiles());
+		assertFalse(cleared.hasIgnoreStatistics());
+		assertEquals(0, cleared.getMatchedPercentage());
+		assertEquals(0, cleared.getIgnoredPercentage());
+	}
+
+	/**
+	 * 增量删除：命中缓存不减忽略数；未命中才减，且不会减到负数。
+	 */
+	public void testIgnoredCountAdjustsByCacheMembership() {
+		assertEquals("Matched file delete must not change ignored count",
+				10, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(true, 10));
+		assertEquals("Ignored file delete decrements ignored count",
+				9, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, 10));
+		assertEquals("Ignored count must not go negative",
+				0, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, 0));
+	}
+
+	/**
+	 * Clear 必须把忽略计数和缓存一起清掉。
+	 * 否则 scanned = 0 + 过时忽略数，进度条会把空索引画成「全部忽略」。
+	 */
+	public void testClearCacheResetsIgnoreStatistics() throws Exception {
+		awesome.console.config.AwesomeConsoleStorage storage =
+				awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUseIgnorePattern = storage.useIgnorePattern;
+		String originalIgnorePattern = storage.getIgnorePatternText();
+		try {
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText(".");
+			// 立即重建，避免防抖导致 whenCacheReady 在任务入队前就返回
+			filter.scheduleReloadAsync("test ignore-all for clear", null, true)
+					.get(10, TimeUnit.SECONDS);
+
+			AwesomeLinkFilter.IndexStatistics before = filter.getIndexStatistics();
+			if (before.getScannedFiles() > 0) {
+				assertTrue("Ignore-all rebuild should record ignored files",
+						before.getIgnoredFiles() > 0);
+			}
+
+			filter.clearCache();
+			AwesomeLinkFilter.IndexStatistics after = filter.getIndexStatistics();
+			assertEquals("Cached files must be 0 after clear", 0, after.getTotalCachedFiles());
+			assertEquals("Ignored count must reset with the cache", 0, after.getIgnoredFiles());
+			assertEquals("Scanned total must be 0 after clear", 0, after.getScannedFiles());
+			assertFalse("Clear must not look like all-ignored", after.hasIgnoreStatistics());
+			assertEquals("Rebuild timestamp must reset", 0, after.getLastRebuildTime());
+			assertEquals(0, after.getMatchedPercentage());
+			assertEquals(0, after.getIgnoredPercentage());
+		} finally {
+			storage.useIgnorePattern = originalUseIgnorePattern;
+			storage.setIgnorePatternText(originalIgnorePattern);
+			filter.scheduleReloadAsync("restore ignore pattern after clear test", null, true)
+					.get(10, TimeUnit.SECONDS);
+		}
 	}
 
 	/**
@@ -3464,7 +3558,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		// 验证索引统计信息正常
 		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
 		assertNotNull("Statistics should not be null", stats);
-		assertTrue("File count should be non-negative", stats.getTotalFiles() >= 0);
+		assertTrue("File count should be non-negative", stats.getTotalCachedFiles() >= 0);
 	}
 
 	/**
@@ -3498,7 +3592,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		// 验证统计信息可以获取
 		AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
 		assertNotNull("Statistics should not be null", stats);
-		assertTrue("File count should be non-negative", stats.getTotalFiles() >= 0);
+		assertTrue("File count should be non-negative", stats.getTotalCachedFiles() >= 0);
 		
 		// 再次清除并验证
 		filter.clearCache();

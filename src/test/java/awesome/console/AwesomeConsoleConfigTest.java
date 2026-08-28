@@ -1375,7 +1375,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         assertNotNull("Index statistics should not be null", stats);
         assertEquals("Statistics should match cache size", fileCacheSize, stats.getFileCacheSize());
         assertEquals("Statistics should match base cache size", fileBaseCacheSize, stats.getFileBaseCacheSize());
-        assertEquals("Statistics should match total files", totalFiles, stats.getTotalFiles());
+        assertEquals("Statistics should match total files", totalFiles, stats.getTotalCachedFiles());
     }
 
     /**
@@ -1392,7 +1392,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         assertNotNull("Statistics should not be null", stats);
         
         // 验证统计信息包含有效数据（非负数）
-        assertTrue("Total files should be non-negative", stats.getTotalFiles() >= 0);
+        assertTrue("Total files should be non-negative", stats.getTotalCachedFiles() >= 0);
         assertTrue("File cache size should be non-negative", stats.getFileCacheSize() >= 0);
         assertTrue("Base cache size should be non-negative", stats.getFileBaseCacheSize() >= 0);
         
@@ -1403,7 +1403,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         
         // 验证统计信息的一致性
         assertTrue("Total files should >= file cache size", 
-            stats.getTotalFiles() >= stats.getFileCacheSize());
+            stats.getTotalCachedFiles() >= stats.getFileCacheSize());
         assertTrue("File cache size should >= base cache size", 
             stats.getFileCacheSize() >= stats.getFileBaseCacheSize());
     }
@@ -1490,7 +1490,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         AwesomeLinkFilter.IndexStatistics statsAfter = filter.getIndexStatistics();
         
         // 验证重建方法执行成功（不验证文件数，因为测试项目可能为空）
-        assertTrue("File count should be non-negative", statsAfter.getTotalFiles() >= 0);
+        assertTrue("File count should be non-negative", statsAfter.getTotalCachedFiles() >= 0);
         
         // 验证重建时间已更新
         assertTrue("Last rebuild time should be updated", 

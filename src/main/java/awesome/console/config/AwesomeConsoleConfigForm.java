@@ -575,7 +575,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private void updateIndexStatusUI(String projectName, AwesomeLinkFilter.IndexStatistics stats) {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("Index Status [%s]: %d files indexed (%d filenames, %d basenames)",
-                projectName, stats.getTotalFiles(), stats.getFileCacheSize(), stats.getFileBaseCacheSize()));
+                projectName, stats.getTotalCachedFiles(), stats.getFileCacheSize(), stats.getFileBaseCacheSize()));
 
         if (stats.hasIgnoreStatistics()) {
             sb.append(String.format(" - Matched: %d, Ignored: %d",
@@ -785,8 +785,8 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             return;
         }
 
-        int totalFiles = stats.getTotalFiles();
-        if (totalFiles == 0) {
+        int scannedFiles = stats.getScannedFiles();
+        if (scannedFiles == 0) {
             indexProgressBar.setValue(0);
             indexProgressBar.setString("0%");
             if (dualColorProgressBarUI != null) {
@@ -796,21 +796,16 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             indexProgressBar.setValue(100);
 
             if (stats.hasIgnoreStatistics()) {
-                int matchedFiles = stats.getMatchedFiles();
-                int ignoredFiles = stats.getIgnoredFiles();
-                
-                // 计算百分比：使用总文件数作为分母
-                int matchedPercentage = (matchedFiles * 100) / totalFiles;
-                int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
+                int matchedPercentage = stats.getMatchedPercentage();
+                int ignoredPercentage = stats.getIgnoredPercentage();
 
-                // 进度条文本仅显示匹配文件占比
+                // 进度条文本仅显示匹配文件占比，分母为扫描总数（匹配 + 忽略）
                 indexProgressBar.setString(String.format("%d%%", matchedPercentage));
-                // 使用双色UI更新百分比
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(matchedPercentage, ignoredPercentage);
                 }
             } else {
-                // 无忽略统计时，显示100%绿色
+                // 无忽略文件时，显示100%绿色
                 indexProgressBar.setString("100%");
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(100, 0);

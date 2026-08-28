@@ -226,7 +226,7 @@ public class IndexManagementService {
                     // 构建成功通知消息
                     // 使用 String.format 格式化消息，显示已索引的文件总数
                     String message = String.format("File index rebuilt successfully! %d files indexed", 
-                            finalStats.getTotalFiles());
+                            finalStats.getTotalCachedFiles());
                     
                     // 检查统计信息中是否包含忽略统计数据
                     // hasIgnoreStatistics 方法会检查是否有匹配/忽略文件的统计信息
@@ -370,14 +370,14 @@ public class IndexManagementService {
                     
                     // 构建成功通知消息
                     // 使用 String.format 格式化消息，显示清除的详细信息：
-                    // - beforeStats.getTotalFiles() - 清除的总文件数
+                    // - beforeStats.getTotalCachedFiles() - 清除的缓存文件数
                     // - beforeStats.getFileCacheSize() - 清除的文件名缓存条目数
                     // - beforeStats.getFileBaseCacheSize() - 清除的基础文件名缓存条目数
                     // - formatDuration(duration) - 格式化后的耗时（如 "123ms"、"2s"、"1m" 等）
                     // 同时提示用户索引会在需要时自动重建
                     String message = String.format(
                             "File index cleared successfully! Cleared %d files (%d filenames, %d basenames) in %s. Index will be rebuilt automatically when needed.",
-                            beforeStats.getTotalFiles(), 
+                            beforeStats.getTotalCachedFiles(), 
                             beforeStats.getFileCacheSize(), 
                             beforeStats.getFileBaseCacheSize(), 
                             formatDuration(duration));
