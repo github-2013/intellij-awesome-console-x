@@ -7,6 +7,7 @@ import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
+import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.ui.JBColor;
 
@@ -664,11 +665,14 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             return;
         }
 
-        // 确认对话框
-        int result = JOptionPane.showConfirmDialog(mainPanel,
+        // 使用 IntelliJ Messages（DialogWrapper）而非 JOptionPane：
+        // JOptionPane 走 JVM 默认 Locale 与原生窗口装饰，按钮语言/标题栏主题不会跟随 IDE
+        int result = Messages.showYesNoDialog(
+                mainPanel,
                 "Are you sure you want to clear the file index?\nIt will be automatically rebuilt when needed.",
-                "Confirm Clear", JOptionPane.YES_NO_OPTION, JOptionPane.WARNING_MESSAGE);
-        if (result != JOptionPane.YES_OPTION) {
+                "Confirm Clear",
+                Messages.getWarningIcon());
+        if (result != Messages.YES) {
             return;
         }
 

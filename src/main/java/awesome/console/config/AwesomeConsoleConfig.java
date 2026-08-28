@@ -3,6 +3,7 @@ package awesome.console.config;
 import awesome.console.util.RegexUtils;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.options.Configurable;
+import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.application.ApplicationManager;
 import java.util.Objects;
@@ -10,7 +11,7 @@ import org.jetbrains.annotations.Nls;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import javax.swing.*;
+import javax.swing.JComponent;
 
 /**
  * Awesome Console 配置界面控制器
@@ -82,17 +83,19 @@ public class AwesomeConsoleConfig implements Configurable {
 	 * 用于数值输入错误的情况
 	 */
 	private void showErrorDialog() {
-		JOptionPane.showMessageDialog(form.mainPanel, "Error: Please enter a positive number.", "Invalid value", JOptionPane.ERROR_MESSAGE);
+		showErrorDialog("Invalid value", "Error: Please enter a positive number.");
 	}
 
 	/**
-	 * 显示自定义错误对话框
-	 * 
+	 * 显示自定义错误对话框。
+	 * 使用 IntelliJ Messages（DialogWrapper）而非 JOptionPane，
+	 * 以便标题栏主题和按钮文案跟随 IDE，而不是 JVM Locale / 原生窗口装饰。
+	 *
 	 * @param title 对话框标题
 	 * @param message 错误消息内容
 	 */
 	private void showErrorDialog(String title, String message) {
-		JOptionPane.showMessageDialog(form.mainPanel, message, title, JOptionPane.ERROR_MESSAGE);
+		Messages.showErrorDialog(form.mainPanel, message, title);
 	}
 
 	/**
