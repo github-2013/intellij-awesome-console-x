@@ -17,6 +17,10 @@ import javax.swing.*;
 import javax.swing.text.JTextComponent;
 import java.awt.event.ActionListener;
 import java.awt.event.KeyEvent;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Consumer;
 
 import org.jetbrains.annotations.NotNull;
 
@@ -58,6 +62,18 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private IndexManagementService indexManagementService;
     // 自定义双色进度条UI
     private DualColorProgressBarUI dualColorProgressBarUI;
+    // 表单是否已销毁，用于忽略过期的异步状态刷新
+    private volatile boolean disposed;
+    // 自动初始化与手动 Rebuild 共用的进度监听
+    private Consumer<AwesomeLinkFilter.ReloadProgress> buildingProgressListener;
+    private Project buildingProgressProject;
+    private volatile AwesomeLinkFilter.ReloadProgress pendingIndexingProgress;
+    private volatile String pendingIndexingAction;
+    private final AtomicBoolean indexingProgressUiScheduled = new AtomicBoolean(false);
+    private int indexingEstimatedTotal = 1000;
+
+    private static final String ACTION_BUILDING = "Building file index";
+    private static final String ACTION_REBUILDING = "Rebuilding index";
 
     private void createUIComponents() {
         bindMap = new HashMap<>();
@@ -335,8 +351,15 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
     /**
      * 更新索引状态显示
+     * <p>
+     * 文件缓存在后台异步构建。打开设置页时若直接读取，会在首次构建完成前
+     * 得到全 0 统计。构建未完成时先显示 Building，并通过实时进度监听更新进度条，
+     * 再在 {@link IndexManagementService#whenCacheReady(Project)} 完成后刷新最终统计。
      */
     public void updateIndexStatus() {
+        if (disposed) {
+            return;
+        }
         Project project = getCurrentProject();
         if (project == null) {
             indexStatusLabel.setText("Index Status: No project opened");
@@ -348,30 +371,185 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
-                AwesomeLinkFilter.IndexStatistics stats = indexManagementService.getIndexStatistics(project);
-                if (stats != null) {
+                boolean reloadRunning = indexManagementService.isReloadScheduledOrRunning(project);
+                if (reloadRunning) {
+                    String action = indexManagementService.isCacheBuilding(project)
+                            ? ACTION_BUILDING
+                            : ACTION_REBUILDING;
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        updateIndexStatusUI(project.getName(), stats);
-                        rebuildIndexButton.setEnabled(true);
-                        clearIndexButton.setEnabled(true);
+                        if (disposed || indexStatusLabel == null) {
+                            return;
+                        }
+                        showIndexingStartUI(project.getName(), action);
                     }, ModalityState.any());
-                } else {
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        indexStatusLabel.setText("Index Status: Service not available");
-                        indexStatusLabel.setForeground(JBColor.RED);
-                        rebuildIndexButton.setEnabled(false);
-                        clearIndexButton.setEnabled(false);
-                    }, ModalityState.any());
+                    // 必须先挂接监听，再注册 whenComplete：若重建刚好结束，
+                    // completedFuture.whenComplete 会同步执行并立刻 detach
+                    attachIndexingProgressListener(project, action);
                 }
+
+                indexManagementService.whenCacheReady(project).whenComplete((ignored, error) -> {
+                    detachBuildingProgressListener();
+                    if (disposed) {
+                        return;
+                    }
+                    if (error instanceof CancellationException) {
+                        return;
+                    }
+                    if (error != null) {
+                        Exception exception = error instanceof Exception
+                                ? (Exception) error
+                                : new RuntimeException(error);
+                        ExceptionHandling.rethrowIfExceptionMustNotBeLogged(exception);
+                        logger.error("Failed to wait for index: " + error.getMessage(), exception);
+                        ApplicationManager.getApplication().invokeLater(() -> {
+                            if (disposed || indexStatusLabel == null) {
+                                return;
+                            }
+                            indexStatusLabel.setText("Index Status: Error - " + error.getMessage());
+                            indexStatusLabel.setForeground(JBColor.RED);
+                        }, ModalityState.any());
+                        return;
+                    }
+                    refreshIndexStatusFromService(project);
+                });
             } catch (Exception e) {
                 ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
                 logger.error("Failed to update index status: " + e.getMessage(), e);
                 ApplicationManager.getApplication().invokeLater(() -> {
+                    if (disposed || indexStatusLabel == null) {
+                        return;
+                    }
                     indexStatusLabel.setText("Index Status: Error - " + e.getMessage());
                     indexStatusLabel.setForeground(JBColor.RED);
                 }, ModalityState.any());
             }
         });
+    }
+
+    /**
+     * 从索引服务读取最新统计并刷新 UI
+     */
+    private void refreshIndexStatusFromService(Project project) {
+        try {
+            AwesomeLinkFilter.IndexStatistics stats = indexManagementService.getIndexStatistics(project);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (disposed || indexStatusLabel == null) {
+                    return;
+                }
+                if (stats != null) {
+                    updateIndexStatusUI(project.getName(), stats);
+                    rebuildIndexButton.setEnabled(true);
+                    clearIndexButton.setEnabled(true);
+                } else {
+                    indexStatusLabel.setText("Index Status: Service not available");
+                    indexStatusLabel.setForeground(JBColor.RED);
+                    rebuildIndexButton.setEnabled(false);
+                    clearIndexButton.setEnabled(false);
+                }
+            }, ModalityState.any());
+        } catch (Exception e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+            logger.error("Failed to update index status: " + e.getMessage(), e);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (disposed || indexStatusLabel == null) {
+                    return;
+                }
+                indexStatusLabel.setText("Index Status: Error - " + e.getMessage());
+                indexStatusLabel.setForeground(JBColor.RED);
+            }, ModalityState.any());
+        }
+    }
+
+    /**
+     * 自动初始化与手动 Rebuild 共用的开始态
+     */
+    private void showIndexingStartUI(String projectName, String action) {
+        indexingEstimatedTotal = 1000;
+        indexStatusLabel.setText(String.format("Index Status [%s]: %s...", projectName, action));
+        indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
+        indexProgressBar.setValue(0);
+        indexProgressBar.setString("Indexing...");
+        if (dualColorProgressBarUI != null) {
+            dualColorProgressBarUI.updatePercentages(0, 0);
+        }
+    }
+
+    /**
+     * 挂接实时进度监听，重建已开始后也能收到后续节流更新
+     */
+    private void attachIndexingProgressListener(Project project, String action) {
+        detachBuildingProgressListener();
+        indexingEstimatedTotal = 1000;
+        buildingProgressProject = project;
+        buildingProgressListener = progress -> scheduleIndexingProgressUi(project.getName(), action, progress);
+        indexManagementService.addReloadProgressListener(project, buildingProgressListener);
+    }
+
+    /**
+     * 取消实时进度监听，避免设置页关闭后仍刷新 UI
+     */
+    private void detachBuildingProgressListener() {
+        if (buildingProgressListener != null && buildingProgressProject != null) {
+            indexManagementService.removeReloadProgressListener(buildingProgressProject, buildingProgressListener);
+        }
+        buildingProgressListener = null;
+        buildingProgressProject = null;
+        pendingIndexingProgress = null;
+        pendingIndexingAction = null;
+    }
+
+    /**
+     * 合并高频进度回调，避免每个 50ms 节流点都往 EDT 塞事件。
+     * 自动初始化与手动 Rebuild 共用。
+     */
+    private void scheduleIndexingProgressUi(String projectName, String action, AwesomeLinkFilter.ReloadProgress progress) {
+        pendingIndexingProgress = progress;
+        pendingIndexingAction = action;
+        if (!indexingProgressUiScheduled.compareAndSet(false, true)) {
+            return;
+        }
+        ApplicationManager.getApplication().invokeLater(() -> {
+            indexingProgressUiScheduled.set(false);
+            AwesomeLinkFilter.ReloadProgress latest = pendingIndexingProgress;
+            String latestAction = pendingIndexingAction;
+            if (disposed || latest == null || latestAction == null
+                    || indexStatusLabel == null || indexProgressBar == null) {
+                return;
+            }
+            applyIndexingProgressUI(projectName, latestAction, latest);
+        }, ModalityState.any());
+    }
+
+    /**
+     * 用正在构建的临时缓存进度更新状态文本和进度条（自动加载与手动 Rebuild 共用）
+     */
+    private void applyIndexingProgressUI(String projectName, String action, AwesomeLinkFilter.ReloadProgress progress) {
+        int processed = progress.getProcessedCount();
+        if (processed > indexingEstimatedTotal) {
+            indexingEstimatedTotal = processed + 100;
+        }
+        int barValue = processed <= 0
+                ? 0
+                : Math.min(95, (processed * 95) / Math.max(indexingEstimatedTotal, 1));
+
+        String statusText = String.format("Index Status [%s]: %s... %d files processed",
+                projectName, action, processed);
+        if (progress.getIgnoredCount() > 0) {
+            statusText += String.format(" (Matched: %d, Ignored: %d)",
+                    progress.getIndexedCount(), progress.getIgnoredCount());
+        }
+        indexStatusLabel.setText(statusText);
+        indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
+
+        indexProgressBar.setValue(barValue);
+        indexProgressBar.setString(processed <= 0 ? "Indexing..." : processed + " files");
+
+        int denom = Math.max(processed, 1);
+        int matchedPct = (progress.getIndexedCount() * barValue) / denom;
+        int ignoredPct = (progress.getIgnoredCount() * barValue) / denom;
+        if (dualColorProgressBarUI != null) {
+            dualColorProgressBarUI.updatePercentages(matchedPct, ignoredPct);
+        }
     }
 
     /**
@@ -422,59 +600,15 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 rebuildIndexButton.setEnabled(false);
                 clearIndexButton.setEnabled(false);
                 rebuildIndexButton.setText("Rebuilding...");
-                indexStatusLabel.setText(String.format("Rebuilding index [%s]...", project.getName()));
-                indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
+                showIndexingStartUI(project.getName(), ACTION_REBUILDING);
             }
 
             @Override
-            public void onProgress(int current, int total, AwesomeLinkFilter.IndexStatistics stats) {
-                // 检查 UI 组件是否已销毁
-                if (indexStatusLabel == null || indexProgressBar == null) {
+            public void onProgress(AwesomeLinkFilter.ReloadProgress progress) {
+                if (disposed || indexStatusLabel == null || indexProgressBar == null) {
                     return;
                 }
-
-                int totalFiles = stats.getTotalFiles();
-                int ignoredFiles = stats.getIgnoredFiles();
-                int matchedFiles = stats.getMatchedFiles();
-                int estimatedTotalFiles = indexManagementService.getEstimatedTotalFiles();
-                long rebuildStartTime = indexManagementService.getRebuildStartTime();
-
-                // 判断是否完成
-                boolean isComplete = (totalFiles > 0 && current >= totalFiles);
-                int progress = isComplete ? 100 : Math.min(95, (current * 95) / Math.max(estimatedTotalFiles, 1));
-
-                // 更新状态文本
-                long currentTime = System.currentTimeMillis();
-                String statusText = isComplete
-                        ? String.format("Rebuild completed [%s]: %d files indexed in %s",
-                        project.getName(), current, indexManagementService.formatDuration(currentTime - rebuildStartTime))
-                        : String.format("Rebuilding index [%s]... %d files processed", project.getName(), current);
-
-                if (ignoredFiles > 0) {
-                    statusText += String.format(" (Matched: %d, Ignored: %d)", matchedFiles, ignoredFiles);
-                }
-                indexStatusLabel.setText(statusText);
-
-                // 更新进度条
-                indexProgressBar.setValue(progress);
-                
-                // 计算百分比：使用总文件数作为分母
-                if (totalFiles > 0) {
-                    int matchedPercentage = (matchedFiles * 100) / totalFiles;
-                    int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
-                    // 进度条文本仅显示匹配文件占比
-                    indexProgressBar.setString(String.format("%d%%", matchedPercentage));
-                    // 使用双色UI更新百分比
-                    if (dualColorProgressBarUI != null) {
-                        dualColorProgressBarUI.updatePercentages(matchedPercentage, ignoredPercentage);
-                    }
-                } else {
-                    // 总文件数为0时，显示进度百分比
-                    indexProgressBar.setString(progress + "%");
-                    if (dualColorProgressBarUI != null) {
-                        dualColorProgressBarUI.updatePercentages(progress, 0);
-                    }
-                }
+                scheduleIndexingProgressUi(project.getName(), ACTION_REBUILDING, progress);
             }
 
             @Override
@@ -541,11 +675,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 clearIndexButton.setText("Clearing...");
                 indexStatusLabel.setText(String.format("Clearing index [%s]...", project.getName()));
                 indexStatusLabel.setForeground(new JBColor(new Color(244, 67, 54), new Color(239, 83, 80)));
-            }
-
-            @Override
-            public void onProgress(int current, int total, AwesomeLinkFilter.IndexStatistics stats) {
-                // 清除操作不需要进度更新
             }
 
             @Override
@@ -681,16 +810,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     /**
      * 清理资源（由 AwesomeConsoleConfig.disposeUIResources() 调用）
      * <p>
-     * 注意：
-     * 1. 此方法必须保留，即使方法体为空，因为 AwesomeConsoleConfig 会显式调用它
-     * 2. 索引操作会在后台继续完成，不会被中断
-     * 3. UI 组件由 IntelliJ 平台自动清理
-     * 4. 回调方法中已有空指针检查，确保 UI 销毁后不会出错
+     * 索引操作会在后台继续完成，不会被中断。此处仅标记表单已销毁，
+     * 避免关闭设置页后仍刷新已失效的 UI。
      */
     public void dispose() {
-        // 方法体为空是正确的设计：
-        // - 不取消后台索引操作
-        // - 不手动清理 UI 引用（由平台管理）
-        // - 回调中的空指针检查已足够保证安全性
+        disposed = true;
+        detachBuildingProgressListener();
     }
 }

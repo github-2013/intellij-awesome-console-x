@@ -13,6 +13,7 @@ import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
 import awesome.console.util.SingleFileFileHyperlinkInfo;
 import com.intellij.execution.filters.Filter;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
@@ -3162,6 +3163,136 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		// 验证索引状态（可能已自动重建，也可能仍为空）
 		int filesAfterDetection = filter.getTotalCachedFiles();
 		assertTrue("File count should be non-negative", filesAfterDetection >= 0);
+	}
+
+	/**
+	 * 验证异步初始化完成前 lastRebuildTime 为 0，whenCacheReady 之后才完成首次重建。
+	 * 覆盖设置页打开时读到「0 files indexed」的竞态。
+	 */
+	public void testWhenCacheReadyAfterAsyncInit() throws Exception {
+		AwesomeLinkFilter fresh = new AwesomeLinkFilter(getProject());
+		Disposer.register(getTestRootDisposable(), fresh);
+
+		if (fresh.isCacheBuilding()) {
+			AwesomeLinkFilter.IndexStatistics before = fresh.getIndexStatistics();
+			assertEquals("Last rebuild time should be 0 before init completes", 0, before.getLastRebuildTime());
+			assertEquals("File cache should be empty before init completes", 0, before.getTotalFiles());
+		}
+
+		fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
+		assertFalse("Cache should not be building after whenCacheReady", fresh.isCacheBuilding());
+		assertTrue("Cache should be initialized", fresh.isCacheInitialized());
+		assertTrue("Last rebuild time should be set after init",
+				fresh.getIndexStatistics().getLastRebuildTime() > 0);
+	}
+
+	/**
+	 * 验证 Clear 之后 whenCacheReady 立即返回，不会无限等待，统计保持为 0。
+	 */
+	public void testWhenCacheReadyAfterClearDoesNotWaitForever() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		filter.clearCache();
+
+		assertFalse("Clear should not leave a building state", filter.isCacheBuilding());
+		assertFalse("Cache should not be initialized after clear", filter.isCacheInitialized());
+		filter.whenCacheReady().get(2, TimeUnit.SECONDS);
+		assertEquals("Cleared cache should stay empty", 0, filter.getTotalCachedFiles());
+		assertEquals("Cleared cache should reset last rebuild time",
+				0, filter.getIndexStatistics().getLastRebuildTime());
+	}
+
+	/**
+	 * 验证空闲时 whenCacheReady 不会额外触发重建。
+	 */
+	public void testWhenCacheReadyDoesNotTriggerExtraRebuild() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		long firstRebuildTime = filter.getIndexStatistics().getLastRebuildTime();
+		assertTrue("Cache should have been rebuilt at least once", firstRebuildTime > 0);
+
+		filter.whenCacheReady().get(2, TimeUnit.SECONDS);
+		assertEquals("Idle whenCacheReady should not rebuild",
+				firstRebuildTime, filter.getIndexStatistics().getLastRebuildTime());
+	}
+
+	/**
+	 * 验证实时进度监听器在重建过程中会被调用（含最终进度），即使没有 schedule 回调。
+	 */
+	public void testLiveProgressListenerFiresDuringReload() throws Exception {
+		AtomicInteger listenerCalls = new AtomicInteger();
+		AtomicInteger lastProcessed = new AtomicInteger(-1);
+		Consumer<AwesomeLinkFilter.ReloadProgress> listener = progress -> {
+			listenerCalls.incrementAndGet();
+			lastProcessed.set(progress.getProcessedCount());
+			assertTrue("Indexed count should be non-negative", progress.getIndexedCount() >= 0);
+			assertTrue("Ignored count should be non-negative", progress.getIgnoredCount() >= 0);
+		};
+		filter.addReloadProgressListener(listener);
+		try {
+			filter.scheduleReloadAsync("progress listener", null, true).get(10, TimeUnit.SECONDS);
+			assertTrue("Live progress listener should be invoked", listenerCalls.get() > 0);
+			assertTrue("Processed count should be non-negative", lastProcessed.get() >= 0);
+		} finally {
+			filter.removeReloadProgressListener(listener);
+		}
+	}
+
+	/**
+	 * 验证重建已经开始后仍能挂接监听器（设置页中途打开的场景）。
+	 */
+	public void testLiveProgressListenerAttachesAfterReloadStarted() throws Exception {
+		AwesomeLinkFilter fresh = new AwesomeLinkFilter(getProject());
+		Disposer.register(getTestRootDisposable(), fresh);
+		AtomicInteger lateCalls = new AtomicInteger();
+		Consumer<AwesomeLinkFilter.ReloadProgress> lateListener = progress -> lateCalls.incrementAndGet();
+		fresh.addReloadProgressListener(lateListener);
+		try {
+			fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
+			assertTrue("Listener attached during init should receive progress", lateCalls.get() > 0);
+		} finally {
+			fresh.removeReloadProgressListener(lateListener);
+		}
+	}
+
+	/**
+	 * 验证空闲时挂接监听不会回放上一次终态，避免点 Rebuild 先闪旧进度。
+	 */
+	public void testIdleProgressListenerDoesNotReplayFinishedSnapshot() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		assertFalse("Reload should be idle after init", filter.isReloadScheduledOrRunning());
+
+		AtomicInteger idleCalls = new AtomicInteger();
+		Consumer<AwesomeLinkFilter.ReloadProgress> idleListener = progress -> idleCalls.incrementAndGet();
+		filter.addReloadProgressListener(idleListener);
+		try {
+			assertEquals("Idle attach must not replay the previous finished snapshot", 0, idleCalls.get());
+		} finally {
+			filter.removeReloadProgressListener(idleListener);
+		}
+	}
+
+	/**
+	 * 验证首次初始化之后，后续 rebuild 期间 isReloadScheduledOrRunning 为 true，
+	 * 设置页才能挂上进度而不是停在 Not initialized。
+	 */
+	public void testSecondaryReloadIsVisibleToSettingsPage() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		assertTrue("Cache should be initialized before secondary reload", filter.isCacheInitialized());
+		assertFalse("First-init building flag should be false after init", filter.isCacheBuilding());
+
+		AtomicInteger progressCalls = new AtomicInteger();
+		Consumer<AwesomeLinkFilter.ReloadProgress> listener = progress -> progressCalls.incrementAndGet();
+		filter.addReloadProgressListener(listener);
+		try {
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("secondary reload", null, true);
+			assertTrue("Secondary reload should be scheduled or running",
+					filter.isReloadScheduledOrRunning() || reload.isDone());
+			reload.get(10, TimeUnit.SECONDS);
+			assertTrue("Secondary reload should publish progress to live listeners", progressCalls.get() > 0);
+		} finally {
+			filter.removeReloadProgressListener(listener);
+			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+			assertFalse("Reload should be idle after secondary reload", filter.isReloadScheduledOrRunning());
+		}
 	}
 
 	/**

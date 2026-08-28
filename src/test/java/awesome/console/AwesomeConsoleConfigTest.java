@@ -4,9 +4,11 @@ import awesome.console.config.AwesomeConsoleDefaults;
 import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
@@ -1404,6 +1406,39 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             stats.getTotalFiles() >= stats.getFileCacheSize());
         assertTrue("File cache size should >= base cache size", 
             stats.getFileCacheSize() >= stats.getFileBaseCacheSize());
+    }
+
+    /**
+     * 验证设置页在异步索引完成后会刷新统计，而不是停留在打开瞬间的全 0 快照。
+     */
+    public void testUpdateIndexStatusRefreshesAfterCacheReady() throws Exception {
+        awesome.console.config.AwesomeConsoleConfigForm form =
+                new awesome.console.config.AwesomeConsoleConfigForm();
+        form.updateIndexStatus();
+
+        AwesomeLinkFilter providerFilter = AwesomeLinkFilterProvider.getFilter(getProject());
+        providerFilter.whenCacheReady().get(10, TimeUnit.SECONDS);
+
+        String statusText = "";
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+            statusText = form.indexStatusLabel.getText();
+            if (statusText.contains("Last rebuild")) {
+                break;
+            }
+            Thread.sleep(50);
+        }
+
+        assertFalse("Status should leave the initial placeholder, got: " + statusText,
+                statusText.contains("Not initialized"));
+        assertFalse("Status should not stay on building after cache is ready, got: " + statusText,
+                statusText.contains("Building file index"));
+        assertTrue("Status should show completed index stats, got: " + statusText,
+                statusText.contains("files indexed"));
+        assertTrue("Completed index should record last rebuild time, got: " + statusText,
+                statusText.contains("Last rebuild"));
+        form.dispose();
     }
 
     /**

@@ -13,6 +13,8 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.application.ModalityState;
 
 import java.awt.Component;
+import java.util.concurrent.CompletableFuture;
+import java.util.function.Consumer;
 
 /**
  * 索引管理服务类
@@ -54,12 +56,11 @@ public class IndexManagementService {
         void onStart(String operationType);
 
         /**
-         * 进度更新
-         * @param current 当前进度
-         * @param total 总数
-         * @param stats 索引统计信息
+         * 进度更新（来自正在构建的临时缓存，与自动初始化共用 {@link AwesomeLinkFilter.ReloadProgress}）
+         * 清除操作无需实现
          */
-        void onProgress(int current, int total, AwesomeLinkFilter.IndexStatistics stats);
+        default void onProgress(AwesomeLinkFilter.ReloadProgress progress) {
+        }
 
         /**
          * 操作完成
@@ -176,45 +177,24 @@ public class IndexManagementService {
                 // 如果返回 null（filter 不可用），会抛出 IllegalStateException 异常
                 // 这个 filter 对象是实际执行索引操作的核心组件
                 AwesomeLinkFilter filter = getFilterOrThrow(project);
-                
-                // 调用 filter 的 manualRebuild 方法执行实际的索引重建操作
-                // 该方法接受一个 Consumer<Integer> 类型的回调参数，用于接收进度更新
-                // 每当处理一定数量的文件后，manualRebuild 会调用这个回调，传入当前已处理的文件数量
-                filter.manualRebuild(count -> {
-                    // === 进度回调处理（在后台线程中执行） ===
-                    
-                    // 调用 filter 的 getIndexStatistics 方法获取当前的索引统计信息
-                    // IndexStatistics 对象包含：总文件数、已索引文件数、匹配文件数、忽略文件数等信息
-                    AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
-                    
-                    // 从统计信息中获取当前已索引的总文件数
-                    // 这个值会随着索引进度不断增加
-                    int totalFiles = stats.getTotalFiles();
-                    
-                    // 动态调整预估总数的逻辑
-                    // 如果当前已处理的文件数（count）超过了预估总数（estimatedTotalFiles）
-                    // 说明实际文件数比预估的多，需要调整预估值以避免进度条显示超过 100%
-                    if (count > estimatedTotalFiles) {
-                        // 将预估总数更新为：当前已处理数 + 100
-                        // 加 100 是为了留出一些缓冲空间，避免频繁调整
-                        estimatedTotalFiles = count + 100;
+
+                // 与设置页自动初始化共用 ReloadProgress：读正在构建的临时缓存，
+                // 而不是主缓存（主缓存在原子替换前仍是旧数据或空的）
+                Consumer<AwesomeLinkFilter.ReloadProgress> progressListener = progress -> {
+                    int processed = progress.getProcessedCount();
+                    if (processed > estimatedTotalFiles) {
+                        estimatedTotalFiles = processed + 100;
                     }
-                    
-                    // 通知进度更新（必须在 EDT 中执行）
-                    // 获取 Application 实例并调用 invokeLater 方法
-                    // invokeLater 会将传入的 Runnable 任务放入 EDT 的事件队列中
-                    // 确保 UI 更新操作在正确的线程（EDT）中执行，这是 Swing/IntelliJ UI 的线程安全要求
-                    // 使用 ModalityState.stateForComponent() 确保在正确的模态上下文中更新 UI
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        // 在 EDT 中调用回调接口的 onProgress 方法
-                        // 传入三个参数：
-                        // 1. count - 当前已处理的文件数量
-                        // 2. totalFiles - 当前已索引的总文件数（来自统计信息）
-                        // 3. stats - 完整的索引统计信息对象
-                        // UI 层收到此回调后可以更新进度条、显示百分比、更新统计信息等
-                        callback.onProgress(count, totalFiles, stats);
+                        callback.onProgress(progress);
                     }, ModalityState.stateForComponent(component));
-                });
+                };
+                filter.addReloadProgressListener(progressListener);
+                try {
+                    filter.manualRebuild();
+                } finally {
+                    filter.removeReloadProgressListener(progressListener);
+                }
 
                 // ========== 第四阶段：完成处理 ==========
                 
@@ -468,6 +448,57 @@ public class IndexManagementService {
             logger.error("Failed to get index statistics: " + e.getMessage(), e);
         }
         return null;
+    }
+
+    /**
+     * 是否正在进行首次缓存构建
+     */
+    public boolean isCacheBuilding(Project project) {
+        if (project == null) {
+            return false;
+        }
+        return AwesomeLinkFilterProvider.getFilter(project).isCacheBuilding();
+    }
+
+    /**
+     * 是否已调度或正在执行缓存重建（含首次初始化和后续 rebuild）
+     */
+    public boolean isReloadScheduledOrRunning(Project project) {
+        if (project == null) {
+            return false;
+        }
+        return AwesomeLinkFilterProvider.getFilter(project).isReloadScheduledOrRunning();
+    }
+
+    /**
+     * 等待当前已调度或正在执行的缓存重建完成。
+     * 若没有进行中的重建，则立即完成，不会额外触发重建。
+     */
+    public CompletableFuture<Void> whenCacheReady(Project project) {
+        if (project == null) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return AwesomeLinkFilterProvider.getFilter(project).whenCacheReady();
+    }
+
+    /**
+     * 订阅缓存重建实时进度（重建已开始后也能挂接）
+     */
+    public void addReloadProgressListener(Project project, Consumer<AwesomeLinkFilter.ReloadProgress> listener) {
+        if (project == null || listener == null) {
+            return;
+        }
+        AwesomeLinkFilterProvider.getFilter(project).addReloadProgressListener(listener);
+    }
+
+    /**
+     * 取消订阅缓存重建进度
+     */
+    public void removeReloadProgressListener(Project project, Consumer<AwesomeLinkFilter.ReloadProgress> listener) {
+        if (project == null || listener == null) {
+            return;
+        }
+        AwesomeLinkFilterProvider.getFilter(project).removeReloadProgressListener(listener);
     }
 
     /**

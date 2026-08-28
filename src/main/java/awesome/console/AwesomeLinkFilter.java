@@ -45,6 +45,7 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -380,6 +381,15 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/** 待完成的重建 Future */
 	private final List<CompletableFuture<Void>> pendingReloadFutures = new ArrayList<>();
+
+	/** 等待当前已调度/进行中的缓存重建完成的调用方 */
+	private final List<CompletableFuture<Void>> cacheReadyWaiters = new ArrayList<>();
+
+	/** 实时进度监听器，可在重建已开始后订阅（设置页打开时挂接） */
+	private final List<Consumer<ReloadProgress>> reloadProgressListeners = new CopyOnWriteArrayList<>();
+
+	/** 当前重建的最新进度快照，供晚到的监听器立刻回放 */
+	private volatile ReloadProgress latestReloadProgress;
 
 	/** 是否有重建正在进行 */
 	private boolean reloadInProgress = false;
@@ -1672,6 +1682,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		List<Consumer<Integer>> callbacks = Collections.emptyList();
 		List<CompletableFuture<Void>> futures = Collections.emptyList();
 		List<CompletableFuture<Void>> disposeFutures = Collections.emptyList();
+		List<CompletableFuture<Void>> disposeWaiters = Collections.emptyList();
 		String reason = "unspecified";
 		boolean disposed = false;
 
@@ -1687,6 +1698,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				pendingReloadReasons.clear();
 				pendingImmediateReload = false;
 				reloadInProgress = false;
+				disposeWaiters = drainCacheReadyWaitersLocked();
 			} else {
 				reloadInProgress = true;
 				reason = formatReloadReason(pendingReloadReasons);
@@ -1701,29 +1713,54 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		if (disposed) {
 			CancellationException exception = new CancellationException("Project disposed");
-			for (CompletableFuture<Void> future : disposeFutures) {
-				future.completeExceptionally(exception);
-			}
+			completeWaiters(disposeFutures, exception);
+			completeWaiters(disposeWaiters, exception);
 			return;
 		}
 
 		try {
 			runReloadFileCache(reason, combineProgressCallbacks(callbacks));
-			for (CompletableFuture<Void> future : futures) {
-				future.complete(null);
-			}
+			completeWaiters(futures, null);
 		} catch (Exception e) {
 			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
-			for (CompletableFuture<Void> future : futures) {
-				future.completeExceptionally(e);
-			}
+			completeWaiters(futures, e);
 			logger.error(String.format("project[%s]: Error reloading file cache ( %s )", project.getName(), reason), e);
 		} finally {
+			List<CompletableFuture<Void>> readyWaiters = Collections.emptyList();
 			synchronized (reloadLock) {
 				reloadInProgress = false;
 				if (!pendingReloadReasons.isEmpty()) {
+					// 还有排队中的重建，就绪等待者继续等下一次完成
 					scheduleReloadLocked();
+				} else {
+					// 本轮结束且无排队：丢掉终态快照，避免下次挂监听时回放旧进度
+					latestReloadProgress = null;
+					readyWaiters = drainCacheReadyWaitersLocked();
 				}
+			}
+			// 无论本次重建成功或失败，都唤醒等待者，避免设置页一直停在 Building
+			completeWaiters(readyWaiters, null);
+		}
+	}
+
+	/**
+	 * 取出所有缓存就绪等待者（必须持有 {@link #reloadLock}）
+	 */
+	private List<CompletableFuture<Void>> drainCacheReadyWaitersLocked() {
+		if (cacheReadyWaiters.isEmpty()) {
+			return Collections.emptyList();
+		}
+		List<CompletableFuture<Void>> waiters = new ArrayList<>(cacheReadyWaiters);
+		cacheReadyWaiters.clear();
+		return waiters;
+	}
+
+	private static void completeWaiters(List<CompletableFuture<Void>> waiters, @Nullable Throwable error) {
+		for (CompletableFuture<Void> waiter : waiters) {
+			if (error != null) {
+				waiter.completeExceptionally(error);
+			} else {
+				waiter.complete(null);
 			}
 		}
 	}
@@ -1763,6 +1800,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	private void runReloadFileCache(String reason, @Nullable Consumer<Integer> progressCallback) {
 		long startTime = System.currentTimeMillis();
+		latestReloadProgress = new ReloadProgress(0, 0, 0);
 
 		// ======== 阶段1: 无锁构建新缓存（耗时操作，不阻塞读操作） ========
 		List<String> newSrcRoots = getSourceRoots();
@@ -1776,11 +1814,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		projectRootManager.getFileIndex().iterateContent(iterator);
 
 		int newIgnoredCount = iterator.getIgnoredCount();
+		int indexedFiles = newFileCache.values().stream().mapToInt(List::size).sum();
+		// 发布最终进度：即使没有 scheduleReload 回调（如 open project），设置页也能收到
+		publishReloadProgress(
+				Math.max(iterator.getProcessedCount(), indexedFiles + newIgnoredCount),
+				indexedFiles,
+				newIgnoredCount
+		);
 
-		// 最后一次回调，确保显示最终数量
+		// 最后一次回调，确保显示最终数量（兼容现有 Integer 回调，值为已索引文件数）
 		if (progressCallback != null) {
-			int totalFiles = newFileCache.values().stream().mapToInt(List::size).sum();
-			progressCallback.accept(totalFiles);
+			progressCallback.accept(indexedFiles);
 		}
 
 		// ======== 阶段2: 短暂写锁，原子替换到主缓存（毫秒级） ========
@@ -1888,20 +1932,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		/**
 		 * 触发进度回调
-		 * 每处理5个文件或间隔50ms触发一次
+		 * 每处理5个文件或间隔50ms触发一次，实时监听器始终能收到（即使没有 schedule 回调）
 		 */
 		private void triggerProgressCallback() {
-			if (progressCallback != null) {
-				long currentTime = System.currentTimeMillis();
-				if (processedCount % 5 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
+			long currentTime = System.currentTimeMillis();
+			if (processedCount % 5 == 0 || (currentTime - lastCallbackTime) >= CALLBACK_INTERVAL_MS) {
+				lastCallbackTime = currentTime;
+				publishReloadProgress(processedCount, processedCount - localIgnoredCount, localIgnoredCount);
+				if (progressCallback != null) {
 					progressCallback.accept(processedCount);
-					lastCallbackTime = currentTime;
 				}
 			}
 		}
 
 		public int getIgnoredCount() {
 			return localIgnoredCount;
+		}
+
+		public int getProcessedCount() {
+			return processedCount;
 		}
 	}
 
@@ -2821,6 +2870,94 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 	}
 
+	/**
+	 * 缓存是否已完成至少一次成功重建
+	 */
+	public boolean isCacheInitialized() {
+		return cacheInitialized;
+	}
+
+	/**
+	 * 是否已调度或正在执行缓存重建（含首次初始化和后续 rebuild）
+	 */
+	public boolean isReloadScheduledOrRunning() {
+		synchronized (reloadLock) {
+			return reloadInProgress || !pendingReloadReasons.isEmpty();
+		}
+	}
+
+	/**
+	 * 是否正在进行首次缓存构建（已调度或正在执行，且尚未完成过初始化）
+	 * <p>
+	 * 设置页用此状态区分「索引尚未建完」和「索引已被清空/项目为空」。
+	 */
+	public boolean isCacheBuilding() {
+		return !cacheInitialized && isReloadScheduledOrRunning();
+	}
+
+	/**
+	 * 等待当前已调度或正在执行的缓存重建完成。
+	 * <p>
+	 * 若当前没有重建任务（已初始化且空闲，或已被 Clear），则立即完成，不会额外触发重建。
+	 */
+	public CompletableFuture<Void> whenCacheReady() {
+		synchronized (reloadLock) {
+			if (!reloadInProgress && pendingReloadReasons.isEmpty()) {
+				return CompletableFuture.completedFuture(null);
+			}
+			CompletableFuture<Void> future = new CompletableFuture<>();
+			cacheReadyWaiters.add(future);
+			return future;
+		}
+	}
+
+	/**
+	 * 订阅缓存重建的实时进度。
+	 * <p>
+	 * 与 {@link #scheduleReloadAsync} 的回调不同：即使重建已经开始，也能挂接。
+	 * 仅在重建进行中才回放最新快照，避免点 Rebuild 时先闪上一次的终态进度。
+	 */
+	public void addReloadProgressListener(@NotNull Consumer<ReloadProgress> listener) {
+		ReloadProgress latestToReplay;
+		synchronized (reloadLock) {
+			reloadProgressListeners.add(listener);
+			latestToReplay = reloadInProgress ? latestReloadProgress : null;
+		}
+		if (latestToReplay != null) {
+			try {
+				listener.accept(latestToReplay);
+			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+				logger.warn(String.format("project[%s]: Error in reload progress listener replay",
+						project.getName()), e);
+			}
+		}
+	}
+
+	/**
+	 * 取消订阅缓存重建进度
+	 */
+	public void removeReloadProgressListener(@NotNull Consumer<ReloadProgress> listener) {
+		reloadProgressListeners.remove(listener);
+	}
+
+	/**
+	 * 向实时监听器发布进度（每 5 个文件或 50ms 一次）
+	 */
+	private void publishReloadProgress(int processedCount, int indexedCount, int ignoredCount) {
+		ReloadProgress progress = new ReloadProgress(processedCount, indexedCount, ignoredCount);
+		latestReloadProgress = progress;
+		for (Consumer<ReloadProgress> listener : reloadProgressListeners) {
+			try {
+				listener.accept(progress);
+			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+				logger.warn(String.format("project[%s]: Error in reload progress listener",
+						project.getName()), e);
+			}
+		}
+	}
+
 	// ==================== AwesomeConsoleConfigListener 接口实现 ====================
 
 	/**
@@ -2927,6 +3064,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			reloadAlarm.cancelAllRequests();
 			List<CompletableFuture<Void>> futuresToCancel;
+			List<CompletableFuture<Void>> waitersToCancel;
 			synchronized (reloadLock) {
 				futuresToCancel = new ArrayList<>(pendingReloadFutures);
 				pendingReloadFutures.clear();
@@ -2934,13 +3072,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				pendingReloadReasons.clear();
 				pendingImmediateReload = false;
 				reloadInProgress = false;
+				waitersToCancel = drainCacheReadyWaitersLocked();
 			}
-			if (!futuresToCancel.isEmpty()) {
-				CancellationException exception = new CancellationException("AwesomeLinkFilter disposed");
-				for (CompletableFuture<Void> future : futuresToCancel) {
-					future.completeExceptionally(exception);
-				}
-			}
+			CancellationException exception = new CancellationException("AwesomeLinkFilter disposed");
+			completeWaiters(futuresToCancel, exception);
+			completeWaiters(waitersToCancel, exception);
+			reloadProgressListeners.clear();
+			latestReloadProgress = null;
 		} catch (Exception e) {
 			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.warn(String.format("project[%s]: Error while canceling reload requests", project.getName()), e);
@@ -3028,6 +3166,38 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		 */
 		public boolean hasIgnoreStatistics() {
 			return ignoredFiles > 0;
+		}
+	}
+
+	/**
+	 * 缓存重建过程中的进度快照
+	 * <p>
+	 * 数据来自正在构建的临时缓存，不是主缓存。设置页可据此在首次初始化期间更新进度条。
+	 */
+	public static class ReloadProgress {
+		private final int processedCount;
+		private final int indexedCount;
+		private final int ignoredCount;
+
+		public ReloadProgress(int processedCount, int indexedCount, int ignoredCount) {
+			this.processedCount = processedCount;
+			this.indexedCount = indexedCount;
+			this.ignoredCount = ignoredCount;
+		}
+
+		/** 已扫描文件数（含被忽略的文件） */
+		public int getProcessedCount() {
+			return processedCount;
+		}
+
+		/** 已写入临时索引的文件数 */
+		public int getIndexedCount() {
+			return indexedCount;
+		}
+
+		/** 已被忽略模式跳过的文件数 */
+		public int getIgnoredCount() {
+			return ignoredCount;
 		}
 	}
 }
