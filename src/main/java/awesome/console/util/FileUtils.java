@@ -223,14 +223,32 @@ public class FileUtils {
 
     /**
      * 在非读锁线程把磁盘路径兑成 VFS 身份。禁止从 applyFilter / 读锁调用。
+     * jar 必须先 refresh 本地 .jar，再查条目；只 find 兑不出尚未进 VFS 的归档。
      */
     @Nullable
     public static VirtualFile refreshAndFindLocalFile(@NotNull String path) {
         path = normalizeSlashes(path);
         if (isJarPath(path)) {
-            return JarFileSystem.getInstance().findFileByPath(path);
+            return refreshAndFindJarEntry(path);
         }
         return LocalFileSystem.getInstance().refreshAndFindFileByPath(path);
+    }
+
+    /**
+     * 先把本地 jar 刷进 LocalFileSystem，再用 JarFileSystem 找条目。
+     */
+    @Nullable
+    private static VirtualFile refreshAndFindJarEntry(@NotNull String path) {
+        Pair<String, String> parts = splitJarPath(path);
+        if (parts == null) {
+            return null;
+        }
+        VirtualFile localJar = LocalFileSystem.getInstance().refreshAndFindFileByPath(parts.first);
+        if (localJar == null) {
+            return null;
+        }
+        return JarFileSystem.getInstance().refreshAndFindFileByPath(
+                localJar.getPath() + JAR_SEPARATOR + parts.second);
     }
 
     /**

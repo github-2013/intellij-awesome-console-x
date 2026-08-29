@@ -11,13 +11,19 @@ import static awesome.console.IntegrationTest.parseTemplate;
 import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import awesome.console.util.PathListHyperlinkInfo;
 import awesome.console.util.SingleFileFileHyperlinkInfo;
 import com.intellij.execution.filters.Filter;
+import com.intellij.openapi.application.ReadAction;
+import com.intellij.openapi.application.WriteAction;
+import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.util.Disposer;
+import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -27,6 +33,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -1015,6 +1022,91 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 段边界诱饵矩阵：后缀匹配必须按路径段对齐，不能用字符级 endsWith。
+	 * <p>
+	 * 上一版用裸 {@code endsWith} 时，只有当诱饵目录名与目标首段"共享尾字符"才会暴露问题，
+	 * 而当时的诱饵 {@code apps/dashboard} 恰好不共享，测试因此假绿。这里穷举
+	 * 「诱饵目录名以目标首段为后缀」的各种形态，任何一条命中都说明段边界判定失效。
+	 */
+	public void testPathSuffixMatchRespectsSegmentBoundary() throws Exception {
+		// 诱饵目录名均以目标首段 "e2e" 作为字符后缀，但不是同一个路径段
+		myFixture.addFileToProject("apps/my-e2e/dashboard/package.json", "{}\n");
+		myFixture.addFileToProject("apps/pre2e/dashboard/package.json", "{}\n");
+		myFixture.addFileToProject("apps/x-e2e/dashboard/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		// canary：诱饵本身按完整后缀仍必须可点，排除"缓存为空导致假绿"
+		Assert.assertFalse(
+				"Decoy itself must stay linkable via its own full suffix (cache canary)",
+				filter.extractFileLinksFromLine("Error in apps/my-e2e/dashboard/package.json", 0).isEmpty()
+		);
+
+		Assert.assertTrue(
+				"Suffix e2e/dashboard/package.json must not match apps/my-e2e/... on character boundary",
+				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/package.json", 0).isEmpty()
+		);
+	}
+
+	/**
+	 * 段边界判定的直接单元验证，覆盖整串相等、段对齐、字符对齐但段不对齐三类。
+	 */
+	public void testEndsWithPathSegments() {
+		Assert.assertTrue(AwesomeLinkFilter.endsWithPathSegments(
+				"a/b/c.txt", "b/c.txt"));
+		Assert.assertTrue("整串相等应成立", AwesomeLinkFilter.endsWithPathSegments(
+				"b/c.txt", "b/c.txt"));
+		Assert.assertFalse("字符后缀成立但段不对齐时必须拒绝", AwesomeLinkFilter.endsWithPathSegments(
+				"apps/my-e2e/dashboard/package.json", "e2e/dashboard/package.json"));
+		Assert.assertFalse("单段同理", AwesomeLinkFilter.endsWithPathSegments(
+				"src/MyIndex.tsx", "Index.tsx"));
+		Assert.assertFalse("空后缀不应匹配", AwesomeLinkFilter.endsWithPathSegments(
+				"a/b.txt", ""));
+	}
+
+	/**
+	 * 完全限定类名必须真的生成超链接，而不只是被正则切出来。
+	 * <p>
+	 * 类名候选由包路径精确匹配得出，若再拿点分名去做路径后缀比较必然失败
+	 * （点 vs 斜杠、真实文件还带扩展名），链接就会被整体丢弃。既有的
+	 * {@code testJavaClass} 只断言 detectPaths，覆盖不到这一层。
+	 */
+	public void testFullyQualifiedClassNameCreatesHyperlink() throws Exception {
+		// 路径必须相对源根：findFilesByClassName 要求 srcRoot + 包路径 == 文件父目录
+		myFixture.addFileToProject("com/example/demo/OrderService.java",
+				"package com.example.demo;\npublic class OrderService {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+				"\tat com.example.demo.OrderService:42", 0);
+		Assert.assertFalse("FQCN should produce a hyperlink, not just a regex match", links.isEmpty());
+		assertSingleHyperlinkEndsWith(links, "com/example/demo/OrderService.java");
+	}
+
+	/**
+	 * git 单侧为空的 rename 形态（新增/删除目录层级）不得产出重复分隔符。
+	 */
+	public void testGitRenameCandidatePathsCollapsesEmptySide() {
+		Assert.assertEquals(
+				List.of("src/lib/foo.js", "src/foo.js"),
+				AwesomeLinkFilter.gitRenameCandidatePaths("src/{ => lib}/foo.js")
+		);
+		Assert.assertEquals(
+				List.of("src/foo.js", "src/lib/foo.js"),
+				AwesomeLinkFilter.gitRenameCandidatePaths("src/{lib => }/foo.js")
+		);
+		Assert.assertEquals(
+				List.of("lib/foo.js", "foo.js"),
+				AwesomeLinkFilter.gitRenameCandidatePaths("{ => lib}/foo.js")
+		);
+		Assert.assertEquals(
+				List.of("foo.js", "lib/foo.js"),
+				AwesomeLinkFilter.gitRenameCandidatePaths("{lib => }/foo.js")
+		);
+	}
+
+	/**
 	 * git delete 的根因不是「剥到纯文件名」，而是逐级剥前缀：
 	 * {@code e2e/dashboard/package.json} 仍会命中 {@code apps/dashboard/package.json}。
 	 * 带目录时必须按完整后缀匹配。
@@ -1194,6 +1286,35 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * delete mode 带目录路径不得后缀回退到更长的仍存活文件。
+	 */
+	public void testDeletedPathDoesNotFallBackToLongerLiveSuffix() throws Exception {
+		myFixture.addFileToProject("apps/e2e/dashboard/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"更长后缀的存活文件本身必须可链（缓存 canary）",
+				filter.extractFileLinksFromLine("Error in apps/e2e/dashboard/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"delete mode e2e/dashboard/package.json 不得回退到 apps/e2e/...",
+				filter.extractFileLinksFromLine(
+						" delete mode 100644 e2e/dashboard/package.json", 0
+				).isEmpty()
+		);
+		List<Filter.ResultItem> createLinks = filter.extractFileLinksFromLine(
+				" create mode 100644 e2e/dashboard/package.json",
+				0
+		);
+		Assert.assertFalse(
+				"同一夹具下 create mode 仍应按完整后缀链到存活文件",
+				createLinks.isEmpty()
+		);
+		assertSingleHyperlinkEndsWith(createLinks, "apps/e2e/dashboard/package.json");
+	}
+
+	/**
 	 * 带目录的相对路径只要后缀仍能对上真实文件，就应继续生成超链接。
 	 * 例如控制台是 e2e/dashboard/server.js，文件在 src/e2e/dashboard/server.js。
 	 */
@@ -1313,6 +1434,36 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 突发预算拒绝不得 memo 成 TIMED_OUT，否则窗口过期后同一 suffix 无法再 walk。
+	 */
+	public void testBudgetRejectedSuffixIsNotMemoized() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		filter.forceRejectDiskSearchBudget = true;
+		try {
+			filter.extractFileLinksFromLine(" .../pages/budget/hit.ts | 2", 0);
+			Assert.assertFalse(
+					"预算拒绝不可写入 truncatedPathDiskCache",
+					filter.isTruncatedPathDiskCached("pages/budget/hit.ts")
+			);
+		} finally {
+			filter.forceRejectDiskSearchBudget = false;
+		}
+
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull(basePath);
+		Path late = Path.of(basePath, "budget-mod/pages/budget/hit.ts");
+		Files.createDirectories(late.getParent());
+		Files.writeString(late, "export const hit = 1;\n");
+		try {
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					" .../pages/budget/hit.ts | 2", 0);
+			Assert.assertFalse("预算拒绝未 memo 时，窗口外应能再 walk 到新文件", links.isEmpty());
+		} finally {
+			Files.deleteIfExists(late);
+		}
+	}
+
+	/**
 	 * 磁盘回退找到多个相同后缀时，不得静默取第一个做成单文件链接。
 	 * 文件进 VFS/cache 后走缓存 chooser 也必须不是单链。
 	 */
@@ -1334,6 +1485,75 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"Multiple hits must not silent-link the first file",
 				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
 		);
+	}
+
+	/**
+	 * 只落盘、不进 fileCache 的 git --stat 截断双命中，也不得静默单链。
+	 */
+	public void testGitDiffStatTruncatedPathDiskOnlyDoesNotSilentLink() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("测试项目 basePath 应存在", basePath);
+		Path moduleA = Path.of(basePath, "r31-a/pages/r31/hit.ts");
+		Path moduleB = Path.of(basePath, "r31-b/pages/r31/hit.ts");
+		Files.createDirectories(moduleA.getParent());
+		Files.createDirectories(moduleB.getParent());
+		Files.writeString(moduleA, "export const a = 1;\n");
+		Files.writeString(moduleB, "export const b = 1;\n");
+		try {
+			Assert.assertTrue(
+					"本断言要求尚未进 fileCache",
+					filter.resolveCachedFilesForPath("pages/r31/hit.ts").isEmpty()
+			);
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					" .../pages/r31/hit.ts | 2",
+					0
+			);
+			Assert.assertFalse("仅落盘双命中应能上链", links.isEmpty());
+			Assert.assertFalse(
+					"不得静默把第 0 条提成单链",
+					links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+			);
+		} finally {
+			Files.deleteIfExists(moduleA);
+			Files.deleteIfExists(moduleB);
+		}
+	}
+
+	/**
+	 * 仅落盘、尚未进 VFS 的双命中必须建成路径级 chooser，不得因读锁兑 VFS 失败整段放弃。
+	 */
+	public void testDiskOnlyPairBuildsPathChooserAfterVfsRefresh() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path moduleA = Path.of(basePath, "r03-a/pages/r03/hit.ts");
+		Path moduleB = Path.of(basePath, "r03-b/pages/r03/hit.ts");
+		Files.createDirectories(moduleA.getParent());
+		Files.createDirectories(moduleB.getParent());
+		Files.writeString(moduleA, "export const a = 1;\n");
+		Files.writeString(moduleB, "export const b = 1;\n");
+		try {
+			// 与 applyFilter 一样在读锁内解析：此时 findFileByPath 拒绝 refresh。
+			// Light 测试的 VFS 可能已看见 nio 文件，故不要求 find 为 null；
+			// 修前若读锁兑不出 ≥2 个身份会整段放弃，修后按绝对路径建 chooser。
+			List<Filter.ResultItem> links = ReadAction.compute(() ->
+					filter.extractFileLinksFromLine(" .../pages/r03/hit.ts | 2", 0)
+			);
+			Assert.assertFalse("仅落盘双命中应能上链", links.isEmpty());
+			Assert.assertFalse(
+					"不得静默把第 0 条提成单链",
+					links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+			);
+			Assert.assertTrue(
+					links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo
+			);
+			PathListHyperlinkInfo chooser = (PathListHyperlinkInfo) links.get(0).getHyperlinkInfo();
+			Assert.assertEquals(2, chooser.getAbsolutePaths().size());
+			List<VirtualFile> refreshed = chooser.refreshAndCollectVirtualFiles();
+			Assert.assertEquals("导航时 refresh 后应包含两项", 2, refreshed.size());
+		} finally {
+			Files.deleteIfExists(moduleA);
+			Files.deleteIfExists(moduleB);
+		}
 	}
 
 	/**
@@ -1405,6 +1625,152 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 目录 create 必须让 firstDir 枚举失效；knownDirs 0 命中不得当成闭合「没有」。
+	 */
+	public void testDirectoryCreateInvalidatesFirstDirLocationsCache() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		waitForReloadsToQuiesce(500, 5000);
+
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull(basePath);
+		Path seed = Path.of(basePath, "r01-seed/pages/seed.ts");
+		Path late = Path.of(basePath, "r01-mod/pages/r01/a.ts");
+		Files.createDirectories(seed.getParent());
+		Files.writeString(seed, "export const seed = 1;\n");
+		try {
+			AwesomeLinkFilter.DiskSearchResult seeded = filter.searchProjectDiskForSuffix("pages/seed.ts");
+			Assert.assertFalse("种子文件应能被磁盘搜索找到，status=" + seeded.status(),
+					seeded.paths().isEmpty());
+
+			AwesomeLinkFilter.DiskSearchResult missing = filter.searchProjectDiskForSuffix("pages/r01/a.ts");
+			Assert.assertTrue("新目录出现前不应命中 pages/r01/a.ts，status=" + missing.status(),
+					missing.paths().isEmpty());
+
+			Files.createDirectories(late.getParent());
+			Files.writeString(late, "export const a = 1;\n");
+
+			AwesomeLinkFilter.DiskSearchResult second = filter.searchProjectDiskForSuffix("pages/r01/a.ts");
+			Assert.assertFalse("knownDirs 0 命中必须回退 walk 才能找到新 pages 树，status="
+							+ second.status(),
+					second.paths().isEmpty());
+		} finally {
+			Files.deleteIfExists(seed);
+			Files.deleteIfExists(late);
+		}
+	}
+
+	/**
+	 * 无关文件的 VFS 事件不得清空整份磁盘 memo。
+	 * <p>
+	 * 整表清空会让构建/watch/git 期间 memo 寿命趋近 0，同一批未命中路径在每行输出上
+	 * 重复发起磁盘 walk —— 这是最典型的性能退化模式。失效必须按受影响后缀精准进行。
+	 */
+	public void testUnrelatedVfsChangeKeepsDiskMemo() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		waitForReloadsToQuiesce(500, 5000);
+
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path target = Path.of(basePath, "memo-keep/pages/keep/hit.ts");
+		Files.createDirectories(target.getParent());
+		Files.writeString(target, "export const keep = 1;\n");
+		AtomicInteger swaps = new AtomicInteger();
+		filter.beforeCacheSwapHook = swaps::incrementAndGet;
+		try {
+			Assert.assertFalse(
+					"Closed disk search should link",
+					filter.extractFileLinksFromLine(" .../pages/keep/hit.ts | 2", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"Closed disk search should be memoized",
+					filter.isTruncatedPathDiskCached("pages/keep/hit.ts")
+			);
+			AwesomeLinkFilter.DiskSearchResult sentinel = AwesomeLinkFilter.DiskSearchResult.of(
+					List.of("/tmp/r42-sentinel"), AwesomeLinkFilter.DiskSearchStatus.EXHAUSTED);
+			filter.putTruncatedPathDiskCacheForTest("pages/sentinel/keep.ts", sentinel);
+			Assert.assertTrue(filter.isTruncatedPathDiskCached("pages/sentinel/keep.ts"));
+
+			PsiFile unrelatedPsi = myFixture.addFileToProject(
+					"memo-unrelated/other/totally-different.txt", "x\n");
+			VirtualFile unrelated = unrelatedPsi.getVirtualFile();
+			PlatformTestUtil.waitWithEventsDispatching(
+					() -> "等待无关 VFS create 进入 after()",
+					() -> filter.isUnabsorbedAdd(unrelated),
+					10_000
+			);
+			Assert.assertEquals("无关变更窗口内不得整表换表", 0, swaps.get());
+			Assert.assertTrue(
+					"未换表时目标条目必须存活",
+					filter.isTruncatedPathDiskCached("pages/keep/hit.ts")
+			);
+			Assert.assertTrue(
+					"未换表时哨兵条目必须存活",
+					filter.isTruncatedPathDiskCached("pages/sentinel/keep.ts")
+			);
+		} finally {
+			filter.beforeCacheSwapHook = null;
+			Files.deleteIfExists(target);
+		}
+	}
+
+	/**
+	 * 影响到该后缀的 VFS 事件必须让对应 memo 条目失效，否则新文件永远不可点。
+	 */
+	public void testMatchingVfsChangeEvictsDiskMemoEntry() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		waitForReloadsToQuiesce(500, 5000);
+
+		String suffix = "pages/evict/late.ts";
+		filter.extractFileLinksFromLine(" .../pages/evict/late.ts | 2", 0);
+		Assert.assertTrue(
+				"Proven-absent result should be memoized",
+				filter.isTruncatedPathDiskCached(suffix)
+		);
+		AwesomeLinkFilter.DiskSearchResult sentinel = AwesomeLinkFilter.DiskSearchResult.of(
+				List.of("/tmp/r42-sentinel-evict"), AwesomeLinkFilter.DiskSearchStatus.EXHAUSTED);
+		filter.putTruncatedPathDiskCacheForTest("pages/sentinel/evict.ts", sentinel);
+		Assert.assertTrue(filter.isTruncatedPathDiskCached("pages/sentinel/evict.ts"));
+
+		AtomicInteger swaps = new AtomicInteger();
+		filter.beforeCacheSwapHook = swaps::incrementAndGet;
+		try {
+			myFixture.addFileToProject("memo-evict/pages/evict/late.ts", "export const late = 1;\n");
+			PlatformTestUtil.waitWithEventsDispatching(
+					() -> "等待匹配后缀的 memo 被精准失效",
+					() -> !filter.isTruncatedPathDiskCached(suffix),
+					10_000
+			);
+			Assert.assertEquals("精准失效不得整表换表", 0, swaps.get());
+			Assert.assertTrue(
+					"哨兵条目应在精准失效后存活（区分整表清空）",
+					filter.isTruncatedPathDiskCached("pages/sentinel/evict.ts")
+			);
+		} finally {
+			filter.beforeCacheSwapHook = null;
+		}
+	}
+
+	/**
+	 * 无扩展名但真实存在的文件（Dockerfile / Makefile / LICENSE 一类）必须可经磁盘兜底解析。
+	 * 以"含点"作为唯一判据会把它们永久排除。
+	 */
+	public void testExtensionlessFileNameIsScannable() {
+		Assert.assertTrue("Dockerfile 应可搜索",
+				AwesomeLinkFilter.looksLikeFileNameForDiskSearch("Dockerfile"));
+		Assert.assertTrue("Makefile 应可搜索",
+				AwesomeLinkFilter.looksLikeFileNameForDiskSearch("Makefile"));
+		Assert.assertTrue("LICENSE 应可搜索",
+				AwesomeLinkFilter.looksLikeFileNameForDiskSearch("LICENSE"));
+		Assert.assertTrue("带扩展名照旧可搜索",
+				AwesomeLinkFilter.looksLikeFileNameForDiskSearch("index.tsx"));
+		// git --stat 行尾的变更计数仍必须被挡住
+		Assert.assertFalse("纯数字变更计数不应触发全盘搜索",
+				AwesomeLinkFilter.looksLikeFileNameForDiskSearch("2"));
+		Assert.assertFalse("两位数变更计数同理",
+				AwesomeLinkFilter.looksLikeFileNameForDiskSearch("14"));
+	}
+
+	/**
 	 * 纯文件名截断路径无法 walk 子树，空结果不得当成「证明没有」写入负缓存。
 	 */
 	public void testFilenameOnlyTruncatedPathIsUnscannableAndNotMemoized() throws Exception {
@@ -1428,6 +1794,148 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"SKIP_DIRS first segment must not be stored as proven-absent",
 				filter.isTruncatedPathDiskCached("node_modules/pkg/index.ts")
 		);
+	}
+
+	/**
+	 * IDE exclude root 下的可匹配文件不得被磁盘 walk 命中（不是 SKIP_DIRS 首段）。
+	 */
+	public void testExcludedRootFileIsNotFoundByDiskSearch() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("测试项目 basePath 应存在", basePath);
+		Path extraRoot = Path.of(basePath, "r32-root");
+		Path excludedDir = extraRoot.resolve("excluded");
+		Path hit = excludedDir.resolve("pages/r32/only-here.ts");
+		Files.createDirectories(hit.getParent());
+		Files.writeString(hit, "export const only = 1;\n");
+		VirtualFile extraVf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(extraRoot);
+		try {
+			VirtualFile excludedVf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(excludedDir);
+			Assert.assertNotNull("额外 content root 应进入 VFS", extraVf);
+			Assert.assertNotNull("exclude 目录应进入 VFS", excludedVf);
+			final VirtualFile contentRoot = extraVf;
+			WriteAction.runAndWait(() -> {
+				com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), contentRoot);
+				com.intellij.testFramework.PsiTestUtil.addExcludedRoot(getModule(), excludedVf);
+			});
+
+			filter.manualRebuild();
+			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+
+			AwesomeLinkFilter.DiskSearchResult result =
+					filter.searchProjectDiskForSuffix("pages/r32/only-here.ts");
+			Assert.assertTrue(
+					"exclude root 下的唯一匹配不得命中，paths=" + result.paths()
+							+ " status=" + result.status(),
+					result.paths().isEmpty()
+			);
+		} finally {
+			if (extraVf != null) {
+				VirtualFile toRemove = extraVf;
+				WriteAction.runAndWait(() ->
+						com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), toRemove));
+			}
+			Files.deleteIfExists(hit);
+		}
+	}
+
+	/**
+	 * 非搜索根子目录 listFiles 失败只跳过该子树；已有唯一命中且其余根走完仍可上链。
+	 * 搜索根本身列举失败仍保持失败语义。
+	 */
+	public void testUnreadableSiblingDoesNotPoisonUniqueDiskHit() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path hit = Path.of(basePath, "r10-keep/pages/r10/hit.ts");
+		Path poisonNested = Path.of(basePath, "r10-poison/nested");
+		Files.createDirectories(hit.getParent());
+		Files.createDirectories(poisonNested);
+		Files.writeString(hit, "export const hit = 1;\n");
+		File rootDir = new File(basePath);
+		try {
+			filter.forceNullDirectoryListing = dir -> "r10-poison".equals(dir.getName());
+			AwesomeLinkFilter.DiskSearchResult sibling =
+					filter.searchProjectDiskForSuffix("pages/r10/hit.ts");
+			Assert.assertEquals(
+					"不可读兄弟子树不得把整次搜索标成 WALK_FAILED",
+					AwesomeLinkFilter.DiskSearchStatus.EXHAUSTED,
+					sibling.status()
+			);
+			Assert.assertEquals("应只命中可读子树里的唯一文件", 1, sibling.paths().size());
+			Assert.assertTrue("唯一命中应可上链", sibling.canLink());
+			Assert.assertTrue(
+					sibling.paths().get(0).replace('\\', '/').endsWith("r10-keep/pages/r10/hit.ts")
+			);
+			Assert.assertFalse(
+					"闭合唯一命中应能生成超链接",
+					filter.extractFileLinksFromLine(" .../pages/r10/hit.ts | 2", 0).isEmpty()
+			);
+
+			filter.forceNullDirectoryListing = dir ->
+					dir.getAbsolutePath().equals(rootDir.getAbsolutePath());
+			AwesomeLinkFilter.DiskSearchResult rootFail =
+					filter.searchProjectDiskForSuffix("pages/r10/root-fail.ts");
+			Assert.assertEquals(
+					"搜索根本身列举失败仍须是失败语义",
+					AwesomeLinkFilter.DiskSearchStatus.WALK_FAILED,
+					rootFail.status()
+			);
+		} finally {
+			filter.forceNullDirectoryListing = null;
+			Files.deleteIfExists(hit);
+		}
+	}
+
+	/**
+	 * 磁盘 walk 不得跟随目录 symlink 走出搜索根。
+	 */
+	public void testDiskSearchDoesNotFollowDirectorySymlinkOutsideRoots() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path external = Files.createTempDirectory("r09-external");
+		Path leak = external.resolve("pages").resolve("leak.ts");
+		Files.createDirectories(leak.getParent());
+		Files.writeString(leak, "export const leak = 1;\n");
+		Path link = Path.of(basePath, "r09-link");
+		Files.createDirectories(link.getParent());
+		Files.deleteIfExists(link);
+		Files.createSymbolicLink(link, external.toAbsolutePath());
+		try {
+			AwesomeLinkFilter.DiskSearchResult result =
+					filter.searchProjectDiskForSuffix("pages/leak.ts");
+			Path externalReal = external.toRealPath();
+			for (String path : result.paths()) {
+				Path real = Path.of(path).toRealPath();
+				Assert.assertFalse(
+						"不得命中项目外路径 " + real,
+						real.startsWith(externalReal)
+				);
+				String normalized = path.replace('\\', '/');
+				boolean underRoot = false;
+				for (File root : filter.collectDiskSearchRoots()) {
+					String prefix = root.getAbsolutePath().replace('\\', '/');
+					if (normalized.equals(prefix) || normalized.startsWith(prefix + "/")) {
+						underRoot = true;
+						break;
+					}
+				}
+				Assert.assertTrue(path + " 必须落在 collectDiskSearchRoots 下", underRoot);
+			}
+			Assert.assertFalse(
+					"跟随 symlink 的项目外 leak 不得进入命中",
+					result.paths().stream().anyMatch(p -> {
+						try {
+							return Path.of(p).toRealPath().equals(leak.toRealPath());
+						} catch (Exception e) {
+							return false;
+						}
+					})
+			);
+		} finally {
+			Files.deleteIfExists(link);
+			Files.deleteIfExists(leak);
+			Files.deleteIfExists(leak.getParent());
+			Files.deleteIfExists(external);
+		}
 	}
 
 	/**
@@ -3435,11 +3943,11 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		AwesomeLinkFilter fresh = new AwesomeLinkFilter(getProject());
 		Disposer.register(getTestRootDisposable(), fresh);
 
-		if (fresh.isCacheBuilding()) {
-			AwesomeLinkFilter.IndexStatistics before = fresh.getIndexStatistics();
-			assertEquals("Last rebuild time should be 0 before init completes", 0, before.getLastRebuildTime());
-			assertEquals("File cache should be empty before init completes", 0, before.getTotalCachedFiles());
-		}
+		assertTrue("before 契约不可跳过：构造后 init 必须仍在途，否则抢跑",
+				fresh.isCacheBuilding() || fresh.isReloadScheduledOrRunning());
+		AwesomeLinkFilter.IndexStatistics before = fresh.getIndexStatistics();
+		assertEquals("Last rebuild time should be 0 before init completes", 0, before.getLastRebuildTime());
+		assertEquals("File cache should be empty before init completes", 0, before.getTotalCachedFiles());
 
 		fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
 		assertFalse("Cache should not be building after whenCacheReady", fresh.isCacheBuilding());
@@ -3480,11 +3988,16 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	 * 验证实时进度监听器在重建过程中会被调用（含最终进度），即使没有 schedule 回调。
 	 */
 	public void testLiveProgressListenerFiresDuringReload() throws Exception {
+		myFixture.addFileToProject("r34/keep.ts", "export {};\n");
 		AtomicInteger listenerCalls = new AtomicInteger();
 		AtomicInteger lastProcessed = new AtomicInteger(-1);
+		AtomicInteger lastIndexed = new AtomicInteger(-1);
+		AtomicInteger lastIgnored = new AtomicInteger(-1);
 		Consumer<AwesomeLinkFilter.ReloadProgress> listener = progress -> {
 			listenerCalls.incrementAndGet();
 			lastProcessed.set(progress.getProcessedCount());
+			lastIndexed.set(progress.getIndexedCount());
+			lastIgnored.set(progress.getIgnoredCount());
 			assertTrue("Indexed count should be non-negative", progress.getIndexedCount() >= 0);
 			assertTrue("Ignored count should be non-negative", progress.getIgnoredCount() >= 0);
 		};
@@ -3492,7 +4005,15 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		try {
 			filter.scheduleReloadAsync("progress listener", null, true).get(10, TimeUnit.SECONDS);
 			assertTrue("Live progress listener should be invoked", listenerCalls.get() > 0);
-			assertTrue("Processed count should be non-negative", lastProcessed.get() >= 0);
+			AwesomeLinkFilter.IndexStatistics stats = filter.getIndexStatistics();
+			assertTrue("夹具须使扫描数>0，否则终态全 0 无法锁 publish",
+					stats.getScannedFiles() > 0);
+			assertEquals("终态 processed 应对齐 scanned",
+					stats.getScannedFiles(), lastProcessed.get());
+			assertEquals("终态 indexed 应对齐 matched",
+					stats.getMatchedFiles(), lastIndexed.get());
+			assertEquals("终态 ignored 应对齐 IndexStatistics",
+					stats.getIgnoredFiles(), lastIgnored.get());
 		} finally {
 			filter.removeReloadProgressListener(listener);
 		}
@@ -3502,16 +4023,87 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	 * 验证重建已经开始后仍能挂接监听器（设置页中途打开的场景）。
 	 */
 	public void testLiveProgressListenerAttachesAfterReloadStarted() throws Exception {
-		AwesomeLinkFilter fresh = new AwesomeLinkFilter(getProject());
-		Disposer.register(getTestRootDisposable(), fresh);
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		assertFalse("挂接前应先空闲，再开二次 rebuild", filter.isReloadScheduledOrRunning());
+
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+
 		AtomicInteger lateCalls = new AtomicInteger();
 		Consumer<AwesomeLinkFilter.ReloadProgress> lateListener = progress -> lateCalls.incrementAndGet();
-		fresh.addReloadProgressListener(lateListener);
 		try {
-			fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
-			assertTrue("Listener attached during init should receive progress", lateCalls.get() > 0);
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("r28 mid-attach", null, true);
+			assertTrue("应先进入 reloadInProgress/swap 窗口", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+			assertTrue("中途挂接前 rebuild 必须仍在途", filter.isReloadScheduledOrRunning());
+
+			filter.addReloadProgressListener(lateListener);
+			assertTrue("重建已开始后挂接必须立即回放进行中快照", lateCalls.get() > 0);
+
+			releaseSwap.countDown();
+			reload.get(10, TimeUnit.SECONDS);
 		} finally {
-			fresh.removeReloadProgressListener(lateListener);
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
+			filter.removeReloadProgressListener(lateListener);
+		}
+	}
+
+	/**
+	 * 已挂接监听在每一轮重建开始必须先收到 (0,0,0)；防抖排队尚未 reloadInProgress 时挂接不得回放上一轮终态。
+	 */
+	public void testExistingProgressListenerReceivesZeroAtEachReloadStart() throws Exception {
+		myFixture.addFileToProject("r15/keep.ts", "export {};\n");
+		filter.manualRebuild();
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		assertFalse("第一轮结束后应空闲", filter.isReloadScheduledOrRunning());
+
+		List<AwesomeLinkFilter.ReloadProgress> snapshots = new CopyOnWriteArrayList<>();
+		Consumer<AwesomeLinkFilter.ReloadProgress> listener = snapshots::add;
+		filter.addReloadProgressListener(listener);
+		try {
+			assertEquals("空闲挂接不得回放终态", 0, snapshots.size());
+
+			filter.scheduleReloadAsync("r15 second", null, true).get(10, TimeUnit.SECONDS);
+			Assert.assertFalse("第二轮应发布进度", snapshots.isEmpty());
+			AwesomeLinkFilter.ReloadProgress first = snapshots.get(0);
+			Assert.assertEquals("第二轮第一条必须是起步 0", 0, first.getProcessedCount());
+			Assert.assertEquals(0, first.getIndexedCount());
+			Assert.assertEquals(0, first.getIgnoredCount());
+			Assert.assertTrue(
+					"第二轮随后应有非零进度，否则 (0,0,0) 无法与空项目终态区分",
+					snapshots.stream().anyMatch(p ->
+							p.getProcessedCount() > 0 || p.getIndexedCount() > 0)
+			);
+
+			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+			assertFalse(filter.isReloadScheduledOrRunning());
+
+			AtomicInteger debounceAttachCalls = new AtomicInteger();
+			filter.scheduleReloadAsync("r15 debounce", null, false);
+			Assert.assertTrue(
+					"防抖排队后应显示 scheduled",
+					filter.isReloadScheduledOrRunning()
+			);
+			filter.addReloadProgressListener(progress -> debounceAttachCalls.incrementAndGet());
+			Assert.assertEquals(
+					"防抖间隙尚未 reloadInProgress 时挂接不得回放上一轮终态",
+					0,
+					debounceAttachCalls.get()
+			);
+			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		} finally {
+			filter.removeReloadProgressListener(listener);
 		}
 	}
 
@@ -3541,16 +4133,34 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		assertTrue("Cache should be initialized before secondary reload", filter.isCacheInitialized());
 		assertFalse("First-init building flag should be false after init", filter.isCacheBuilding());
 
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+
 		AtomicInteger progressCalls = new AtomicInteger();
 		Consumer<AwesomeLinkFilter.ReloadProgress> listener = progress -> progressCalls.incrementAndGet();
 		filter.addReloadProgressListener(listener);
 		try {
 			CompletableFuture<Void> reload = filter.scheduleReloadAsync("secondary reload", null, true);
-			assertTrue("Secondary reload should be scheduled or running",
-					filter.isReloadScheduledOrRunning() || reload.isDone());
+			assertTrue("二次 reload 应进入 swap 窗口", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+			assertTrue("设置页可见性必须看 flag，不得 || isDone()",
+					filter.isReloadScheduledOrRunning());
+			releaseSwap.countDown();
 			reload.get(10, TimeUnit.SECONDS);
 			assertTrue("Secondary reload should publish progress to live listeners", progressCalls.get() > 0);
 		} finally {
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
 			filter.removeReloadProgressListener(listener);
 			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
 			assertFalse("Reload should be idle after secondary reload", filter.isReloadScheduledOrRunning());
@@ -3722,6 +4332,54 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
+	 * firstDir 位置表与磁盘 memo 共用容量上限；触顶整体清空，memo 触顶时一并清 firstDir。
+	 */
+	public void testFirstDirLocationsCacheIsBounded() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		int max = AwesomeLinkFilter.TRUNCATED_PATH_DISK_CACHE_MAX_ENTRIES;
+		List<String> oneDir = List.of("/tmp/r43-bound");
+		for (int i = 0; i < max + 1; i++) {
+			filter.putFirstDirLocationsCacheForTest("fd" + i, oneDir);
+		}
+		Assert.assertTrue(
+				"firstDir 表写入上限+1 后不得超过约定上限",
+				filter.firstDirLocationsCacheSize() <= max
+		);
+		Assert.assertEquals(
+				"触顶整体清空后再写入当前条目，大小应为 1",
+				1,
+				filter.firstDirLocationsCacheSize()
+		);
+
+		filter.putFirstDirLocationsCacheForTest("keep-until-memo-cap", oneDir);
+		Assert.assertEquals(
+				"memo 未触顶时 firstDir 条目应保留",
+				2,
+				filter.firstDirLocationsCacheSize()
+		);
+		AwesomeLinkFilter.DiskSearchResult dummy = AwesomeLinkFilter.DiskSearchResult.of(
+				List.of("/tmp/r43-memo"),
+				AwesomeLinkFilter.DiskSearchStatus.EXHAUSTED
+		);
+		for (int i = 0; i < max + 1; i++) {
+			filter.putTruncatedPathDiskCacheForTest("memo/" + i + ".ts", dummy);
+		}
+		Assert.assertEquals(
+				"memo 触顶须同步清空 firstDir",
+				0,
+				filter.firstDirLocationsCacheSize()
+		);
+		Assert.assertFalse(
+				"memo 触顶清空后旧 suffix 不得仍在表中",
+				filter.isTruncatedPathDiskCached("memo/0.ts")
+		);
+		Assert.assertTrue(
+				"memo 触顶清空后只保留刚写入的那条",
+				filter.isTruncatedPathDiskCached("memo/" + max + ".ts")
+		);
+	}
+
+	/**
 	 * 增量写入 live cache 的文件，不得被一份不含该文件的 FileIndex snapshot 换表后永远消失。
 	 * 这条锁 absorb/sticky；after() 记账由 {@link #testVfsCreateDuringReloadIsRecordedByAfter} 覆盖。
 	 */
@@ -3773,6 +4431,133 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			filter.beforeCacheSwapHook = null;
 			filter.reloadSnapshotExclusion = null;
 			filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		}
+	}
+
+	/**
+	 * 忽略的 unabsorbed add 不得与本轮 FileIndex 忽略统计重复计数。
+	 */
+	public void testIgnoredUnabsorbedAddIsCountedOnce() throws Exception {
+		awesome.console.config.AwesomeConsoleStorage storage =
+				awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUse = storage.useIgnorePattern;
+		String originalPattern = storage.getIgnorePatternText();
+		CountDownLatch arrivedSeen = new CountDownLatch(1);
+		CountDownLatch releaseSeen = new CountDownLatch(1);
+		CountDownLatch arrivedMiss = new CountDownLatch(1);
+		CountDownLatch releaseMiss = new CountDownLatch(1);
+		AwesomeLinkFilter fresh = null;
+		try {
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("r40-unique-ignored-xyz");
+			fresh = new AwesomeLinkFilter(getProject());
+			Disposer.register(getTestRootDisposable(), fresh);
+			PsiFile createdPsi = myFixture.addFileToProject(
+					"r40/r40-unique-ignored-xyz.ts", "export {};\n"
+			);
+			VirtualFile created = createdPsi.getVirtualFile();
+			fresh.manualRebuild();
+			fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
+			int afterFirst = fresh.getIndexStatistics().getIgnoredFiles();
+			Assert.assertTrue("忽略文件应计入统计", afterFirst >= 1);
+
+			fresh.beforeCacheSwapHook = () -> {
+				arrivedSeen.countDown();
+				try {
+					if (!releaseSeen.await(10, TimeUnit.SECONDS)) {
+						throw new IllegalStateException("Timed out waiting to release seen-swap");
+					}
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new IllegalStateException(e);
+				}
+			};
+			CompletableFuture<Void> seenReload = fresh.scheduleReloadAsync("r40 seen", null, true);
+			Assert.assertTrue(arrivedSeen.await(10, TimeUnit.SECONDS));
+			fresh.addToLiveFileCache(created);
+			releaseSeen.countDown();
+			seenReload.get(10, TimeUnit.SECONDS);
+			Assert.assertEquals(
+					"快照已统计则 absorb 不得再加一次",
+					afterFirst,
+					fresh.getIndexStatistics().getIgnoredFiles()
+			);
+
+			fresh.reloadSnapshotExclusion = file -> file.equals(created);
+			fresh.beforeCacheSwapHook = () -> {
+				arrivedMiss.countDown();
+				try {
+					if (!releaseMiss.await(10, TimeUnit.SECONDS)) {
+						throw new IllegalStateException("Timed out waiting to release miss-swap");
+					}
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new IllegalStateException(e);
+				}
+			};
+			CompletableFuture<Void> missReload = fresh.scheduleReloadAsync("r40 miss", null, true);
+			Assert.assertTrue(arrivedMiss.await(10, TimeUnit.SECONDS));
+			fresh.addToLiveFileCache(created);
+			releaseMiss.countDown();
+			missReload.get(10, TimeUnit.SECONDS);
+			Assert.assertEquals(
+					"快照未见时仍须补计一次",
+					afterFirst,
+					fresh.getIndexStatistics().getIgnoredFiles()
+			);
+		} finally {
+			releaseSeen.countDown();
+			releaseMiss.countDown();
+			if (fresh != null) {
+				fresh.beforeCacheSwapHook = null;
+				fresh.reloadSnapshotExclusion = null;
+			}
+			storage.useIgnorePattern = originalUse;
+			storage.setIgnorePatternText(originalPattern);
+		}
+	}
+
+	/**
+	 * dispose 必须清 unabsorbed，且在飞 reload 不得把 snapshot 写回已释放实例。
+	 */
+	public void testDisposePreventsInFlightReloadFromSwappingCache() throws Exception {
+		myFixture.addFileToProject("r13/keep.ts", "export {};\n");
+		filter.manualRebuild();
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		Assert.assertTrue("重建完成后缓存不应为空", filter.getTotalCachedFiles() > 0);
+
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+		try {
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("r13 dispose", null, true);
+			Assert.assertTrue("Reload should reach swap hook", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+			filter.dispose();
+			Assert.assertEquals("dispose 后缓存应为空", 0, filter.getTotalCachedFiles());
+			releaseSwap.countDown();
+			try {
+				reload.get(10, TimeUnit.SECONDS);
+			} catch (Exception ignored) {
+				// dispose 可能取消 future
+			}
+			Assert.assertEquals(
+					"在飞 reload 不得把 snapshot 写回已 dispose 的实例",
+					0,
+					filter.getTotalCachedFiles()
+			);
+		} finally {
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
 		}
 	}
 
@@ -3900,15 +4685,114 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * 增量删除：命中缓存不减忽略数；未命中才减，且不会减到负数。
+	 * 增量删除：命中缓存不减忽略数；未命中且确曾忽略才减，且不会减到负数。
 	 */
 	public void testIgnoredCountAdjustsByCacheMembership() {
 		assertEquals("Matched file delete must not change ignored count",
-				10, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(true, 10));
+				10, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(true, true, 10));
+		assertEquals("Uncached non-ignored delete must not change ignored count",
+				10, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, false, 10));
 		assertEquals("Ignored file delete decrements ignored count",
-				9, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, 10));
+				9, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, true, 10));
 		assertEquals("Ignored count must not go negative",
-				0, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, 0));
+				0, AwesomeLinkFilter.adjustIgnoredCountAfterRemoval(false, true, 0));
+	}
+
+	/**
+	 * 删除从未索引的非内容文件不得误减 ignoredFilesCount；
+	 * 确曾忽略的内容文件仍应递减；命中缓存的匹配文件删除不得改计数。
+	 */
+	public void testDeletingNonContentFileDoesNotDecreaseIgnoredCount() throws Exception {
+		awesome.console.config.AwesomeConsoleStorage storage =
+				awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUse = storage.useIgnorePattern;
+		String originalPattern = storage.getIgnorePatternText();
+		AwesomeLinkFilter fresh = null;
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("测试项目 basePath 应存在", basePath);
+		Path excludedDir = Path.of(basePath, "r41-build");
+		Path outsiderPath = excludedDir.resolve("r41-outsider.txt");
+		try {
+			storage.useIgnorePattern = true;
+			// 非内容夹具也要命中忽略正则，否则只锁住「不匹配正则」那一半。
+			storage.setIgnorePatternText("r41-canary-ignored|r41-outsider");
+			fresh = new AwesomeLinkFilter(getProject());
+			Disposer.register(getTestRootDisposable(), fresh);
+
+			PsiFile canaryPsi = myFixture.addFileToProject(
+					"r41/r41-canary-ignored.ts", "export {};\n");
+			VirtualFile canary = canaryPsi.getVirtualFile();
+			PsiFile matchedPsi = myFixture.addFileToProject(
+					"r41/r41-matched-keep.ts", "export {};\n");
+			VirtualFile matched = matchedPsi.getVirtualFile();
+
+			fresh.manualRebuild();
+			fresh.whenCacheReady().get(10, TimeUnit.SECONDS);
+			waitForReloadsToQuiesce(300, 5000);
+			int canaryIgnored = fresh.getIndexStatistics().getIgnoredFiles();
+			Assert.assertTrue("应先建立 ignoredFilesCount>0 的 canary", canaryIgnored >= 1);
+			Assert.assertFalse(
+					"匹配文件应在缓存中",
+					fresh.resolveCachedFilesForPath("r41/r41-matched-keep.ts").isEmpty()
+			);
+
+			Files.createDirectories(excludedDir);
+			Files.writeString(outsiderPath, "not-in-content\n");
+			VirtualFile outsider = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(outsiderPath);
+			Assert.assertNotNull("非内容文件应进入 VFS", outsider);
+			String normalizedBase = basePath.replace('\\', '/');
+			if (!normalizedBase.endsWith("/")) {
+				normalizedBase += "/";
+			}
+			Assert.assertTrue(
+					"非内容文件仍在 basePath 下，删除才会走进 filesToDelete",
+					outsider.getPath().replace('\\', '/').startsWith(normalizedBase)
+			);
+			Assert.assertFalse(
+					"夹具必须在 content 外，且文件名命中忽略正则",
+					ProjectFileIndex.getInstance(getProject()).isInContent(outsider)
+			);
+
+			AwesomeLinkFilter waitFresh = fresh;
+			WriteAction.runAndWait(() -> outsider.delete(this));
+			PlatformTestUtil.waitWithEventsDispatching(
+					() -> "等待非内容文件删除进入 unabsorbedDeletes",
+					() -> waitFresh.isUnabsorbedDelete(outsider),
+					10_000
+			);
+			Assert.assertEquals(
+					"删除非内容文件不得误减忽略计数",
+					canaryIgnored,
+					fresh.getIndexStatistics().getIgnoredFiles()
+			);
+
+			// Light 内容文件在 temp://，delete 的 basePath 前缀对不上；直接走精准删除分支。
+			fresh.processPublishedDeletions(List.of(canary));
+			Assert.assertEquals(
+					"确曾忽略的内容文件删除仍应递减",
+					canaryIgnored - 1,
+					fresh.getIndexStatistics().getIgnoredFiles()
+			);
+
+			int afterIgnoredDelete = fresh.getIndexStatistics().getIgnoredFiles();
+			fresh.processPublishedDeletions(List.of(matched));
+			Assert.assertEquals(
+					"命中缓存的匹配文件删除不得改忽略计数",
+					afterIgnoredDelete,
+					fresh.getIndexStatistics().getIgnoredFiles()
+			);
+		} finally {
+			storage.useIgnorePattern = originalUse;
+			storage.setIgnorePatternText(originalPattern);
+			Files.deleteIfExists(outsiderPath);
+			try {
+				if (Files.exists(excludedDir)) {
+					Files.delete(excludedDir);
+				}
+			} catch (Exception ignored) {
+				// 排除根可能仍被模块占用
+			}
+		}
 	}
 
 	/**
@@ -3921,6 +4805,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		boolean originalUseIgnorePattern = storage.useIgnorePattern;
 		String originalIgnorePattern = storage.getIgnorePatternText();
 		try {
+			myFixture.addFileToProject("r30/keep.ts", "export {};\n");
 			storage.useIgnorePattern = true;
 			storage.setIgnorePatternText(".");
 			// 立即重建，避免防抖导致 whenCacheReady 在任务入队前就返回
@@ -3928,10 +4813,11 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 					.get(10, TimeUnit.SECONDS);
 
 			AwesomeLinkFilter.IndexStatistics before = filter.getIndexStatistics();
-			if (before.getScannedFiles() > 0) {
-				assertTrue("Ignore-all rebuild should record ignored files",
-						before.getIgnoredFiles() > 0);
-			}
+			assertTrue("夹具文件必须被扫描到，scanned=" + before.getScannedFiles(),
+					before.getScannedFiles() > 0);
+			assertTrue("Ignore-all rebuild should record ignored files, ignored="
+							+ before.getIgnoredFiles(),
+					before.getIgnoredFiles() > 0);
 
 			filter.clearCache();
 			AwesomeLinkFilter.IndexStatistics after = filter.getIndexStatistics();

@@ -3,7 +3,7 @@ package awesome.console.config;
 import awesome.console.util.RegexUtils;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.options.Configurable;
-import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.application.ApplicationManager;
 import java.util.Objects;
@@ -79,37 +79,26 @@ public class AwesomeConsoleConfig implements Configurable {
 	}
 
 	/**
-	 * 显示错误对话框（默认消息）
-	 * 用于数值输入错误的情况
+	 * 构造数值类校验失败异常
 	 */
-	private void showErrorDialog() {
-		showErrorDialog("Invalid value", "Error: Please enter a positive number.");
+	private static ConfigurationException invalidValue(@NotNull final String message) {
+		return new ConfigurationException(message, "Invalid Value");
 	}
 
 	/**
-	 * 显示自定义错误对话框。
-	 * 使用 IntelliJ Messages（DialogWrapper）而非 JOptionPane，
-	 * 以便标题栏主题和按钮文案跟随 IDE，而不是 JVM Locale / 原生窗口装饰。
+	 * 校验正则表达式，非法时抛出配置异常。
+	 * <p>
+	 * 平台契约：{@link Configurable#apply()} 只能通过抛出 {@link ConfigurationException}
+	 * 报告校验失败，平台据此阻止设置对话框关闭并展示错误。早期实现用对话框提示后
+	 * {@code return}，平台无从知晓失败，对话框照常关闭，导致同一次 apply 中其它
+	 * 合法修改在赋值语句执行前就被静默丢弃。
 	 *
-	 * @param title 对话框标题
-	 * @param message 错误消息内容
-	 */
-	private void showErrorDialog(String title, String message) {
-		Messages.showErrorDialog(form.mainPanel, message, title);
-	}
-
-	/**
-	 * 检查正则表达式是否有效
-	 * 
 	 * @param pattern 要检查的正则表达式字符串
-	 * @return 如果正则表达式有效则返回true，否则显示错误对话框并返回false
 	 */
-	private boolean checkRegex(@NotNull final String pattern) {
+	private void validateRegex(@NotNull final String pattern) throws ConfigurationException {
 		if (pattern.isEmpty() || !RegexUtils.isValidRegex(pattern)) {
-			showErrorDialog("Invalid value", "Invalid pattern: " + StringUtil.trimMiddle(pattern, 150));
-			return false;
+			throw invalidValue("Invalid pattern: " + StringUtil.trimMiddle(pattern, 150));
 		}
-		return true;
 	}
 
 	/**
@@ -187,19 +176,18 @@ public class AwesomeConsoleConfig implements Configurable {
 	 * 验证用户输入并将表单中的值保存到配置存储中
 	 */
 	@Override
-	public void apply() {
+	public void apply() throws ConfigurationException {
+		// 校验必须全部先行：任何一项失败都以异常终止，避免部分赋值造成配置半写入
 		final int maxLength = (int) form.maxLengthSpinner.getValue();
 		if (maxLength < 1) {
-			showErrorDialog();
-			return;
+			throw invalidValue("Error: Please enter a positive number.");
 		}
 
 		final boolean useIgnorePattern = form.ignorePatternCheckBox.isSelected();
 		final String ignorePatternText = form.ignorePatternTextField.getText().trim();
 
-		if (!Objects.equals(ignorePatternText, storage.getIgnorePatternText()) &&
-				!checkRegex(ignorePatternText)) {
-			return;
+		if (useIgnorePattern && !Objects.equals(ignorePatternText, storage.getIgnorePatternText())) {
+			validateRegex(ignorePatternText);
 		}
 
 		// 检测配置变更，用于决定是否需要通知监听器
@@ -235,6 +223,9 @@ public class AwesomeConsoleConfig implements Configurable {
 		// 发布配置变更事件（包括需要重建缓存的变更和其他配置变更）
 		if (changeType != null) {
 			notifyConfigChanged(changeType);
+			if (changeType != AwesomeConsoleConfigListener.ConfigChangeType.OTHER_CHANGED) {
+				form.updateIndexStatus();
+			}
 		}
 	}
 

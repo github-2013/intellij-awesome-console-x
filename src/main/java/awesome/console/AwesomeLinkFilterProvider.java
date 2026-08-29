@@ -12,6 +12,7 @@ import com.intellij.psi.search.GlobalSearchScope;
 import com.intellij.terminal.TerminalExecutionConsole;
 import com.intellij.openapi.diagnostic.Logger;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import static awesome.console.util.ExceptionHandling.rethrowIfExceptionMustNotBeLogged;
 
@@ -118,11 +119,11 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 		//     false. There's no better way determine whether a Filter is running in the Terminal,
 		//     even if it's not a good way. Since Filter is cached as a singleton, everything has
 		//     become more complicated.
-		// 从缓存中获取项目对应的过滤器数组，如果不存在则创建新的AwesomeLinkFilter实例并存入缓存
-		Filter[] filters = cache.computeIfAbsent(project, (key) -> new Filter[]{new AwesomeLinkFilter(project)});
-		// 将过滤器数组的第一个元素转换为AwesomeLinkFilter类型，并设置其isTerminal属性值
+		Filter[] filters = getOrCreateFilters(project);
+		if (filters == null) {
+			return new Filter[0];
+		}
 		((AwesomeLinkFilter) filters[0]).isTerminal.set(isTerminal);
-		// 返回过滤器数组
 		return filters;
 	}
 
@@ -131,11 +132,46 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 	 * 提供给配置表单等其他组件使用，保证获取的是同一个缓存实例
 	 * 
 	 * @param project 项目实例
-	 * @return AwesomeLinkFilter 实例，如果项目为 null 则返回 null
+	 * @return AwesomeLinkFilter 实例；项目已 dispose 时返回 null 且不创建
 	 */
-	@NotNull
+	@Nullable
 	public static AwesomeLinkFilter getFilter(@NotNull final Project project) {
-		Filter[] filters = cache.computeIfAbsent(project, (key) -> new Filter[]{new AwesomeLinkFilter(project)});
+		Filter[] filters = getOrCreateFilters(project);
+		if (filters == null) {
+			return null;
+		}
+		return (AwesomeLinkFilter) filters[0];
+	}
+
+	/**
+	 * 已 dispose 的项目不得写入 cache、不得 new Filter。
+	 *
+	 * @return 缓存或新建的数组；已 dispose 时返回 null
+	 */
+	@Nullable
+	private static Filter[] getOrCreateFilters(@NotNull final Project project) {
+		if (project.isDisposed()) {
+			return null;
+		}
+		return cache.computeIfAbsent(project, (key) -> new Filter[]{new AwesomeLinkFilter(project)});
+	}
+
+	/**
+	 * 获取已存在的 AwesomeLinkFilter，不存在时返回 null 且不创建。
+	 * <p>
+	 * 供设置页等只读状态查询使用。{@link #getFilter(Project)} 走 computeIfAbsent，
+	 * 会新建 Filter 并在构造中订阅项目 MessageBus、调度全量索引；仅为显示索引状态
+	 * 而触发这些副作用是错误的，在已 dispose 的项目上还会抛异常。
+	 *
+	 * @param project 项目实例
+	 * @return 已缓存的 Filter，或 null
+	 */
+	@Nullable
+	public static AwesomeLinkFilter getFilterIfExists(@NotNull final Project project) {
+		Filter[] filters = cache.get(project);
+		if (filters == null || filters.length == 0 || !(filters[0] instanceof AwesomeLinkFilter)) {
+			return null;
+		}
 		return (AwesomeLinkFilter) filters[0];
 	}
 }

@@ -11,9 +11,13 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.application.ModalityState;
+import org.jetbrains.annotations.NotNull;
 
 import java.awt.Component;
+import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
 
 /**
@@ -24,12 +28,25 @@ import java.util.function.Consumer;
 public class IndexManagementService {
     private static final Logger logger = Logger.getInstance(IndexManagementService.class);
 
-    // 防抖机制
-    private long lastRebuildTime = 0;
     private static final long REBUILD_INTERVAL_MS = 5000; // 5秒间隔
 
-    // 操作互斥标志
-    private volatile boolean isOperationInProgress = false;
+    /**
+     * 操作互斥标志。
+     * <p>
+     * 必须是静态的：本服务的实例被设置面板持有并随对话框创建/销毁
+     * （{@code AwesomeConsoleConfigForm} 的字段），若状态存放在实例上，
+     * 互斥与防抖只在单次对话框会话内有效——关闭再打开设置页即可绕过，
+     * 与在飞的后台重建任务并发冲突。
+     * <p>
+     * 用 CAS 获取而非"先查后置"，避免两次点击之间的竞态窗口。
+     */
+    private static final AtomicBoolean OPERATION_IN_PROGRESS = new AtomicBoolean(false);
+
+    /**
+     * 各项目最近一次<b>成功受理</b>的重建时刻，用于防抖。
+     * key 为 {@link Project#getLocationHash()}，不持有 Project 引用以免妨碍回收。
+     */
+    private static final Map<String, Long> LAST_REBUILD_TIME = new ConcurrentHashMap<>();
 
     // 重建进度跟踪
     private long rebuildStartTime = 0;
@@ -76,6 +93,18 @@ public class IndexManagementService {
          * @param error 错误信息
          */
         void onError(String operationType, String error);
+
+        /**
+         * 操作未被受理（前置检查未通过，没有任何后台任务被启动）。
+         * <p>
+         * 必须存在这个回调：早退路径若不通知调用方，UI 无从区分
+         * "操作已开始"与"操作被拒绝"，只能把按钮永久留在禁用+"Rebuilding..."状态。
+         *
+         * @param operationType 操作类型
+         * @param reason 拒绝原因（已经以通知形式展示给用户）
+         */
+        default void onRejected(String operationType, String reason) {
+        }
     }
 
     /**
@@ -89,7 +118,7 @@ public class IndexManagementService {
             return false;
         }
 
-        if (isOperationInProgress) {
+        if (OPERATION_IN_PROGRESS.get()) {
             showNotification(project, "Another index operation is already in progress.", NotificationType.WARNING);
             return false;
         }
@@ -98,20 +127,64 @@ public class IndexManagementService {
     }
 
     /**
-     * 检查重建间隔（防抖机制）
+     * 通知调用方操作未被受理。
+     * <p>
+     * 与 onStart/onComplete 一样投递到 EDT，保证 UI 层的状态转移全部发生在同一线程，
+     * 不会出现"拒绝先到、开始后到"的乱序。
+     */
+    private void notifyRejected(Component component, ProgressCallback callback,
+                                String operationType, String reason) {
+        if (callback == null) {
+            return;
+        }
+        ModalityState modality = component == null
+                ? ModalityState.defaultModalityState()
+                : ModalityState.stateForComponent(component);
+        ApplicationManager.getApplication().invokeLater(
+                () -> callback.onRejected(operationType, reason), modality);
+    }
+
+    /**
+     * 只读判断重建防抖是否已过冷却期，<b>不</b>推进时间戳。
+     *
+     * @return 冷却中返回剩余秒数（&gt;=0），可以重建返回 -1
+     */
+    private static long remainingRebuildCooldownSeconds(@NotNull Project project) {
+        Long last = LAST_REBUILD_TIME.get(project.getLocationHash());
+        if (last == null) {
+            return -1;
+        }
+        long elapsed = System.currentTimeMillis() - last;
+        if (elapsed >= REBUILD_INTERVAL_MS) {
+            return -1;
+        }
+        // 向上取整：1–999ms 剩余不得报 “Please wait 0 seconds” 却仍拒绝。
+        long remainingMs = REBUILD_INTERVAL_MS - elapsed;
+        return (remainingMs + 999) / 1000;
+    }
+
+    /**
+     * 检查重建间隔（防抖机制），通过检查时推进时间戳。
+     * <p>
+     * 保留此公开方法以兼容既有调用方；{@link #rebuildIndex} 内部改用
+     * {@link #remainingRebuildCooldownSeconds} 做只读判断，仅在操作真正受理后
+     * 才推进时间戳，避免"被拒绝"本身不断为冷却期续期。
+     *
      * @param project 项目
      * @return 如果可以继续重建返回 true
      */
     public boolean checkRebuildInterval(Project project) {
-        long now = System.currentTimeMillis();
-        if (now - lastRebuildTime < REBUILD_INTERVAL_MS) {
-            long remaining = (REBUILD_INTERVAL_MS - (now - lastRebuildTime)) / 1000;
+        if (project == null) {
+            return false;
+        }
+        long remaining = remainingRebuildCooldownSeconds(project);
+        if (remaining >= 0) {
             showNotification(project,
                     String.format("Please wait %d seconds before rebuilding again.", remaining),
                     NotificationType.WARNING);
             return false;
         }
-        lastRebuildTime = now;
+        LAST_REBUILD_TIME.put(project.getLocationHash(), System.currentTimeMillis());
         return true;
     }
 
@@ -120,32 +193,39 @@ public class IndexManagementService {
      * 
      * @param project 当前项目实例，不能为 null
      * @param component UI 组件，用于确定模态状态上下文
-     * @param callback 进度回调接口，用于接收操作状态更新（开始、进度、完成、错误）
+     * @param callback 进度回调接口，用于接收操作状态更新（开始、进度、完成、错误、拒绝）
      */
     public void rebuildIndex(Project project, Component component, ProgressCallback callback) {
         // ========== 第一阶段：前置检查 ==========
-        
-        // 该方法会检查：1) project 是否为 null  2) 是否有其他操作正在进行（isOperationInProgress 标志）
-        // 如果检查失败，方法内部会显示相应的错误或警告通知，并返回 false
-        if (!canExecuteOperation(project)) {
-            // 检查失败，直接返回，不执行后续操作
+        // 每条早退路径都必须回调 onRejected，否则 UI 无从区分"已开始"与"被拒绝"
+        if (project == null) {
+            String reason = "No project is currently opened.";
+            showNotification(null, reason, NotificationType.ERROR);
+            notifyRejected(component, callback, OPERATION_REBUILD, reason);
             return;
         }
 
-        // 该方法会检查当前时间与上次重建时间（lastRebuildTime）的间隔是否大于 5 秒（REBUILD_INTERVAL_MS）
-        // 如果间隔不足，会显示警告通知告知用户需要等待的秒数，并返回 false
-        // 如果间隔足够，会更新 lastRebuildTime 为当前时间，并返回 true
-        if (!checkRebuildInterval(project)) {
-            // 防抖检查失败（操作过于频繁），直接返回，不执行后续操作
+        // 防抖：只读判断，不推进时间戳
+        long remaining = remainingRebuildCooldownSeconds(project);
+        if (remaining >= 0) {
+            String reason = String.format("Please wait %d seconds before rebuilding again.", remaining);
+            showNotification(project, reason, NotificationType.WARNING);
+            notifyRejected(component, callback, OPERATION_REBUILD, reason);
             return;
         }
 
-        // ========== 第二阶段：初始化 ==========
+        // 互斥：CAS 获取。用"先查后置"会在两次快速点击之间留下竞态窗口
+        if (!OPERATION_IN_PROGRESS.compareAndSet(false, true)) {
+            String reason = "Another index operation is already in progress.";
+            showNotification(project, reason, NotificationType.WARNING);
+            notifyRejected(component, callback, OPERATION_REBUILD, reason);
+            return;
+        }
+
+        // ========== 第二阶段：初始化（此后操作已确认受理）==========
         
-        // 将 volatile 标志位 isOperationInProgress 设置为 true
-        // 这个标志用于防止并发操作：当有操作正在进行时，其他操作会被 canExecuteOperation 方法拦截
-        // 使用 volatile 关键字确保多线程环境下的可见性
-        isOperationInProgress = true;
+        // 只有真正受理才推进防抖时间戳
+        LAST_REBUILD_TIME.put(project.getLocationHash(), System.currentTimeMillis());
         
         // 记录重建操作的开始时间戳（毫秒）
         // 这个时间戳将在操作完成时用于计算总耗时（duration = 完成时间 - 开始时间）
@@ -170,6 +250,7 @@ public class IndexManagementService {
         // executeOnPooledThread 方法会将任务提交到后台线程池，避免阻塞 EDT（事件分发线程）
         // 这样可以确保 UI 保持响应，不会因为长时间的索引重建操作而卡死
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            boolean releasedOnEdt = false;
             // 使用 try-catch 块包裹整个重建逻辑，确保任何异常都能被捕获和处理
             try {
                 // 调用 getFilterOrThrow 方法获取当前项目的 AwesomeLinkFilter 实例
@@ -199,43 +280,17 @@ public class IndexManagementService {
                 // 这个数据包含了完整的索引结果：总文件数、匹配数、忽略数等
                 AwesomeLinkFilter.IndexStatistics finalStats = filter.getIndexStatistics();
                 
-                // 在 EDT 中执行完成后的处理
-                // 使用 invokeLater 确保所有 UI 更新和回调通知都在 EDT 中执行
-                // 使用 ModalityState.stateForComponent() 确保在正确的模态上下文中更新 UI
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    // 重置操作进行中标志为 false
-                    // 这样其他操作就可以继续执行了（canExecuteOperation 会返回 true）
-                    isOperationInProgress = false;
-                    
-                    // 调用回调接口的 onComplete 方法，通知调用方操作已完成
-                    // 传入三个参数：
-                    // 1. OPERATION_REBUILD - 操作类型常量
-                    // 2. finalStats - 最终的索引统计信息
-                    // 3. duration - 操作总耗时（毫秒）
-                    // UI 层收到此回调后可以隐藏进度条、启用按钮、显示完成消息等
+                deliverUiThenRelease(component, () -> {
                     callback.onComplete(OPERATION_REBUILD, finalStats, duration);
-                    
-                    // 构建成功通知消息
-                    // 使用 String.format 格式化消息，显示已索引的文件总数
                     String message = String.format("File index rebuilt successfully! %d files indexed", 
                             finalStats.getTotalCachedFiles());
-                    
-                    // 检查统计信息中是否包含忽略统计数据
-                    // hasIgnoreStatistics 方法会检查是否有匹配/忽略文件的统计信息
                     if (finalStats.hasIgnoreStatistics()) {
-                        // 如果有忽略统计信息，则追加到消息中
-                        // 显示匹配的文件数和被忽略的文件数
                         message += String.format(" (Matched: %d, Ignored: %d)", 
                                 finalStats.getMatchedFiles(), finalStats.getIgnoredFiles());
                     }
-                    
-                    // 调用 showNotification 方法显示成功通知
-                    // 传入三个参数：
-                    // 1. project - 项目实例，用于确定通知显示的范围
-                    // 2. message - 通知消息内容
-                    // 3. NotificationType.INFORMATION - 通知类型（信息类型，通常显示为蓝色图标）
                     showNotification(project, message, NotificationType.INFORMATION);
-                }, ModalityState.stateForComponent(component));
+                });
+                releasedOnEdt = true;
 
             } catch (Exception e) {
                 ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
@@ -246,30 +301,17 @@ public class IndexManagementService {
                 // 第一个参数是错误消息，第二个参数是异常对象（会自动记录堆栈信息）
                 // 这对于调试和问题排查非常重要
                 logger.error("Failed to rebuild index: " + e.getMessage(), e);
-                
-                // 在 EDT 中执行错误处理
-                // 使用 invokeLater 确保 UI 更新和回调通知在正确的线程中执行
-                // 使用 ModalityState.stateForComponent() 确保在正确的模态上下文中更新 UI
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    // 重置操作进行中标志为 false
-                    // 即使操作失败，也要重置标志，否则后续操作将永远无法执行
-                    isOperationInProgress = false;
-                    
-                    // 调用回调接口的 onError 方法，通知调用方操作失败
-                    // 传入两个参数：
-                    // 1. OPERATION_REBUILD - 操作类型常量
-                    // 2. e.getMessage() - 异常的错误消息
-                    // UI 层收到此回调后可以隐藏进度条、启用按钮、显示错误消息等
+                deliverUiThenRelease(component, () -> {
                     callback.onError(OPERATION_REBUILD, e.getMessage());
-                    
-                    // 调用 showNotification 方法显示错误通知
-                    // 传入三个参数：
-                    // 1. project - 项目实例
-                    // 2. 错误消息 - 包含异常的详细信息
-                    // 3. NotificationType.ERROR - 通知类型（错误类型，通常显示为红色图标）
                     showNotification(project, "Failed to rebuild index: " + e.getMessage(), 
                             NotificationType.ERROR);
-                }, ModalityState.stateForComponent(component));
+                });
+                releasedOnEdt = true;
+            } finally {
+                // 未投递 EDT（控制流异常）时必须在此复位，否则按钮永久卡死
+                if (!releasedOnEdt) {
+                    OPERATION_IN_PROGRESS.set(false);
+                }
             }
         });
     }
@@ -283,20 +325,23 @@ public class IndexManagementService {
      */
     public void clearIndex(Project project, Component component, ProgressCallback callback) {
         // ========== 第一阶段：前置检查 ==========
-        
-        // 该方法会检查：1) project 是否为 null  2) 是否有其他操作正在进行（isOperationInProgress 标志）
-        // 如果检查失败，方法内部会显示相应的错误或警告通知，并返回 false
-        if (!canExecuteOperation(project)) {
-            // 检查失败，直接返回，不执行后续操作
+        // 与 rebuildIndex 一致：每条早退路径都必须回调 onRejected
+        if (project == null) {
+            String reason = "No project is currently opened.";
+            showNotification(null, reason, NotificationType.ERROR);
+            notifyRejected(component, callback, OPERATION_CLEAR, reason);
             return;
         }
 
         // ========== 第二阶段：初始化 ==========
         
-        // 将 volatile 标志位 isOperationInProgress 设置为 true
-        // 这个标志用于防止并发操作：当有操作正在进行时，其他操作会被 canExecuteOperation 方法拦截
-        // 使用 volatile 关键字确保多线程环境下的可见性
-        isOperationInProgress = true;
+        // 互斥：CAS 获取，失败即未受理
+        if (!OPERATION_IN_PROGRESS.compareAndSet(false, true)) {
+            String reason = "Another index operation is already in progress.";
+            showNotification(project, reason, NotificationType.WARNING);
+            notifyRejected(component, callback, OPERATION_CLEAR, reason);
+            return;
+        }
         
         // 调用回调接口的 onStart 方法，通知调用方（通常是 UI 层）操作已开始
         // 传入操作类型常量 OPERATION_CLEAR（值为 "clear"），用于区分不同类型的操作
@@ -312,6 +357,7 @@ public class IndexManagementService {
         // executeOnPooledThread 方法会将任务提交到后台线程池，避免阻塞 EDT（事件分发线程）
         // 这样可以确保 UI 保持响应，不会因为清除索引操作而卡死
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            boolean releasedOnEdt = false;
             // 使用 try-catch 块包裹整个清除逻辑，确保任何异常都能被捕获和处理
             try {
                 // 调用 getFilterOrThrow 方法获取当前项目的 AwesomeLinkFilter 实例
@@ -346,41 +392,17 @@ public class IndexManagementService {
                 // 使用 invokeLater 确保所有 UI 更新和回调通知都在 EDT 中执行
                 // 这是 Swing/IntelliJ UI 的线程安全要求
                 // 使用 ModalityState.stateForComponent() 确保在正确的模态上下文中更新 UI
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    // 重置操作进行中标志为 false
-                    // 这样其他操作就可以继续执行了（canExecuteOperation 会返回 true）
-                    // 即使清除操作很快完成，也要确保在回调之前重置标志
-                    isOperationInProgress = false;
-                    
-                    // 调用回调接口的 onComplete 方法，通知调用方操作已完成
-                    // 传入三个参数：
-                    // 1. OPERATION_CLEAR - 操作类型常量（值为 "clear"）
-                    // 2. beforeStats - 清除前的索引统计信息（用于显示清除了多少数据）
-                    // 3. duration - 操作总耗时（毫秒）
-                    // UI 层收到此回调后可以隐藏进度提示、启用按钮、显示完成消息等
+                deliverUiThenRelease(component, () -> {
                     callback.onComplete(OPERATION_CLEAR, beforeStats, duration);
-                    
-                    // 构建成功通知消息
-                    // 使用 String.format 格式化消息，显示清除的详细信息：
-                    // - beforeStats.getTotalCachedFiles() - 清除的缓存文件数
-                    // - beforeStats.getFileCacheSize() - 清除的文件名缓存条目数
-                    // - beforeStats.getFileBaseCacheSize() - 清除的基础文件名缓存条目数
-                    // - formatDuration(duration) - 格式化后的耗时（如 "123ms"、"2s"、"1m" 等）
-                    // 同时提示用户索引会在需要时自动重建
                     String message = String.format(
                             "File index cleared successfully! Cleared %d files (%d filenames, %d basenames) in %s. Index will be rebuilt automatically when needed.",
                             beforeStats.getTotalCachedFiles(), 
                             beforeStats.getFileCacheSize(), 
                             beforeStats.getFileBaseCacheSize(), 
                             formatDuration(duration));
-                    
-                    // 调用 showNotification 方法显示成功通知
-                    // 传入三个参数：
-                    // 1. project - 项目实例，用于确定通知显示的范围
-                    // 2. message - 通知消息内容
-                    // 3. NotificationType.INFORMATION - 通知类型（信息类型，通常显示为蓝色图标）
                     showNotification(project, message, NotificationType.INFORMATION);
-                }, ModalityState.stateForComponent(component));
+                });
+                releasedOnEdt = true;
 
             } catch (Exception e) {
                 ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
@@ -391,31 +413,16 @@ public class IndexManagementService {
                 // 第一个参数是错误消息，第二个参数是异常对象（会自动记录堆栈信息）
                 // 这对于调试和问题排查非常重要
                 logger.error("Failed to clear index: " + e.getMessage(), e);
-                
-                // 在 EDT 中执行错误处理
-                // 使用 invokeLater 确保 UI 更新和回调通知在正确的线程中执行
-                // 使用 ModalityState.stateForComponent() 确保在正确的模态上下文中更新 UI
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    // 重置操作进行中标志为 false
-                    // 即使操作失败，也要重置标志，否则后续操作将永远无法执行
-                    // 这是确保系统能够从错误状态恢复的关键步骤
-                    isOperationInProgress = false;
-                    
-                    // 调用回调接口的 onError 方法，通知调用方操作失败
-                    // 传入两个参数：
-                    // 1. OPERATION_CLEAR - 操作类型常量（值为 "clear"）
-                    // 2. e.getMessage() - 异常的错误消息
-                    // UI 层收到此回调后可以隐藏进度提示、启用按钮、显示错误消息等
+                deliverUiThenRelease(component, () -> {
                     callback.onError(OPERATION_CLEAR, e.getMessage());
-                    
-                    // 调用 showNotification 方法显示错误通知
-                    // 传入三个参数：
-                    // 1. project - 项目实例
-                    // 2. 错误消息 - 包含异常的详细信息
-                    // 3. NotificationType.ERROR - 通知类型（错误类型，通常显示为红色图标）
                     showNotification(project, "Failed to clear index: " + e.getMessage(), 
                             NotificationType.ERROR);
-                }, ModalityState.stateForComponent(component));
+                });
+                releasedOnEdt = true;
+            } finally {
+                if (!releasedOnEdt) {
+                    OPERATION_IN_PROGRESS.set(false);
+                }
             }
         });
     }
@@ -426,15 +433,12 @@ public class IndexManagementService {
      * @return 索引统计信息，如果获取失败返回 null
      */
     public AwesomeLinkFilter.IndexStatistics getIndexStatistics(Project project) {
-        if (project == null) {
+        AwesomeLinkFilter filter = filterForIndexing(project);
+        if (filter == null) {
             return null;
         }
-
         try {
-            AwesomeLinkFilter filter = AwesomeLinkFilterProvider.getFilter(project);
-            if (filter != null) {
-                return filter.getIndexStatistics();
-            }
+            return filter.getIndexStatistics();
         } catch (Exception e) {
             ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
             logger.error("Failed to get index statistics: " + e.getMessage(), e);
@@ -443,30 +447,24 @@ public class IndexManagementService {
     }
 
     public boolean isCacheInitialized(Project project) {
-        if (project == null) {
-            return false;
-        }
-        return AwesomeLinkFilterProvider.getFilter(project).isCacheInitialized();
+        AwesomeLinkFilter filter = filterForQuery(project);
+        return filter != null && filter.isCacheInitialized();
     }
 
     /**
      * 是否正在进行首次缓存构建
      */
     public boolean isCacheBuilding(Project project) {
-        if (project == null) {
-            return false;
-        }
-        return AwesomeLinkFilterProvider.getFilter(project).isCacheBuilding();
+        AwesomeLinkFilter filter = filterForQuery(project);
+        return filter != null && filter.isCacheBuilding();
     }
 
     /**
      * 是否已调度或正在执行缓存重建（含首次初始化和后续 rebuild）
      */
     public boolean isReloadScheduledOrRunning(Project project) {
-        if (project == null) {
-            return false;
-        }
-        return AwesomeLinkFilterProvider.getFilter(project).isReloadScheduledOrRunning();
+        AwesomeLinkFilter filter = filterForQuery(project);
+        return filter != null && filter.isReloadScheduledOrRunning();
     }
 
     /**
@@ -474,37 +472,86 @@ public class IndexManagementService {
      * 若没有进行中的重建，则立即完成，不会额外触发重建。
      */
     public CompletableFuture<Void> whenCacheReady(Project project) {
-        if (project == null) {
+        // 这里必须允许创建 Filter：设置页要展示的是"索引就绪后的统计"。
+        // 若沿用只读查询（不创建），Filter 尚未创建时 future 会立刻完成，
+        // UI 就永久停在打开瞬间的全 0 快照上。
+        AwesomeLinkFilter filter = filterForIndexing(project);
+        if (filter == null) {
             return CompletableFuture.completedFuture(null);
         }
-        return AwesomeLinkFilterProvider.getFilter(project).whenCacheReady();
+        return filter.whenCacheReady();
     }
 
     /**
      * 订阅缓存重建实时进度（重建已开始后也能挂接）
      */
     public void addReloadProgressListener(Project project, Consumer<AwesomeLinkFilter.ReloadProgress> listener) {
-        if (project == null || listener == null) {
+        if (listener == null) {
             return;
         }
-        AwesomeLinkFilterProvider.getFilter(project).addReloadProgressListener(listener);
+        AwesomeLinkFilter filter = filterForQuery(project);
+        if (filter != null) {
+            filter.addReloadProgressListener(listener);
+        }
     }
 
     /**
      * 取消订阅缓存重建进度
      */
     public void removeReloadProgressListener(Project project, Consumer<AwesomeLinkFilter.ReloadProgress> listener) {
-        if (project == null || listener == null) {
+        if (listener == null) {
             return;
         }
-        AwesomeLinkFilterProvider.getFilter(project).removeReloadProgressListener(listener);
+        AwesomeLinkFilter filter = filterForQuery(project);
+        if (filter != null) {
+            filter.removeReloadProgressListener(listener);
+        }
+    }
+
+    /**
+     * 获取用于<b>只读状态查询</b>的 Filter，不存在时返回 null 且不创建。
+     * <p>
+     * 只做 {@code cache.get}（{@link AwesomeLinkFilterProvider#getFilterIfExists}），
+     * 不会走 computeIfAbsent，也不会在已 dispose 的项目上创建 Filter。
+     *
+     * @param project 项目，可为 null
+     * @return 已存在的 Filter 或 null
+     */
+    private static AwesomeLinkFilter filterForQuery(Project project) {
+        if (project == null || project.isDisposed()) {
+            return null;
+        }
+        return AwesomeLinkFilterProvider.getFilterIfExists(project);
+    }
+
+    /**
+     * 获取用于<b>需要索引真实就绪</b>场景的 Filter，必要时创建。
+     * <p>
+     * 与 {@link #filterForQuery} 的区别在于允许创建：展示索引统计、等待索引完成
+     * 这类需求本身就要求索引存在。仅对已 dispose 的项目短路，避免
+     * {@code AlreadyDisposedException} 传播到 EDT。
+     *
+     * @param project 项目，可为 null
+     * @return Filter 或 null
+     */
+    private static AwesomeLinkFilter filterForIndexing(Project project) {
+        if (project == null || project.isDisposed()) {
+            return null;
+        }
+        try {
+            return AwesomeLinkFilterProvider.getFilter(project);
+        } catch (Exception e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+            logger.warn("Failed to obtain AwesomeLinkFilter: " + e.getMessage(), e);
+            return null;
+        }
     }
 
     /**
      * 检查操作是否正在进行
      */
     public boolean isOperationInProgress() {
-        return isOperationInProgress;
+        return OPERATION_IN_PROGRESS.get();
     }
 
     /**
@@ -550,6 +597,19 @@ public class IndexManagementService {
     /**
      * 显示通知
      */
+    /**
+     * 完成/错误回调投到 EDT，并在回调结束后才释放互斥。
+     */
+    private void deliverUiThenRelease(Component component, Runnable uiWork) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            try {
+                uiWork.run();
+            } finally {
+                OPERATION_IN_PROGRESS.set(false);
+            }
+        }, ModalityState.stateForComponent(component));
+    }
+
     private void showNotification(Project project, String content, NotificationType type) {
         // 检查通知开关
         if (!AwesomeConsoleStorage.getInstance().showNotifications) {

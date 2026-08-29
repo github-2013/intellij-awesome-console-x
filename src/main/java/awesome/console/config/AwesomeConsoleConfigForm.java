@@ -66,9 +66,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private DualColorProgressBarUI dualColorProgressBarUI;
     // 表单是否已销毁，用于忽略过期的异步状态刷新
     private volatile boolean disposed;
-    // 自动初始化与手动 Rebuild 共用的进度监听
-    private Consumer<AwesomeLinkFilter.ReloadProgress> buildingProgressListener;
-    private Project buildingProgressProject;
+    // 自动初始化与手动 Rebuild 共用的进度监听。
+    // attach 发生在池化线程、detach 可能发生在 EDT 或另一个池化线程，
+    // 因此这两个字段必须 volatile，否则 detach 可能读到过期引用而漏掉注销（监听器泄漏）
+    private volatile Consumer<AwesomeLinkFilter.ReloadProgress> buildingProgressListener;
+    private volatile Project buildingProgressProject;
     private volatile AwesomeLinkFilter.ReloadProgress pendingIndexingProgress;
     private volatile String pendingIndexingAction;
     private final AtomicBoolean indexingProgressUiScheduled = new AtomicBoolean(false);
@@ -373,6 +375,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             try {
+                // 先拿到（必要时创建）Filter：构造会调度 open-project reload。
+                // 若先走 filterForQuery，Building/挂监听永远赶不上首次构建。
+                CompletableFuture<Void> ready = indexManagementService.whenCacheReady(project);
                 boolean reloadRunning = indexManagementService.isReloadScheduledOrRunning(project);
                 if (reloadRunning) {
                     String action = indexManagementService.isCacheBuilding(project)
@@ -389,7 +394,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     attachIndexingProgressListener(project, action);
                 }
 
-                indexManagementService.whenCacheReady(project).whenComplete((ignored, error) -> {
+                ready.whenComplete((ignored, error) -> {
                     detachBuildingProgressListener();
                     if (disposed) {
                         return;
@@ -438,8 +443,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 }
                 if (stats != null) {
                     updateIndexStatusUI(project.getName(), stats);
-                    rebuildIndexButton.setEnabled(true);
-                    clearIndexButton.setEnabled(true);
+                    // 有操作在进行时不得抢改按钮：否则会与 onStart 的禁用态互相覆盖，
+                    // 产生"可点击但文案仍是 Rebuilding..."的非法组合
+                    restoreIndexButtonsIdle();
                 } else {
                     indexStatusLabel.setText("Index Status: Service not available");
                     indexStatusLabel.setForeground(JBColor.RED);
@@ -461,10 +467,52 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     }
 
     /**
+     * 把索引操作按钮恢复到空闲态。
+     * <p>
+     * enabled 与文案必须一起恢复：只恢复其中之一会产生
+     * "按钮可点击但仍显示 Rebuilding..." 这类非法组合。
+     */
+    private void restoreIndexButtonsIdle() {
+        restoreIndexButtonsIdle(false);
+    }
+
+    /**
+     * @param finishingCurrentOperation 本操作的 onComplete/onError：互斥尚未在回调结束后释放，不得当成仍 busy
+     */
+    private void restoreIndexButtonsIdle(boolean finishingCurrentOperation) {
+        Project project = getCurrentProject();
+        if ((!finishingCurrentOperation && indexManagementService.isOperationInProgress())
+                || (project != null && indexManagementService.isReloadScheduledOrRunning(project))) {
+            disableIndexButtonsWhileBusy();
+            scheduleRestoreButtonsWhenReloadIdle();
+            return;
+        }
+        if (rebuildIndexButton != null) {
+            rebuildIndexButton.setEnabled(true);
+            rebuildIndexButton.setText("Rebuild");
+        }
+        if (clearIndexButton != null) {
+            clearIndexButton.setEnabled(true);
+            clearIndexButton.setText("Clear");
+        }
+    }
+
+    private void disableIndexButtonsWhileBusy() {
+        if (rebuildIndexButton != null) {
+            rebuildIndexButton.setEnabled(false);
+        }
+        if (clearIndexButton != null) {
+            clearIndexButton.setEnabled(false);
+        }
+    }
+
+    /**
      * 自动初始化与手动 Rebuild 共用的开始态
      */
     private void showIndexingStartUI(String projectName, String action) {
-        indexStatusLabel.setText(String.format("Index Status [%s]: %s...", projectName, action));
+        String text = String.format("Index Status [%s]: %s...", projectName, action);
+        indexStatusLabel.setText(text);
+        indexStatusLabel.setToolTipText(text);
         indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
         indexProgressBar.setIndeterminate(true);
         indexProgressBar.setValue(0);
@@ -472,12 +520,31 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         if (dualColorProgressBarUI != null) {
             dualColorProgressBarUI.updatePercentages(0, 0);
         }
+        disableIndexButtonsWhileBusy();
+        scheduleRestoreButtonsWhenReloadIdle();
+    }
+
+    /**
+     * reload 结束后再求值按钮，避免 Building/onError 禁用后永远不恢复。
+     */
+    private void scheduleRestoreButtonsWhenReloadIdle() {
+        Project project = getCurrentProject();
+        if (project == null || !indexManagementService.isReloadScheduledOrRunning(project)) {
+            return;
+        }
+        indexManagementService.whenCacheReady(project).whenComplete((ignored, error) -> {
+            if (disposed) {
+                return;
+            }
+            ApplicationManager.getApplication().invokeLater(
+                    this::restoreIndexButtonsIdle, ModalityState.any());
+        });
     }
 
     /**
      * 挂接实时进度监听，重建已开始后也能收到后续节流更新
      */
-    private void attachIndexingProgressListener(Project project, String action) {
+    private synchronized void attachIndexingProgressListener(Project project, String action) {
         detachBuildingProgressListener();
         buildingProgressProject = project;
         buildingProgressListener = progress -> scheduleIndexingProgressUi(project.getName(), action, progress);
@@ -485,16 +552,22 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     }
 
     /**
-     * 取消实时进度监听，避免设置页关闭后仍刷新 UI
+     * 取消实时进度监听，避免设置页关闭后仍刷新 UI。
+     * <p>
+     * 与 {@link #attachIndexingProgressListener} 一同加锁并先快照后置空：
+     * attach 在池化线程、detach 可能在 EDT 或另一个池化线程，分两次读取
+     * listener 与 project 字段会读到不一致的组合，导致注销落空而泄漏监听器。
      */
-    private void detachBuildingProgressListener() {
-        if (buildingProgressListener != null && buildingProgressProject != null) {
-            indexManagementService.removeReloadProgressListener(buildingProgressProject, buildingProgressListener);
-        }
+    private synchronized void detachBuildingProgressListener() {
+        Consumer<AwesomeLinkFilter.ReloadProgress> listener = buildingProgressListener;
+        Project listenerProject = buildingProgressProject;
         buildingProgressListener = null;
         buildingProgressProject = null;
         pendingIndexingProgress = null;
         pendingIndexingAction = null;
+        if (listener != null && listenerProject != null) {
+            indexManagementService.removeReloadProgressListener(listenerProject, listener);
+        }
     }
 
     /**
@@ -533,6 +606,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     progress.getIndexedCount(), progress.getIgnoredCount());
         }
         indexStatusLabel.setText(statusText);
+        indexStatusLabel.setToolTipText(statusText);
         indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
 
         indexProgressBar.setString(processed <= 0 ? "Indexing..." : processed + " files");
@@ -552,6 +626,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             text += " (Stale, still using previous index)";
         }
         indexStatusLabel.setText(text);
+        indexStatusLabel.setToolTipText(message);
         indexStatusLabel.setForeground(JBColor.RED);
         indexProgressBar.setIndeterminate(false);
         indexProgressBar.setValue(0);
@@ -609,23 +684,41 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         }
 
         indexManagementService.rebuildIndex(project, mainPanel, new IndexManagementService.ProgressCallback() {
-            private final long generation = indexUiGeneration.incrementAndGet();
+            /**
+             * 代次在操作<b>被受理并真正开始</b>时才分配。
+             * <p>
+             * 早期实现把递增写在匿名类的实例初始化器里，于是 {@code new ProgressCallback(){}}
+             * 一求值就推进了代次——这发生在 rebuildIndex 的前置检查之前。一旦本次点击被互斥
+             * 或防抖拒绝，新代次已经生效，而在飞的上一次操作的 onComplete/onError 会因代次
+             * 过期被全部丢弃，按钮便永久停在禁用 + "Rebuilding..." 状态。
+             */
+            private volatile long generation = -1;
 
             private boolean isCurrentGeneration() {
-                return generation == indexUiGeneration.get();
+                return generation >= 0 && generation == indexUiGeneration.get();
             }
+
             @Override
             public void onStart(String operationType) {
-                if (!isCurrentGeneration()) {
-                    return;
-                }
-                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                generation = indexUiGeneration.incrementAndGet();
+                if (disposed || rebuildIndexButton == null || clearIndexButton == null
+                        || indexStatusLabel == null || indexProgressBar == null) {
                     return;
                 }
                 rebuildIndexButton.setEnabled(false);
                 clearIndexButton.setEnabled(false);
                 rebuildIndexButton.setText("Rebuilding...");
                 showIndexingStartUI(project.getName(), ACTION_REBUILDING);
+            }
+
+            @Override
+            public void onRejected(String operationType, String reason) {
+                // 未受理：不推进代次，因此在飞操作的回调仍然有效，不能动它的 UI。
+                // 仅当确实没有操作在进行时兜底恢复按钮，避免 UI 停在中间态。
+                if (disposed || indexManagementService.isOperationInProgress()) {
+                    return;
+                }
+                restoreIndexButtonsIdle();
             }
 
             @Override
@@ -641,13 +734,11 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 if (!isCurrentGeneration()) {
                     return;
                 }
-                if (rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
+                if (disposed || rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
                     logger.info("Rebuild completed in background (UI already disposed)");
                     return;
                 }
-                rebuildIndexButton.setEnabled(true);
-                clearIndexButton.setEnabled(true);
-                rebuildIndexButton.setText("Rebuild");
+                restoreIndexButtonsIdle(true);
                 indexProgressBar.setIndeterminate(false);
                 indexProgressBar.setValue(100);
                 updateIndexStatus();
@@ -658,13 +749,12 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 if (!isCurrentGeneration()) {
                     return;
                 }
-                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                if (disposed || rebuildIndexButton == null || clearIndexButton == null
+                        || indexStatusLabel == null || indexProgressBar == null) {
                     logger.error("Rebuild failed in background (UI already disposed): " + error);
                     return;
                 }
-                rebuildIndexButton.setEnabled(true);
-                clearIndexButton.setEnabled(true);
-                rebuildIndexButton.setText("Rebuild");
+                restoreIndexButtonsIdle(true);
                 showIndexErrorUI(project, error);
             }
         });
@@ -691,10 +781,17 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         }
 
         indexManagementService.clearIndex(project, mainPanel, new IndexManagementService.ProgressCallback() {
+            private volatile long generation = -1;
+
+            private boolean isCurrentGeneration() {
+                return generation >= 0 && generation == indexUiGeneration.get();
+            }
+
             @Override
             public void onStart(String operationType) {
-                // 检查 UI 组件是否已销毁
-                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                generation = indexUiGeneration.incrementAndGet();
+                if (disposed || rebuildIndexButton == null || clearIndexButton == null
+                        || indexStatusLabel == null || indexProgressBar == null) {
                     return;
                 }
                 rebuildIndexButton.setEnabled(false);
@@ -705,15 +802,23 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             }
 
             @Override
+            public void onRejected(String operationType, String reason) {
+                if (disposed || indexManagementService.isOperationInProgress()) {
+                    return;
+                }
+                restoreIndexButtonsIdle();
+            }
+
+            @Override
             public void onComplete(String operationType, AwesomeLinkFilter.IndexStatistics stats, long duration) {
-                // 检查 UI 组件是否已销毁
-                if (rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
+                if (!isCurrentGeneration()) {
+                    return;
+                }
+                if (disposed || rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
                     logger.info("Clear completed in background (UI already disposed)");
                     return;
                 }
-                rebuildIndexButton.setEnabled(true);
-                clearIndexButton.setEnabled(true);
-                clearIndexButton.setText("Clear");
+                restoreIndexButtonsIdle(true);
                 // 清除完成后，索引为空，进度条应该显示 0%
                 indexProgressBar.setValue(0);
                 indexProgressBar.setString("0%");
@@ -725,14 +830,15 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
             @Override
             public void onError(String operationType, String error) {
-                // 检查 UI 组件是否已销毁
-                if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
+                if (!isCurrentGeneration()) {
+                    return;
+                }
+                if (disposed || rebuildIndexButton == null || clearIndexButton == null
+                        || indexStatusLabel == null || indexProgressBar == null) {
                     logger.error("Clear failed in background (UI already disposed): " + error);
                     return;
                 }
-                rebuildIndexButton.setEnabled(true);
-                clearIndexButton.setEnabled(true);
-                clearIndexButton.setText("Clear");
+                restoreIndexButtonsIdle(true);
                 showIndexErrorUI(project, error);
             }
         });

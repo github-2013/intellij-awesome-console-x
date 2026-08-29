@@ -1,14 +1,33 @@
 package awesome.console;
 
+import awesome.console.config.AwesomeConsoleConfig;
+import awesome.console.config.AwesomeConsoleConfigForm;
 import awesome.console.config.AwesomeConsoleDefaults;
 import awesome.console.config.AwesomeConsoleStorage;
+import awesome.console.config.IndexManagementService;
+import com.intellij.execution.filters.Filter;
+import com.intellij.notification.Notification;
+import com.intellij.notification.NotificationType;
+import com.intellij.notification.Notifications;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.options.ConfigurationException;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.Disposer;
+import java.lang.reflect.Field;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import java.awt.Component;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import javax.swing.JFrame;
+import javax.swing.JPanel;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import java.util.stream.Collectors;
@@ -1412,12 +1431,14 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
      * 验证设置页在异步索引完成后会刷新统计，而不是停留在打开瞬间的全 0 快照。
      */
     public void testUpdateIndexStatusRefreshesAfterCacheReady() throws Exception {
+        myFixture.addFileToProject("r33/keep.ts", "export {};\n");
+        AwesomeLinkFilter providerFilter = AwesomeLinkFilterProvider.getFilter(getProject());
+        providerFilter.manualRebuild();
+        providerFilter.whenCacheReady().get(10, TimeUnit.SECONDS);
+
         awesome.console.config.AwesomeConsoleConfigForm form =
                 new awesome.console.config.AwesomeConsoleConfigForm();
         form.updateIndexStatus();
-
-        AwesomeLinkFilter providerFilter = AwesomeLinkFilterProvider.getFilter(getProject());
-        providerFilter.whenCacheReady().get(10, TimeUnit.SECONDS);
 
         String statusText = "";
         long deadline = System.currentTimeMillis() + 5000;
@@ -1425,9 +1446,13 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
             statusText = form.indexStatusLabel.getText();
             String toolTip = form.indexStatusLabel.getToolTipText();
+            String barText = form.indexProgressBar.getString();
             if (statusText.contains("files indexed")
                     && toolTip != null
-                    && toolTip.contains("Last rebuild")) {
+                    && toolTip.contains("Last rebuild")
+                    && !form.indexProgressBar.isIndeterminate()
+                    && ("100%".equals(barText)
+                    || (barText != null && barText.contains("Matched") && barText.contains("Ignored")))) {
                 break;
             }
             Thread.sleep(50);
@@ -1444,7 +1469,400 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         assertTrue("Last rebuild details should remain available on tooltip, got: " + form.indexStatusLabel.getToolTipText(),
                 form.indexStatusLabel.getToolTipText() != null
                         && form.indexStatusLabel.getToolTipText().contains("Last rebuild"));
+        assertFalse("完成后进度条不得仍是 indeterminate",
+                form.indexProgressBar.isIndeterminate());
+        String barText = form.indexProgressBar.getString();
+        assertTrue("进度条字符串应为 100% 或 Matched/Ignored，got: " + barText,
+                "100%".equals(barText)
+                        || (barText != null && barText.contains("Matched") && barText.contains("Ignored")));
         form.dispose();
+    }
+
+    /**
+     * 设置页打开时若 Provider 尚无 Filter，必须先创建再挂监听，首次 Building 不能被跳过。
+     */
+    public void testUpdateIndexStatusShowsBuildingOnFirstFilterCreate() throws Exception {
+        evictProviderFilter(getProject());
+        assertNull("先清空 cache，才能复现首次创建",
+                AwesomeLinkFilterProvider.getFilterIfExists(getProject()));
+        assertFalse("filterForQuery 不得创建 Filter",
+                new IndexManagementService().isReloadScheduledOrRunning(getProject()));
+        assertNull("isReloadScheduledOrRunning 仍走只读查询",
+                AwesomeLinkFilterProvider.getFilterIfExists(getProject()));
+
+        AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+        try {
+            List<String> labels = new CopyOnWriteArrayList<>();
+            form.indexStatusLabel.addPropertyChangeListener("text",
+                    e -> labels.add(String.valueOf(e.getNewValue())));
+            form.updateIndexStatus();
+            long deadline = System.currentTimeMillis() + 8000;
+            boolean sawBuilding = false;
+            boolean sawReady = false;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                sawBuilding = labels.stream().anyMatch(t -> t != null && t.contains("Building file index"));
+                sawReady = labels.stream().anyMatch(t -> t != null && t.contains("files indexed"));
+                if (sawBuilding && sawReady) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertNotNull("updateIndexStatus 须先创建 Filter",
+                    AwesomeLinkFilterProvider.getFilterIfExists(getProject()));
+            assertTrue("首次构建须显示 Building，labels=" + labels, sawBuilding);
+            assertTrue("完成后仍须 files indexed，labels=" + labels, sawReady);
+        } finally {
+            form.dispose();
+        }
+    }
+
+    /**
+     * Building/Error 必须同步 tooltip，不得残留上一份 Ready 的 Last rebuild。
+     */
+    public void testBuildingAndErrorClearStaleReadyTooltip() throws Exception {
+        AwesomeLinkFilter live = AwesomeLinkFilterProvider.getFilter(getProject());
+        waitUntilFutureDone(live.whenCacheReady(), 10_000, "初始缓存就绪");
+        AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+        try {
+            form.updateIndexStatus();
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                String tip = form.indexStatusLabel.getToolTipText();
+                if (tip != null && tip.contains("Last rebuild")) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertTrue("Ready tooltip 须含 Last rebuild",
+                    form.indexStatusLabel.getToolTipText() != null
+                            && form.indexStatusLabel.getToolTipText().contains("Last rebuild"));
+
+            CountDownLatch releaseSwap = new CountDownLatch(1);
+            live.beforeCacheSwapHook = () -> {
+                try {
+                    if (!releaseSwap.await(15, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("release");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            };
+            try {
+                live.scheduleReloadAsync("r24-tooltip", null, true);
+                form.updateIndexStatus();
+                deadline = System.currentTimeMillis() + 5000;
+                String tip = "";
+                while (System.currentTimeMillis() < deadline) {
+                    PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                    tip = form.indexStatusLabel.getToolTipText();
+                    if (tip != null && !tip.contains("Last rebuild")
+                            && form.indexStatusLabel.getText() != null
+                            && form.indexStatusLabel.getText().contains("Rebuilding")) {
+                        break;
+                    }
+                    Thread.sleep(20);
+                }
+                assertFalse("Building 不得残留 Last rebuild tooltip，got: " + tip,
+                        tip != null && tip.contains("Last rebuild"));
+                java.lang.reflect.Method showError = AwesomeConsoleConfigForm.class
+                        .getDeclaredMethod("showIndexErrorUI",
+                                com.intellij.openapi.project.Project.class, String.class);
+                showError.setAccessible(true);
+                showError.invoke(form, getProject(), "r24-boom");
+                assertEquals("Error tooltip 须是完整 message",
+                        "r24-boom", form.indexStatusLabel.getToolTipText());
+                assertFalse("Error tooltip 不得残留 Last rebuild",
+                        form.indexStatusLabel.getToolTipText().contains("Last rebuild"));
+            } finally {
+                releaseSwap.countDown();
+                live.beforeCacheSwapHook = null;
+            }
+        } finally {
+            form.dispose();
+        }
+    }
+
+    /**
+     * Filter reload 在途时 Rebuild/Clear 必须禁用，就绪后可点。
+     */
+    public void testIndexButtonsDisabledWhileReloadRunning() throws Exception {
+        AwesomeLinkFilter live = AwesomeLinkFilterProvider.getFilter(getProject());
+        waitUntilFutureDone(live.whenCacheReady(), 10_000, "初始缓存就绪");
+        CountDownLatch releaseSwap = new CountDownLatch(1);
+        live.beforeCacheSwapHook = () -> {
+            try {
+                if (!releaseSwap.await(15, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting to release reload");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        };
+        AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+        try {
+            live.scheduleReloadAsync("r19-busy", null, true);
+            form.updateIndexStatus();
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                if (!form.rebuildIndexButton.isEnabled() && !form.clearIndexButton.isEnabled()) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertFalse("reload 在途时 Rebuild 须禁用", form.rebuildIndexButton.isEnabled());
+            assertFalse("reload 在途时 Clear 须禁用", form.clearIndexButton.isEnabled());
+
+            releaseSwap.countDown();
+            waitUntilFutureDone(live.whenCacheReady(), 10_000, "reload 结束后缓存就绪");
+            deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                if (form.rebuildIndexButton.isEnabled() && form.clearIndexButton.isEnabled()) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertTrue("就绪后 Rebuild 可点", form.rebuildIndexButton.isEnabled());
+            assertTrue("就绪后 Clear 可点", form.clearIndexButton.isEnabled());
+        } finally {
+            releaseSwap.countDown();
+            live.beforeCacheSwapHook = null;
+            form.dispose();
+        }
+    }
+
+    /**
+     * 互斥须持续到 EDT onComplete；回调结束后释放，按钮可恢复。
+     */
+    public void testRebuildLockHeldUntilEdtCallback() throws Exception {
+        resetIndexOperationState();
+        AwesomeLinkFilter live = AwesomeLinkFilterProvider.getFilter(getProject());
+        waitUntilFutureDone(live.whenCacheReady(), 10_000, "初始缓存就绪");
+        java.util.concurrent.atomic.AtomicBoolean lockAtComplete = new java.util.concurrent.atomic.AtomicBoolean();
+        java.util.concurrent.atomic.AtomicBoolean done = new java.util.concurrent.atomic.AtomicBoolean();
+        IndexManagementService service = new IndexManagementService();
+        AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+        JFrame frame = new JFrame("r20-lock");
+        frame.add(form.mainPanel);
+        frame.pack();
+        frame.setVisible(true);
+        try {
+            service.rebuildIndex(getProject(), form.mainPanel,
+                    new IndexManagementService.ProgressCallback() {
+                        @Override
+                        public void onStart(String operationType) {
+                        }
+
+                        @Override
+                        public void onComplete(String operationType,
+                                AwesomeLinkFilter.IndexStatistics stats, long duration) {
+                            lockAtComplete.set(service.isOperationInProgress());
+                            done.set(true);
+                        }
+
+                        @Override
+                        public void onError(String operationType, String error) {
+                            done.set(true);
+                        }
+
+                        @Override
+                        public void onRejected(String operationType, String reason) {
+                            done.set(true);
+                        }
+                    });
+            long deadline = System.currentTimeMillis() + 15_000;
+            while (System.currentTimeMillis() < deadline && !done.get()) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                Thread.sleep(20);
+            }
+            assertTrue("rebuild 须完成", done.get());
+            assertTrue("onComplete 入口互斥仍应持有", lockAtComplete.get());
+            assertFalse("EDT 回调结束后应释放互斥", service.isOperationInProgress());
+            form.updateIndexStatus();
+            deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                if (form.rebuildIndexButton.isEnabled()) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertTrue("正常重建后 Rebuild 可点", form.rebuildIndexButton.isEnabled());
+        } finally {
+            resetIndexOperationState();
+            frame.dispose();
+            form.dispose();
+        }
+    }
+
+    /**
+     * 重建等待超时不得当成成功：不能 onComplete，也不能发 INFORMATION 成功通知。
+     * <p>
+     * 测试跑在 EDT 的 Write Intent 里；在途 iterateContent 可能卡住读锁。
+     * 因此不在超时完成前泵事件，改为非 EDT 线程上直接等 manualRebuild 抛超时，
+     * 再确认 rebuildIndex 未走进 onComplete/成功通知。
+     */
+    public void testRebuildTimeoutDoesNotReportSuccess() throws Exception {
+        boolean originalNotify = storage.showNotifications;
+        CountDownLatch releaseSwap = new CountDownLatch(1);
+        List<String> events = new CopyOnWriteArrayList<>();
+        List<Notification> notifications = new CopyOnWriteArrayList<>();
+        AwesomeLinkFilter live = null;
+        try {
+            storage.showNotifications = true;
+            resetIndexOperationState();
+            live = AwesomeLinkFilterProvider.getFilter(getProject());
+            AwesomeLinkFilter filterToRebuild = live;
+            waitUntilFutureDone(filterToRebuild.whenCacheReady(), 10_000, "初始缓存就绪");
+            filterToRebuild.manualRebuildTimeoutMs = 300;
+            filterToRebuild.beforeCacheSwapHook = () -> {
+                try {
+                    if (!releaseSwap.await(15, TimeUnit.SECONDS)) {
+                        throw new IllegalStateException("Timed out waiting to release rebuild");
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(e);
+                }
+            };
+
+            ApplicationManager.getApplication().getMessageBus()
+                    .connect(getTestRootDisposable())
+                    .subscribe(Notifications.TOPIC, new Notifications() {
+                        @Override
+                        public void notify(@NotNull Notification notification) {
+                            notifications.add(notification);
+                        }
+                    });
+
+            java.util.concurrent.atomic.AtomicReference<Throwable> thrown = new java.util.concurrent.atomic.AtomicReference<>();
+            Thread rebuildThread = new Thread(() -> {
+                try {
+                    filterToRebuild.manualRebuild();
+                } catch (Throwable t) {
+                    thrown.set(t);
+                }
+            }, "r16-manual-rebuild");
+            rebuildThread.start();
+            rebuildThread.join(5_000);
+            assertFalse("manualRebuild 应在超时后返回，不得一直卡在 get()", rebuildThread.isAlive());
+            assertNotNull("超时必须从 await 抛出，不得吞掉后当成功返回", thrown.get());
+            assertTrue("超时异常须带 timed out，got: " + thrown.get(),
+                    thrown.get().getMessage() != null && thrown.get().getMessage().contains("timed out"));
+
+            resetIndexOperationState();
+            Component component = new JPanel();
+            IndexManagementService service = new IndexManagementService();
+            service.rebuildIndex(getProject(), component,
+                    new IndexManagementService.ProgressCallback() {
+                        @Override
+                        public void onStart(String operationType) {
+                            events.add("start");
+                        }
+
+                        @Override
+                        public void onComplete(String operationType,
+                                AwesomeLinkFilter.IndexStatistics stats, long duration) {
+                            events.add("complete");
+                        }
+
+                        @Override
+                        public void onError(String operationType, String error) {
+                            events.add("error:" + error);
+                        }
+
+                        @Override
+                        public void onRejected(String operationType, String reason) {
+                            events.add("rejected:" + reason);
+                        }
+                    });
+
+            long waitUntil = System.currentTimeMillis() + 3000;
+            while (System.currentTimeMillis() < waitUntil && service.isOperationInProgress()) {
+                Thread.sleep(20);
+            }
+            assertFalse("超时后互斥旗标应释放", service.isOperationInProgress());
+            assertFalse("超时不得 onComplete，events=" + events, events.contains("complete"));
+            assertFalse("超时不得走 rejected，events=" + events,
+                    events.stream().anyMatch(e -> e.startsWith("rejected:")));
+            for (Notification notification : notifications) {
+                assertFalse(
+                        "超时不得发成功 INFORMATION：" + notification.getContent(),
+                        notification.getType() == NotificationType.INFORMATION
+                                && notification.getContent() != null
+                                && notification.getContent().contains("successfully")
+                );
+            }
+
+            releaseSwap.countDown();
+            waitUntilFutureDone(filterToRebuild.whenCacheReady(), 10_000, "释放闩锁后缓存就绪");
+            AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+            try {
+                form.updateIndexStatus();
+                String statusText = "";
+                long deadline = System.currentTimeMillis() + 5000;
+                while (System.currentTimeMillis() < deadline) {
+                    PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                    statusText = form.indexStatusLabel.getText();
+                    if (statusText != null && statusText.contains("files indexed")) {
+                        break;
+                    }
+                    Thread.sleep(50);
+                }
+                assertTrue("释放闩锁后正常重建仍应显示 files indexed，got: " + statusText,
+                        statusText != null && statusText.contains("files indexed"));
+            } finally {
+                form.dispose();
+            }
+        } finally {
+            releaseSwap.countDown();
+            if (live != null) {
+                live.beforeCacheSwapHook = null;
+                live.manualRebuildTimeoutMs = TimeUnit.SECONDS.toMillis(10);
+            }
+            storage.showNotifications = originalNotify;
+            resetIndexOperationState();
+        }
+    }
+
+    /**
+     * 冷却剩余不足 1s 时不得报 “Please wait 0 seconds” 却仍拒绝。
+     */
+    public void testRebuildCooldownDoesNotReportZeroSeconds() throws Exception {
+        boolean originalNotify = storage.showNotifications;
+        try {
+            storage.showNotifications = true;
+            resetIndexOperationState();
+            Field lastRebuild = IndexManagementService.class.getDeclaredField("LAST_REBUILD_TIME");
+            lastRebuild.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Long> lastRebuildTime = (Map<String, Long>) lastRebuild.get(null);
+            // 还剩约 750ms：整数除法会得到 0，ceil 应为 1。
+            lastRebuildTime.put(getProject().getLocationHash(),
+                    System.currentTimeMillis() - (5000 - 750));
+
+            java.lang.reflect.Method remaining = IndexManagementService.class
+                    .getDeclaredMethod("remainingRebuildCooldownSeconds",
+                            com.intellij.openapi.project.Project.class);
+            remaining.setAccessible(true);
+            long seconds = (Long) remaining.invoke(null, getProject());
+            assertTrue("1–999ms 剩余应向上取整为至少 1 秒，got: " + seconds, seconds >= 1);
+
+            IndexManagementService service = new IndexManagementService();
+            assertFalse("不足 1s 剩余仍须拒绝重建", service.checkRebuildInterval(getProject()));
+
+            lastRebuildTime.put(getProject().getLocationHash(),
+                    System.currentTimeMillis() - 5000);
+            assertTrue("冷却期满应允许重建", service.checkRebuildInterval(getProject()));
+        } finally {
+            storage.showNotifications = originalNotify;
+            resetIndexOperationState();
+        }
     }
 
     /**
@@ -1651,5 +2069,164 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         filter.getTotalCachedFiles();
         
         assertPathDetection("Error in test.java:10", "test.java:10");
+    }
+
+    /**
+     * 需要重建的 Apply 之后必须刷新设置页索引状态（Building），不能停在 Apply 前绿字。
+     */
+    public void testApplyRebuildChangeRefreshesIndexStatus() throws Exception {
+        boolean originalSearchFiles = storage.searchFiles;
+        AwesomeConsoleConfig config = new AwesomeConsoleConfig();
+        try {
+            config.createComponent();
+            Field formField = AwesomeConsoleConfig.class.getDeclaredField("form");
+            formField.setAccessible(true);
+            AwesomeConsoleConfigForm form = (AwesomeConsoleConfigForm) formField.get(config);
+            AwesomeLinkFilter providerFilter = AwesomeLinkFilterProvider.getFilter(getProject());
+            waitUntilFutureDone(providerFilter.whenCacheReady(), 10_000, "Apply 前缓存就绪");
+            long readyUntil = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < readyUntil) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                String text = form.indexStatusLabel.getText();
+                if (text != null && text.contains("files indexed")) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertTrue("Apply 前应已是 files indexed，got: " + form.indexStatusLabel.getText(),
+                    form.indexStatusLabel.getText() != null
+                            && form.indexStatusLabel.getText().contains("files indexed"));
+            List<String> labels = new CopyOnWriteArrayList<>();
+            form.indexStatusLabel.addPropertyChangeListener("text",
+                    e -> labels.add(String.valueOf(e.getNewValue())));
+            form.searchForFilesCheckBox.setSelected(!storage.searchFiles);
+            config.apply();
+            long deadline = System.currentTimeMillis() + 8000;
+            boolean sawBusy = false;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                sawBusy = labels.stream().anyMatch(t -> t != null
+                        && (t.contains("Building file index") || t.contains("Rebuilding")));
+                if (sawBusy) {
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertTrue("Apply 触发重建后须切到 Building/Rebuilding，labels=" + labels, sawBusy);
+        } finally {
+            storage.searchFiles = originalSearchFiles;
+            config.disposeUIResources();
+        }
+    }
+
+    /**
+     * 关闭忽略功能后清空 pattern 必须能 apply，不得被空串校验挡住对话框。
+     * 启用忽略时非法正则仍须抛 ConfigurationException。
+     */
+    public void testApplyAllowsEmptyIgnorePatternWhenDisabled() throws Exception {
+        boolean originalUse = storage.useIgnorePattern;
+        String originalText = storage.getIgnorePatternText();
+        AwesomeConsoleConfig config = new AwesomeConsoleConfig();
+        try {
+            config.createComponent();
+            Field formField = AwesomeConsoleConfig.class.getDeclaredField("form");
+            formField.setAccessible(true);
+            AwesomeConsoleConfigForm form = (AwesomeConsoleConfigForm) formField.get(config);
+
+            storage.useIgnorePattern = true;
+            storage.setIgnorePatternText("old-pattern");
+            form.ignorePatternCheckBox.setSelected(false);
+            form.ignorePatternTextField.setText("");
+            config.apply();
+            assertFalse("关闭忽略后应写入 storage，且不得因空串抛 ConfigurationException",
+                    storage.useIgnorePattern);
+
+            form.ignorePatternCheckBox.setSelected(true);
+            form.ignorePatternTextField.setText("[invalid");
+            try {
+                config.apply();
+                fail("启用忽略时非法正则必须抛 ConfigurationException");
+            } catch (ConfigurationException expected) {
+                assertTrue("错误应提到 Invalid pattern",
+                        expected.getMessage() != null && expected.getMessage().contains("Invalid pattern"));
+            }
+        } finally {
+            storage.useIgnorePattern = originalUse;
+            storage.setIgnorePatternText(originalText);
+            config.disposeUIResources();
+        }
+    }
+
+    /**
+     * rebuild 被冷却拒绝时不得递增 indexUiGeneration，否则在飞回调会因代次过期被丢弃。
+     */
+    public void testRebuildRejectionDoesNotIncrementGeneration() throws Exception {
+        resetIndexOperationState();
+        AwesomeLinkFilter live = AwesomeLinkFilterProvider.getFilter(getProject());
+        waitUntilFutureDone(live.whenCacheReady(), 10_000, "初始缓存就绪");
+
+        AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+        JFrame frame = new JFrame("r35-gen");
+        frame.add(form.mainPanel);
+        frame.pack();
+        frame.setVisible(true);
+        try {
+            Field genField = AwesomeConsoleConfigForm.class.getDeclaredField("indexUiGeneration");
+            genField.setAccessible(true);
+            java.util.concurrent.atomic.AtomicLong generation =
+                    (java.util.concurrent.atomic.AtomicLong) genField.get(form);
+            long before = generation.get();
+
+            Field lastRebuild = IndexManagementService.class.getDeclaredField("LAST_REBUILD_TIME");
+            lastRebuild.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            Map<String, Long> lastRebuildTime = (Map<String, Long>) lastRebuild.get(null);
+            lastRebuildTime.put(getProject().getLocationHash(), System.currentTimeMillis());
+
+            form.rebuildIndexButton.doClick();
+            long deadline = System.currentTimeMillis() + 3000;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                Thread.sleep(20);
+            }
+            assertEquals("拒绝不得递增 generation，before=" + before + " after=" + generation.get(),
+                    before, generation.get());
+            assertTrue("拒绝后 Rebuild 仍可点", form.rebuildIndexButton.isEnabled());
+        } finally {
+            resetIndexOperationState();
+            frame.dispose();
+            form.dispose();
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void evictProviderFilter(Project project) throws Exception {
+        Field field = AwesomeLinkFilterProvider.class.getDeclaredField("cache");
+        field.setAccessible(true);
+        Map<Project, Filter[]> cache = (Map<Project, Filter[]>) field.get(null);
+        Filter[] removed = cache.remove(project);
+        if (removed != null && removed.length > 0 && removed[0] instanceof AwesomeLinkFilter) {
+            Disposer.dispose((AwesomeLinkFilter) removed[0]);
+        }
+    }
+
+    private void waitUntilFutureDone(@NotNull CompletableFuture<?> future, long timeoutMs, String what)
+            throws InterruptedException {
+        long deadline = System.currentTimeMillis() + timeoutMs;
+        while (System.currentTimeMillis() < deadline && !future.isDone()) {
+            PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+            Thread.sleep(20);
+        }
+        assertTrue(what + " 超时未完成", future.isDone());
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void resetIndexOperationState() throws Exception {
+        Field inProgress = IndexManagementService.class.getDeclaredField("OPERATION_IN_PROGRESS");
+        inProgress.setAccessible(true);
+        ((java.util.concurrent.atomic.AtomicBoolean) inProgress.get(null)).set(false);
+        Field lastRebuild = IndexManagementService.class.getDeclaredField("LAST_REBUILD_TIME");
+        lastRebuild.setAccessible(true);
+        ((Map<String, Long>) lastRebuild.get(null)).clear();
     }
 }
