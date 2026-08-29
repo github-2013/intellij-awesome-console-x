@@ -222,6 +222,18 @@ public class FileUtils {
     }
 
     /**
+     * 在非读锁线程把磁盘路径兑成 VFS 身份。禁止从 applyFilter / 读锁调用。
+     */
+    @Nullable
+    public static VirtualFile refreshAndFindLocalFile(@NotNull String path) {
+        path = normalizeSlashes(path);
+        if (isJarPath(path)) {
+            return JarFileSystem.getInstance().findFileByPath(path);
+        }
+        return LocalFileSystem.getInstance().refreshAndFindFileByPath(path);
+    }
+
+    /**
      * 解析符号链接，获取真实路径
      * 
      * @param filePath 文件路径

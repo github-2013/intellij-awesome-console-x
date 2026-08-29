@@ -1,14 +1,18 @@
 package awesome.console.util;
 
 import static awesome.console.util.FileUtils.findFileByPath;
+import static awesome.console.util.FileUtils.refreshAndFindLocalFile;
 import static awesome.console.util.FileUtils.resolveSymlink;
 import static awesome.console.util.LazyInit.lazyInit;
 
 import com.intellij.execution.filters.FileHyperlinkInfoBase;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.fileEditor.OpenFileDescriptor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 import org.jetbrains.annotations.NotNull;
@@ -27,6 +31,12 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
     /** 文件路径 */
     private final String filePath;
 
+    /** 0-based 文档行 */
+    private final int documentLine;
+
+    /** 0-based 文档列 */
+    private final int documentColumn;
+
     /** 延迟加载的文件对象 */
     private final Supplier<VirtualFile> file;
 
@@ -36,9 +46,12 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
     /** 是否解析符号链接的供应器 */
     private final BooleanSupplier resolveSymlink;
 
+    /** 合并并行双击，避免两次全树 refresh */
+    private final AtomicBoolean navigateInFlight = new AtomicBoolean();
+
     /**
      * 构造函数
-     * 
+     *
      * @param project 项目对象
      * @param filePath 文件路径
      * @param row 行号
@@ -54,7 +67,7 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
 
     /**
      * 构造函数
-     * 
+     *
      * @param project 项目对象
      * @param filePath 文件路径
      * @param row 行号
@@ -67,6 +80,8 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
     ) {
         super(project, row > 0 ? row - 1 : 0, col > 0 ? col - 1 : 0);
         this.filePath = filePath;
+        this.documentLine = row > 0 ? row - 1 : 0;
+        this.documentColumn = col > 0 ? col - 1 : 0;
         this.resolveSymlink = resolveSymlink;
         file = lazyInit(() -> findFileByPath(filePath));
         resolvedFile = lazyInit(() -> findFileByPath(resolveSymlink(filePath, true)));
@@ -83,7 +98,7 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
     /**
      * 获取虚拟文件对象
      * 根据resolveSymlink配置决定返回原始文件还是解析后的文件
-     * 
+     *
      * @return 虚拟文件对象
      */
     @Nullable
@@ -93,27 +108,57 @@ public class SingleFileFileHyperlinkInfo extends FileHyperlinkInfoBase {
     }
 
     /**
-     * 导航到文件
-     * 如果文件不存在或无效，显示错误对话框
-     * 
-     * @param project 项目对象
+     * 导航到文件。
+     * 上链身份是磁盘路径；EDT/读锁下 findFileByPath 拒绝 refresh，
+     * miss 时改到 pooled 线程 refreshAndFind，成功后再 EDT 打开。失败才弹窗，且可重试。
      */
     @Override
     public void navigate(@NotNull Project project) {
-        VirtualFile file = getVirtualFile();
-        if (null == file || !file.isValid()) {
-            Messages.showErrorDialog(
-                    project,
-                    "Cannot find file " + StringUtil.trimMiddle(filePath, 150),
-                    "Cannot Open File"
-            );
+        if (project.isDisposed()) {
             return;
         }
+        VirtualFile current = getVirtualFile();
+        if (current != null && current.isValid()) {
+            openFile(project, current);
+            return;
+        }
+        if (!navigateInFlight.compareAndSet(false, true)) {
+            return;
+        }
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            VirtualFile refreshed = null;
+            try {
+                String path = resolveSymlink.getAsBoolean() ? resolveSymlink(filePath, true) : filePath;
+                refreshed = refreshAndFindLocalFile(path);
+            } catch (RuntimeException e) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+                throw e;
+            } finally {
+                VirtualFile toOpen = refreshed;
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    navigateInFlight.set(false);
+                    if (project.isDisposed()) {
+                        return;
+                    }
+                    if (toOpen != null && toOpen.isValid()) {
+                        openFile(project, toOpen);
+                    } else {
+                        Messages.showErrorDialog(
+                                project,
+                                "Cannot find file " + StringUtil.trimMiddle(filePath, 150),
+                                "Cannot Open File"
+                        );
+                    }
+                });
+            }
+        });
+    }
+
+    private void openFile(@NotNull Project project, @NotNull VirtualFile virtualFile) {
         try {
-            super.navigate(project);
+            new OpenFileDescriptor(project, virtualFile, documentLine, documentColumn).navigate(true);
         } catch (RuntimeException e) {
             ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
-            // 忽略由`IDEA Resolve Symlinks`插件引起的DisposalException: Editor is already disposed
             if (!DISPOSAL_EXCEPTION_MESSAGE.equals(e.getMessage())) {
                 throw e;
             }

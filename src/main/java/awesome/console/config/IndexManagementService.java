@@ -180,15 +180,7 @@ public class IndexManagementService {
 
                 // 与设置页自动初始化共用 ReloadProgress：读正在构建的临时缓存，
                 // 而不是主缓存（主缓存在原子替换前仍是旧数据或空的）
-                Consumer<AwesomeLinkFilter.ReloadProgress> progressListener = progress -> {
-                    int processed = progress.getProcessedCount();
-                    if (processed > estimatedTotalFiles) {
-                        estimatedTotalFiles = processed + 100;
-                    }
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        callback.onProgress(progress);
-                    }, ModalityState.stateForComponent(component));
-                };
+                Consumer<AwesomeLinkFilter.ReloadProgress> progressListener = callback::onProgress;
                 filter.addReloadProgressListener(progressListener);
                 try {
                     filter.manualRebuild();
@@ -448,6 +440,13 @@ public class IndexManagementService {
             logger.error("Failed to get index statistics: " + e.getMessage(), e);
         }
         return null;
+    }
+
+    public boolean isCacheInitialized(Project project) {
+        if (project == null) {
+            return false;
+        }
+        return AwesomeLinkFilterProvider.getFilter(project).isCacheInitialized();
     }
 
     /**

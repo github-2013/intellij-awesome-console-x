@@ -21,6 +21,7 @@ import java.awt.event.KeyEvent;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import org.jetbrains.annotations.NotNull;
@@ -71,7 +72,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private volatile AwesomeLinkFilter.ReloadProgress pendingIndexingProgress;
     private volatile String pendingIndexingAction;
     private final AtomicBoolean indexingProgressUiScheduled = new AtomicBoolean(false);
-    private int indexingEstimatedTotal = 1000;
+    private final AtomicLong indexUiGeneration = new AtomicLong();
 
     private static final String ACTION_BUILDING = "Building file index";
     private static final String ACTION_REBUILDING = "Rebuilding index";
@@ -406,8 +407,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                             if (disposed || indexStatusLabel == null) {
                                 return;
                             }
-                            indexStatusLabel.setText("Index Status: Error - " + error.getMessage());
-                            indexStatusLabel.setForeground(JBColor.RED);
+                            showIndexErrorUI(project, error.getMessage());
                         }, ModalityState.any());
                         return;
                     }
@@ -420,8 +420,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     if (disposed || indexStatusLabel == null) {
                         return;
                     }
-                    indexStatusLabel.setText("Index Status: Error - " + e.getMessage());
-                    indexStatusLabel.setForeground(JBColor.RED);
+                    showIndexErrorUI(project, e.getMessage());
                 }, ModalityState.any());
             }
         });
@@ -465,9 +464,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
      * 自动初始化与手动 Rebuild 共用的开始态
      */
     private void showIndexingStartUI(String projectName, String action) {
-        indexingEstimatedTotal = 1000;
         indexStatusLabel.setText(String.format("Index Status [%s]: %s...", projectName, action));
         indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
+        indexProgressBar.setIndeterminate(true);
         indexProgressBar.setValue(0);
         indexProgressBar.setString("Indexing...");
         if (dualColorProgressBarUI != null) {
@@ -480,7 +479,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
      */
     private void attachIndexingProgressListener(Project project, String action) {
         detachBuildingProgressListener();
-        indexingEstimatedTotal = 1000;
         buildingProgressProject = project;
         buildingProgressListener = progress -> scheduleIndexingProgressUi(project.getName(), action, progress);
         indexManagementService.addReloadProgressListener(project, buildingProgressListener);
@@ -526,12 +524,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
      */
     private void applyIndexingProgressUI(String projectName, String action, AwesomeLinkFilter.ReloadProgress progress) {
         int processed = progress.getProcessedCount();
-        if (processed > indexingEstimatedTotal) {
-            indexingEstimatedTotal = processed + 100;
-        }
-        int barValue = processed <= 0
-                ? 0
-                : Math.min(95, (processed * 95) / Math.max(indexingEstimatedTotal, 1));
+        indexProgressBar.setIndeterminate(true);
 
         String statusText = String.format("Index Status [%s]: %s... %d files processed",
                 projectName, action, processed);
@@ -542,14 +535,29 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         indexStatusLabel.setText(statusText);
         indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
 
-        indexProgressBar.setValue(barValue);
         indexProgressBar.setString(processed <= 0 ? "Indexing..." : processed + " files");
-
-        int denom = Math.max(processed, 1);
-        int matchedPct = (progress.getIndexedCount() * barValue) / denom;
-        int ignoredPct = (progress.getIgnoredCount() * barValue) / denom;
         if (dualColorProgressBarUI != null) {
-            dualColorProgressBarUI.updatePercentages(matchedPct, ignoredPct);
+            dualColorProgressBarUI.updatePercentages(0, 0);
+        }
+    }
+
+    /**
+     * 失败是一等状态：红字 + 完整 message。上一份缓存仍可用时旁注 Stale，禁止绿 Ready。
+     */
+    private void showIndexErrorUI(Project project, String error) {
+        String message = (error == null || error.isBlank()) ? "unknown error" : error;
+        boolean stale = project != null && indexManagementService.isCacheInitialized(project);
+        String text = "Index Status: Error - " + message;
+        if (stale) {
+            text += " (Stale, still using previous index)";
+        }
+        indexStatusLabel.setText(text);
+        indexStatusLabel.setForeground(JBColor.RED);
+        indexProgressBar.setIndeterminate(false);
+        indexProgressBar.setValue(0);
+        indexProgressBar.setString("Error");
+        if (dualColorProgressBarUI != null) {
+            dualColorProgressBarUI.updatePercentages(0, 0);
         }
     }
 
@@ -601,9 +609,16 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         }
 
         indexManagementService.rebuildIndex(project, mainPanel, new IndexManagementService.ProgressCallback() {
+            private final long generation = indexUiGeneration.incrementAndGet();
+
+            private boolean isCurrentGeneration() {
+                return generation == indexUiGeneration.get();
+            }
             @Override
             public void onStart(String operationType) {
-                // 检查 UI 组件是否已销毁
+                if (!isCurrentGeneration()) {
+                    return;
+                }
                 if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
                     return;
                 }
@@ -615,7 +630,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
             @Override
             public void onProgress(AwesomeLinkFilter.ReloadProgress progress) {
-                if (disposed || indexStatusLabel == null || indexProgressBar == null) {
+                if (!isCurrentGeneration() || disposed || indexStatusLabel == null || indexProgressBar == null) {
                     return;
                 }
                 scheduleIndexingProgressUi(project.getName(), ACTION_REBUILDING, progress);
@@ -623,7 +638,9 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
             @Override
             public void onComplete(String operationType, AwesomeLinkFilter.IndexStatistics stats, long duration) {
-                // 检查 UI 组件是否已销毁
+                if (!isCurrentGeneration()) {
+                    return;
+                }
                 if (rebuildIndexButton == null || clearIndexButton == null || indexProgressBar == null) {
                     logger.info("Rebuild completed in background (UI already disposed)");
                     return;
@@ -631,13 +648,16 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 rebuildIndexButton.setEnabled(true);
                 clearIndexButton.setEnabled(true);
                 rebuildIndexButton.setText("Rebuild");
+                indexProgressBar.setIndeterminate(false);
                 indexProgressBar.setValue(100);
                 updateIndexStatus();
             }
 
             @Override
             public void onError(String operationType, String error) {
-                // 检查 UI 组件是否已销毁
+                if (!isCurrentGeneration()) {
+                    return;
+                }
                 if (rebuildIndexButton == null || clearIndexButton == null || indexStatusLabel == null || indexProgressBar == null) {
                     logger.error("Rebuild failed in background (UI already disposed): " + error);
                     return;
@@ -645,13 +665,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 rebuildIndexButton.setEnabled(true);
                 clearIndexButton.setEnabled(true);
                 rebuildIndexButton.setText("Rebuild");
-                indexStatusLabel.setText("Index Status: Error");
-                indexStatusLabel.setForeground(JBColor.RED);
-                indexProgressBar.setValue(0);
-                indexProgressBar.setString("0%");
-                if (dualColorProgressBarUI != null) {
-                    dualColorProgressBarUI.updatePercentages(0, 0);
-                }
+                showIndexErrorUI(project, error);
             }
         });
     }
@@ -719,63 +733,16 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 rebuildIndexButton.setEnabled(true);
                 clearIndexButton.setEnabled(true);
                 clearIndexButton.setText("Clear");
-                indexStatusLabel.setText("Index Status: Error");
-                indexStatusLabel.setForeground(JBColor.RED);
-                indexProgressBar.setValue(0);
-                indexProgressBar.setString("0%");
-                if (dualColorProgressBarUI != null) {
-                    dualColorProgressBarUI.updatePercentages(0, 0);
-                }
+                showIndexErrorUI(project, error);
             }
         });
     }
 
     /**
-     * 根据进度百分比更新进度条颜色
-     */
-    private void updateProgressBarColor(int percentage) {
-        Color color;
-        if (percentage == 0) {
-            color = new JBColor(new Color(158, 158, 158), new Color(97, 97, 97));
-        } else if (percentage == 100) {
-            color = new JBColor(new Color(76, 175, 80), new Color(129, 199, 132));
-        } else {
-            color = new JBColor(new Color(255, 193, 7), new Color(255, 235, 59));
-        }
-        indexProgressBar.setForeground(color);
-    }
-
-    /**
-     * 更新进度条颜色（双色模式，支持忽略文件统计）
-     */
-    private void updateProgressBarWithIgnoreStats(int totalFiles, int matchedFiles, int ignoredFiles) {
-        if (totalFiles == 0) {
-            indexProgressBar.setForeground(new JBColor(new Color(158, 158, 158), new Color(97, 97, 97)));
-            return;
-        }
-
-        int matchedPercentage = (matchedFiles * 100) / totalFiles;
-        int ignoredPercentage = (ignoredFiles * 100) / totalFiles;
-        int totalPercentage = matchedPercentage + ignoredPercentage;
-
-        if (ignoredFiles == 0) {
-            updateProgressBarColor(totalPercentage);
-            return;
-        }
-
-        if (totalPercentage == 100) {
-            indexProgressBar.setForeground(new JBColor(new Color(76, 175, 80), new Color(129, 199, 132)));
-        } else if (totalPercentage > 0) {
-            indexProgressBar.setForeground(new JBColor(new Color(76, 175, 80), new Color(129, 199, 132)));
-        } else {
-            indexProgressBar.setForeground(new JBColor(new Color(158, 158, 158), new Color(97, 97, 97)));
-        }
-    }
-
-    /**
-     * 根据索引统计信息更新进度条
+     * 根据索引统计信息更新进度条。条表示扫描完成；组成比只写在字符串和双色上。
      */
     private void updateProgressBarFromStats(AwesomeLinkFilter.IndexStatistics stats) {
+        indexProgressBar.setIndeterminate(false);
         if (stats == null) {
             indexProgressBar.setValue(0);
             indexProgressBar.setString("0%");
@@ -798,14 +765,12 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             if (stats.hasIgnoreStatistics()) {
                 int matchedPercentage = stats.getMatchedPercentage();
                 int ignoredPercentage = stats.getIgnoredPercentage();
-
-                // 进度条文本仅显示匹配文件占比，分母为扫描总数（匹配 + 忽略）
-                indexProgressBar.setString(String.format("%d%%", matchedPercentage));
+                indexProgressBar.setString(String.format("Matched %d%% / Ignored %d%%",
+                        matchedPercentage, ignoredPercentage));
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(matchedPercentage, ignoredPercentage);
                 }
             } else {
-                // 无忽略文件时，显示100%绿色
                 indexProgressBar.setString("100%");
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(100, 0);

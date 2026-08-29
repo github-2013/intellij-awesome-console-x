@@ -1367,6 +1367,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 					"Incomplete disk search must not create a hyperlink",
 					links.isEmpty()
 			);
+			AwesomeLinkFilter.DiskSearchResult memo = filter.peekTruncatedPathDiskCache("pages/cap/hit.ts");
+			Assert.assertNotNull("Capped search should be memoized to avoid walking every line", memo);
+			Assert.assertEquals(
+					AwesomeLinkFilter.DiskSearchStatus.CAPPED,
+					memo.status()
+			);
 		} finally {
 			for (Path file : created) {
 				Files.deleteIfExists(file);
@@ -1395,6 +1401,69 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		} finally {
 			Files.deleteIfExists(moduleA);
 			Files.deleteIfExists(moduleB);
+		}
+	}
+
+	/**
+	 * 纯文件名截断路径无法 walk 子树，空结果不得当成「证明没有」写入负缓存。
+	 */
+	public void testFilenameOnlyTruncatedPathIsUnscannableAndNotMemoized() throws Exception {
+		AwesomeLinkFilter.DiskSearchResult result = filter.searchProjectDiskForSuffix("installedSize.ts");
+		Assert.assertEquals(AwesomeLinkFilter.DiskSearchStatus.UNSCANNABLE, result.status());
+		filter.extractFileLinksFromLine(" .../installedSize.ts | 2", 0);
+		Assert.assertFalse(
+				"Unscannable suffix must not be stored as proven-absent",
+				filter.isTruncatedPathDiskCached("installedSize.ts")
+		);
+	}
+
+	/**
+	 * 后缀第一段落在 walk 剪枝目录上：不可搜索，不得负缓存。
+	 */
+	public void testSkipDirFirstSegmentIsUnscannableAndNotMemoized() throws Exception {
+		AwesomeLinkFilter.DiskSearchResult result = filter.searchProjectDiskForSuffix("node_modules/pkg/index.ts");
+		Assert.assertEquals(AwesomeLinkFilter.DiskSearchStatus.UNSCANNABLE, result.status());
+		filter.extractFileLinksFromLine(" .../node_modules/pkg/index.ts | 2", 0);
+		Assert.assertFalse(
+				"SKIP_DIRS first segment must not be stored as proven-absent",
+				filter.isTruncatedPathDiskCached("node_modules/pkg/index.ts")
+		);
+	}
+
+	/**
+	 * Ignore 过滤闭合多命中后只剩 1 个：与 fileCache 不收录 ignore 文件对齐，允许单链。
+	 * K 仍按未过滤的 EXHAUSTED_MANY 存储。
+	 */
+	public void testIgnoreFilterOnExhaustedPairStillSingleLinks() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path keep = Path.of(basePath, "keep/pages/ignore-pair/x.ts");
+		Path drop = Path.of(basePath, "drop/pages/ignore-pair/x.ts");
+		Files.createDirectories(keep.getParent());
+		Files.createDirectories(drop.getParent());
+		Files.writeString(keep, "export const keep = 1;\n");
+		Files.writeString(drop, "export const drop = 1;\n");
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUse = storage.useIgnorePattern;
+		String originalPattern = storage.getIgnorePatternText();
+		try {
+			AwesomeLinkFilter.DiskSearchResult closed = filter.searchProjectDiskForSuffix("pages/ignore-pair/x.ts");
+			Assert.assertTrue(closed.complete());
+			Assert.assertTrue(closed.paths().size() >= 2);
+
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("drop/pages/ignore-pair");
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(" .../pages/ignore-pair/x.ts | 2", 0);
+			assertSingleHyperlinkEndsWith(links, "keep/pages/ignore-pair/x.ts");
+
+			AwesomeLinkFilter.DiskSearchResult memo = filter.peekTruncatedPathDiskCache("pages/ignore-pair/x.ts");
+			Assert.assertNotNull(memo);
+			Assert.assertTrue("Memo must keep the unfiltered exhausted set", memo.paths().size() >= 2);
+		} finally {
+			storage.useIgnorePattern = originalUse;
+			storage.setIgnorePatternText(originalPattern);
+			Files.deleteIfExists(keep);
+			Files.deleteIfExists(drop);
 		}
 	}
 
@@ -3489,31 +3558,172 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * rebuild 进行中创建的文件不得被 VFS 增量路径静默丢掉。
+	 * rebuild 窗口内真实 VFS after() 必须把 create 记入 unabsorbed，swap 后仍能解析。
+	 * 禁止 addToLiveFileCache，禁止等二次全量把旧实现救绿。
 	 */
-	public void testVfsCreateDuringReloadIsNotDropped() throws Exception {
+	public void testVfsCreateDuringReloadIsRecordedByAfter() throws Exception {
 		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
-		String relativePath = "vfs-during-reload/unique-created-file-xyz123.ts";
+		String relativePath = "vfs-after-delta/unique-created-file-xyz123.ts";
 
-		CompletableFuture<Void> reload = filter.scheduleReloadAsync("reload before create", null, true);
-		myFixture.addFileToProject(relativePath, "export {};\n");
-		reload.get(10, TimeUnit.SECONDS);
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.reloadSnapshotExclusion = file ->
+				file.getPath().replace('\\', '/').endsWith(relativePath);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+		try {
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("reload before after()", null, true);
+			Assert.assertTrue("Reload should reach swap hook", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+
+			PsiFile createdPsi = myFixture.addFileToProject(relativePath, "export {};\n");
+			VirtualFile created = createdPsi.getVirtualFile();
+			PlatformTestUtil.waitWithEventsDispatching(
+					() -> "Timed out waiting for after() to record unabsorbed add",
+					() -> filter.isUnabsorbedAdd(created),
+					10_000
+			);
+
+			releaseSwap.countDown();
+			reload.get(10, TimeUnit.SECONDS);
+
+			List<VirtualFile> resolved = filter.resolveCachedFilesForPath(relativePath);
+			Assert.assertFalse(
+					"File created via VFS after() during reload must survive stale snapshot swap",
+					resolved.isEmpty()
+			);
+			Assert.assertTrue(
+					resolved.get(0).getPath().replace('\\', '/').endsWith(relativePath)
+			);
+		} finally {
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
+			filter.reloadSnapshotExclusion = null;
+		}
+	}
+
+	/**
+	 * 同批 needsFullRebuild（rename/move）不得把已分类的 create 丢掉。
+	 */
+	public void testClassifiedCreateWithFullRebuildStillJoinsDelta() throws Exception {
 		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
-		waitForReloadsToQuiesce(500, 8000);
+		String relativePath = "vfs-mixed-rebuild/unique-created-file-xyz123.ts";
+		PsiFile createdPsi = myFixture.addFileToProject(relativePath, "export {};\n");
+		VirtualFile created = createdPsi.getVirtualFile();
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		waitForReloadsToQuiesce(500, 5000);
 
-		List<VirtualFile> resolved = filter.resolveCachedFilesForPath(relativePath);
-		Assert.assertFalse(
-				"File created during reload should be in the cache after rebuilds quiesce",
-				resolved.isEmpty()
-		);
-		Assert.assertTrue(
-				resolved.get(0).getPath().replace('\\', '/').endsWith(relativePath)
-		);
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.reloadSnapshotExclusion = file ->
+				file.getPath().replace('\\', '/').endsWith(relativePath);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+		try {
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("mixed full rebuild", null, true);
+			Assert.assertTrue("Reload should reach swap hook", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+
+			filter.dispatchClassifiedVfsChanges(List.of(created), List.of(), true);
+			PlatformTestUtil.waitWithEventsDispatching(
+					() -> "Timed out waiting for mixed-batch create to enter unabsorbed adds",
+					() -> filter.isUnabsorbedAdd(created),
+					10_000
+			);
+
+			releaseSwap.countDown();
+			reload.get(10, TimeUnit.SECONDS);
+
+			List<VirtualFile> resolved = filter.resolveCachedFilesForPath(relativePath);
+			Assert.assertFalse(
+					"Create classified alongside needsFullRebuild must join the stale snapshot",
+					resolved.isEmpty()
+			);
+		} finally {
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
+			filter.reloadSnapshotExclusion = null;
+		}
+	}
+
+	/**
+	 * 磁盘 memo 失效后，在飞 search 不得把旧闭合结果 put 回来。
+	 */
+	public void testTruncatedPathDiskCachePutRespectsGeneration() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path fileA = Path.of(basePath, "mod-a/pages/epoch/hit.ts");
+		Files.createDirectories(fileA.getParent());
+		Files.writeString(fileA, "export const a = 1;\n");
+		CountDownLatch arrivedAtPut = new CountDownLatch(1);
+		CountDownLatch releasePut = new CountDownLatch(1);
+		try {
+			Assert.assertFalse(
+					"First closed search should produce a hyperlink",
+					filter.extractFileLinksFromLine(" .../pages/epoch/hit.ts | 2", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"Closed disk search should populate truncatedPathDiskCache",
+					filter.isTruncatedPathDiskCached("pages/epoch/hit.ts")
+			);
+
+			filter.beforeTruncatedPathDiskCachePut = () -> {
+				arrivedAtPut.countDown();
+				try {
+					if (!releasePut.await(10, TimeUnit.SECONDS)) {
+						throw new IllegalStateException("Timed out waiting to release disk cache put");
+					}
+				} catch (InterruptedException e) {
+					Thread.currentThread().interrupt();
+					throw new IllegalStateException(e);
+				}
+			};
+			filter.clearCache();
+			Thread searchThread = new Thread(
+					() -> filter.extractFileLinksFromLine(" .../pages/epoch/hit.ts | 2", 0),
+					"truncated-path-disk-put"
+			);
+			searchThread.start();
+			Assert.assertTrue("Search should reach put hook", arrivedAtPut.await(10, TimeUnit.SECONDS));
+			Assert.assertFalse(
+					"In-flight search must not have put yet",
+					filter.isTruncatedPathDiskCached("pages/epoch/hit.ts")
+			);
+
+			filter.clearCache();
+			releasePut.countDown();
+			searchThread.join(10_000);
+			Assert.assertFalse("Search thread should finish", searchThread.isAlive());
+			Assert.assertFalse(
+					"Stale generation must not put the old closed result back",
+					filter.isTruncatedPathDiskCached("pages/epoch/hit.ts")
+			);
+		} finally {
+			releasePut.countDown();
+			filter.beforeTruncatedPathDiskCachePut = null;
+			Files.deleteIfExists(fileA);
+		}
 	}
 
 	/**
 	 * 增量写入 live cache 的文件，不得被一份不含该文件的 FileIndex snapshot 换表后永远消失。
-	 * 用 exclusion 模拟 FileIndex 滞后，用 swap 前 hook 停车，避免走 after() 的排队全量把旧实现救绿。
+	 * 这条锁 absorb/sticky；after() 记账由 {@link #testVfsCreateDuringReloadIsRecordedByAfter} 覆盖。
 	 */
 	public void testUnabsorbedVfsDeltaSurvivesStaleSnapshotSwap() throws Exception {
 		filter.whenCacheReady().get(10, TimeUnit.SECONDS);

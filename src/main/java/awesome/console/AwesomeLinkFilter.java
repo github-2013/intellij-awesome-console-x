@@ -42,8 +42,11 @@ import com.intellij.util.Alarm;
 import com.intellij.util.PathUtil;
 import com.intellij.util.messages.MessageBusConnection;
 import com.intellij.openapi.application.ApplicationManager;
+import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -55,6 +58,7 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -290,11 +294,43 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	private final Map<String, List<VirtualFile>> fileBaseCache;
 
 	/**
-	 * git --stat 截断路径的磁盘搜索结果缓存。
-	 * key 为去掉 {@code .../} 后的路径后缀；只放入闭合搜索结果（含「搜完确实没有」的空列表）。
-	 * 不完整结果既不得写入，也不得拿来上链，否则会把观测下界当成唯一身份。
+	 * git --stat 截断路径的磁盘搜索 memo。
+	 * 闭合结果（含「证明没有」的空列表）与不完整退避（超时/触顶/walk 失败）都放入，
+	 * 且必须经世代门闩写入。不可搜索的 suffix 不写入。
 	 */
-	private final Map<String, List<String>> truncatedPathDiskCache;
+	private final Map<String, DiskSearchResult> truncatedPathDiskCache;
+
+	/**
+	 * 磁盘 memo 的世代。失效时自增并清空表；search 开始时记下世代，put 仅当世代未变。
+	 * 防止在飞 walk 在 clear 之后把旧观测写回。
+	 */
+	private final AtomicLong truncatedPathDiskCacheEpoch = new AtomicLong();
+
+	/**
+	 * 「目录名 → 该名字在项目树中的所有已知绝对路径」缓存，用于把 N 个不同截断路径 suffix
+	 * 的磁盘定位开销从 O(N×D) 降为 O(D + N×k)（k 为共享该目录名的候选目录数，通常很小）。
+	 * <p>
+	 * git pull/checkout 后一批新文件通常集中出现在少数几个已存在的目录下（如多个文件同属
+	 * {@code pages/xxx}），只有第一个 suffix 需要真正遍历整棵目录树；后续共享同一 firstDir
+	 * 的不同 suffix 直接对着已知目录列表做 O(k) 文件存在性检查，不再重复全树 walk。
+	 * <p>
+	 * 只有 {@link DiskSearchStatus#EXHAUSTED}（walk 未提前退出、已证明完整）的搜索才允许写入，
+	 * 与 {@link #truncatedPathDiskCache} 共享同一世代门闩（{@link #truncatedPathDiskCacheEpoch}），
+	 * 在 {@link #invalidateTruncatedPathDiskCacheLocked()} 中一并失效。
+	 */
+	private final Map<String, List<String>> firstDirLocationsCache;
+
+	/**
+	 * 磁盘搜索突发预算窗口的起点（{@link System#nanoTime()} 基准）。
+	 * 与 {@link #diskSearchBudgetConsumedNanos} 一起被 {@link #diskSearchBudgetLock} 保护。
+	 */
+	private long diskSearchBudgetWindowStartNanos = 0L;
+
+	/** 当前突发窗口内已消耗的磁盘搜索耗时（纳秒） */
+	private long diskSearchBudgetConsumedNanos = 0L;
+
+	/** 保护突发预算窗口两个字段的轻量锁；不涉及磁盘 IO，不与 {@link #cacheLock} 产生嵌套 */
+	private final Object diskSearchBudgetLock = new Object();
 
 	/** 项目实例 */
 	// 声明私有final成员变量，存储当前 IntelliJ IDEA 项目的引用
@@ -356,7 +392,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	static final int DISK_SEARCH_MAX_HITS = 5;
 
 	/**
-	 * 磁盘遍历时跳过的工具目录（性能剪枝，不是第二套忽略规则）
+	 * 磁盘兜底搜索的突发窗口预算（毫秒）。
+	 * <p>
+	 * git pull/checkout 后可能一次出现多个不同的、尚未建索引的新文件，每个都需要独立走一次
+	 * 全树搜索；若逐个都跑满 {@link #DISK_SEARCH_TIMEOUT_MS}，总耗时会随文件数线性叠加
+	 * （N 个文件 ≈ N × 100ms）。这里限制滚动窗口内累计搜索耗时，超出后同窗口内的后续搜索
+	 * 直接按超时降级并 memo，不再发起新的 walk，从而把一批新文件带来的总卡顿时长封顶。
+	 */
+	private static final long DISK_SEARCH_BURST_BUDGET_MS = 300;
+
+	/** 突发预算的滚动窗口时长（毫秒）：窗口过期后预算重置，允许下一批搜索重新计时 */
+	private static final long DISK_SEARCH_BURST_WINDOW_MS = 1000;
+
+	/**
+	 * 磁盘遍历时跳过的工具/构建/依赖目录（性能剪枝，不是第二套忽略规则）
 	 * <p>
 	 * 与设置页 Ignore pattern 职责不同：Ignore 决定「匹配结果要不要生成超链接」；
 	 * 这里只决定「walk 要不要进入该目录」。{@code .git} 等目录通常不在项目 content 中，
@@ -364,7 +413,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	private static final Set<String> DISK_SEARCH_SKIP_DIRS = Set.of(
 			"node_modules", ".git", ".gradle", ".svn", ".hg", ".idea", "bower_components",
-			"build", "out", "target", "dist"
+			"build", "out", "target", "dist",
+			"vendor", ".next", ".nuxt", "coverage", ".cache", "__pycache__",
+			".venv", "venv", "Pods", ".terraform"
 	);
 
 	/** 文件缓存重建防抖间隔（毫秒） */
@@ -431,6 +482,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/** 测试注入：本轮 snapshot 排除该文件，模拟 FileIndex 滞后。生产为 null。 */
 	volatile Predicate<VirtualFile> reloadSnapshotExclusion;
 
+	/** 测试注入：磁盘 search 已返回、put 之前。生产为 null。回调里不得等待本次 search。 */
+	volatile Runnable beforeTruncatedPathDiskCachePut;
+
 	/** 是否为终端环境（线程本地） */
 	// 声明公共final线程本地变量，标记当前线程是否在终端环境中运行
 	// 终端和控制台视图的行为有所不同，需要区别处理，默认为 false
@@ -461,6 +515,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 初始化文件基础名缓存为线程安全的 ConcurrentHashMap
 		this.fileBaseCache = new ConcurrentHashMap<>();
 		this.truncatedPathDiskCache = new ConcurrentHashMap<>();
+		this.firstDirLocationsCache = new ConcurrentHashMap<>();
 		// 创建项目文件迭代器，传入两个缓存 Map，用于遍历项目文件并填充缓存
 		this.indexIterator = new AwesomeProjectFilesIterator(fileCache, fileBaseCache);
 		// 获取项目根管理器实例，用于访问项目的根目录和文件索引
@@ -1212,9 +1267,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/**
 	 * 缓存未命中时，按截断路径后缀在磁盘上查找真实文件并生成超链接。
 	 * 只有闭合搜索才能上链：完整唯一走单链，完整多命中走 chooser。
-	 * {@code paths.size()} 只是观测下界，不完整时不得当成唯一身份。
-	 *
-	 * @return 如果已创建超链接则返回 true
+	 * 不完整结果（超时/触顶/walk 失败）禁止上链，但会写入 memo 以免每行再付 100ms。
 	 */
 	private boolean processTruncatedPathOnDisk(
 			@NotNull FileLinkMatch match,
@@ -1226,7 +1279,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return false;
 		}
 		DiskSearchResult searchResult = findFilesOnDiskByTruncatedPath(matchPath);
-		if (!searchResult.complete()) {
+		if (!searchResult.canLink()) {
 			return false;
 		}
 		List<String> absolutePaths = searchResult.paths().stream()
@@ -1258,12 +1311,36 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 磁盘搜索的一次结果。{@code complete} 表示匹配集已闭合（未超时、未触达命中上限、
-	 * 且未因无法 walk 而跳过子目录），可以写入缓存并用来上链。
+	 * 磁盘搜索状态：闭合证明与上链资格分离。只有 {@link DiskSearchStatus#EXHAUSTED} 可以上链。
 	 */
-	record DiskSearchResult(List<String> paths, boolean complete) {
-		static DiskSearchResult of(List<String> paths, boolean complete) {
-			return new DiskSearchResult(List.copyOf(paths), complete);
+	enum DiskSearchStatus {
+		/** 约定宇宙内已穷尽（含 0 命中的「证明没有」） */
+		EXHAUSTED,
+		TIMED_OUT,
+		CAPPED,
+		WALK_FAILED,
+		/** 无扩展名、无第一段目录、后缀落在 SKIP 宇宙外、没有搜索根 */
+		UNSCANNABLE
+	}
+
+	/**
+	 * 磁盘搜索的一次结果。{@code complete()} 仅表示闭合证明，不等于「看见了文件」。
+	 */
+	record DiskSearchResult(List<String> paths, DiskSearchStatus status) {
+		static DiskSearchResult of(@NotNull List<String> paths, @NotNull DiskSearchStatus status) {
+			return new DiskSearchResult(List.copyOf(paths), status);
+		}
+
+		boolean complete() {
+			return status == DiskSearchStatus.EXHAUSTED;
+		}
+
+		boolean canLink() {
+			return complete() && !paths.isEmpty();
+		}
+
+		boolean shouldMemoize() {
+			return status != DiskSearchStatus.UNSCANNABLE;
 		}
 	}
 
@@ -1276,64 +1353,173 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	private DiskSearchResult findFilesOnDiskByTruncatedPath(@NotNull String matchPath) {
 		String suffix = stripGitTruncationPrefix(matchPath);
 		if (suffix.isEmpty()) {
-			return DiskSearchResult.of(Collections.emptyList(), true);
+			return DiskSearchResult.of(Collections.emptyList(), DiskSearchStatus.UNSCANNABLE);
 		}
 		String fileName = PathUtil.getFileName(suffix);
 		// 没有扩展名的片段（如 git --stat 行尾的 `2`）不做全盘扫描
 		if (fileName.isEmpty() || fileName.indexOf('.') < 0) {
-			return DiskSearchResult.of(Collections.emptyList(), true);
+			return DiskSearchResult.of(Collections.emptyList(), DiskSearchStatus.UNSCANNABLE);
 		}
-		List<String> cached = truncatedPathDiskCache.get(suffix);
+		DiskSearchResult cached = truncatedPathDiskCache.get(suffix);
 		if (cached != null) {
-			return DiskSearchResult.of(cached, true);
+			return cached;
 		}
 		// 不要用 computeIfAbsent：搜索含磁盘 IO，持桶锁会堵住同一 suffix 的并发查找（issue #16）
+		long epoch = truncatedPathDiskCacheEpoch.get();
+		if (!tryAcquireDiskSearchBudget()) {
+			// 突发窗口预算已耗尽：本窗口内不再发起新的全树 walk，直接按超时降级并 memo，
+			// 避免一批未索引新文件逐条线性叠加卡顿；窗口重置或缓存失效后可重新搜索
+			DiskSearchResult budgetExceeded = DiskSearchResult.of(Collections.emptyList(), DiskSearchStatus.TIMED_OUT);
+			runBeforeTruncatedPathDiskCachePutHook();
+			putTruncatedPathDiskCacheIfCurrent(suffix, budgetExceeded, epoch);
+			return budgetExceeded;
+		}
+		long searchStartNanos = System.nanoTime();
 		DiskSearchResult result = searchProjectDiskForSuffix(suffix);
-		if (result.complete()) {
-			truncatedPathDiskCache.put(suffix, result.paths());
+		recordDiskSearchElapsed(System.nanoTime() - searchStartNanos);
+		if (result.shouldMemoize()) {
+			runBeforeTruncatedPathDiskCachePutHook();
+			putTruncatedPathDiskCacheIfCurrent(suffix, result, epoch);
 		}
 		return result;
 	}
 
 	/**
+	 * 尝试占用一次磁盘搜索的突发预算。
+	 * <p>
+	 * 滚动窗口内累计耗时超出 {@link #DISK_SEARCH_BURST_BUDGET_MS} 时返回 {@code false}，
+	 * 调用方应跳过真实 walk，直接按超时降级处理，避免一批新文件逐条线性叠加卡顿。
+	 */
+	private boolean tryAcquireDiskSearchBudget() {
+		long now = System.nanoTime();
+		long windowNanos = TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_BURST_WINDOW_MS);
+		long budgetNanos = TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_BURST_BUDGET_MS);
+		synchronized (diskSearchBudgetLock) {
+			if (now - diskSearchBudgetWindowStartNanos > windowNanos) {
+				diskSearchBudgetWindowStartNanos = now;
+				diskSearchBudgetConsumedNanos = 0L;
+			}
+			return diskSearchBudgetConsumedNanos < budgetNanos;
+		}
+	}
+
+	/**
+	 * 记录一次磁盘搜索实际消耗的时间，计入当前突发窗口预算。
+	 */
+	private void recordDiskSearchElapsed(long elapsedNanos) {
+		synchronized (diskSearchBudgetLock) {
+			diskSearchBudgetConsumedNanos += elapsedNanos;
+		}
+	}
+
+	private void runBeforeTruncatedPathDiskCachePutHook() {
+		Runnable hook = beforeTruncatedPathDiskCachePut;
+		if (hook == null) {
+			return;
+		}
+		try {
+			hook.run();
+		} catch (Exception e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+			logger.warn(String.format("project[%s]: beforeTruncatedPathDiskCachePut failed", project.getName()), e);
+		}
+	}
+
+	/**
+	 * 失效磁盘 memo：世代自增并清空。调用方必须已持有 {@link #cacheWriteLock}。
+	 */
+	private void invalidateTruncatedPathDiskCacheLocked() {
+		truncatedPathDiskCacheEpoch.incrementAndGet();
+		truncatedPathDiskCache.clear();
+		firstDirLocationsCache.clear();
+	}
+
+	private void putTruncatedPathDiskCacheIfCurrent(
+			@NotNull String suffix,
+			@NotNull DiskSearchResult result,
+			long observedEpoch
+	) {
+		if (truncatedPathDiskCacheEpoch.get() != observedEpoch) {
+			return;
+		}
+		truncatedPathDiskCache.put(suffix, result);
+	}
+
+	/**
 	 * 按截断路径后缀定位磁盘文件。
 	 * <p>
-	 * 不按文件名扫整棵树：先尝试 content root 直接拼接作为加速，再遍历目录，
-	 * 用后缀第一段目录名定位，然后对剩余相对路径做 {@code isFile()}。
-	 * 直接拼接命中不是闭合全集，必须继续 walk 才能标 {@code complete}。
+	 * 不按文件名扫整棵树：先尝试 content root 直接拼接作为加速；若 firstDir 此前已被
+	 * 某次闭合 walk 完整枚举过（见 {@link #firstDirLocationsCache}），直接对已知目录列表
+	 * 做 O(k) 文件存在性检查，跳过全树遍历——这把「N 个不同 suffix 各自一次全树 walk」的
+	 * O(N×D) 降为「同一 firstDir 只需一次 walk，之后 O(k)」的 O(D + N×k)，k 为共享该
+	 * 目录名的候选数（通常很小），从架构上解决多个新文件叠加线性卡顿的问题。
+	 * <p>
+	 * 无缓存命中时才遍历目录，用后缀第一段目录名定位，然后对剩余相对路径做 {@code isFile()}。
+	 * 直接拼接命中不是闭合全集，必须继续 walk 才能标 {@code complete}；只有真正走完整棵树
+	 * （未提前退出）的搜索才允许把「firstDir → 所有已知位置」写回缓存供后续 suffix 复用。
 	 */
 	@NotNull
 	DiskSearchResult searchProjectDiskForSuffix(@NotNull String suffix) {
 		List<File> searchRoots = collectDiskSearchRoots();
 		if (searchRoots.isEmpty()) {
-			return DiskSearchResult.of(Collections.emptyList(), true);
+			return DiskSearchResult.of(Collections.emptyList(), DiskSearchStatus.UNSCANNABLE);
 		}
 
 		List<String> found = new ArrayList<>(findDirectSuffixHits(searchRoots, suffix));
 		int slash = suffix.indexOf('/');
 		if (slash <= 0 || slash == suffix.length() - 1) {
-			// 没有第一段目录就无法 walk 子树；根上的 direct hit 不能证明没有第二份
-			if (found.isEmpty()) {
-				return DiskSearchResult.of(Collections.emptyList(), true);
-			}
-			return DiskSearchResult.of(trimDiskHits(found), false);
+			return DiskSearchResult.of(trimDiskHits(found), DiskSearchStatus.UNSCANNABLE);
 		}
 		if (found.size() >= DISK_SEARCH_MAX_HITS) {
-			return DiskSearchResult.of(trimDiskHits(found), false);
+			return DiskSearchResult.of(trimDiskHits(found), DiskSearchStatus.CAPPED);
 		}
 
 		String firstDir = suffix.substring(0, slash);
+		if (DISK_SEARCH_SKIP_DIRS.contains(firstDir)) {
+			return DiskSearchResult.of(trimDiskHits(found), DiskSearchStatus.UNSCANNABLE);
+		}
 		String remaining = suffix.substring(slash + 1);
+
+		List<String> knownDirs = firstDirLocationsCache.get(firstDir);
+		if (knownDirs != null) {
+			collectFileHitsUnderKnownDirectories(knownDirs, remaining, found, DISK_SEARCH_MAX_HITS);
+			List<String> hits = trimDiskHits(found);
+			DiskSearchStatus status = hits.size() >= DISK_SEARCH_MAX_HITS
+					? DiskSearchStatus.CAPPED : DiskSearchStatus.EXHAUSTED;
+			return DiskSearchResult.of(hits, status);
+		}
+
+		long epoch = truncatedPathDiskCacheEpoch.get();
 		long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_TIMEOUT_MS);
-		Set<String> visited = new HashSet<>();
+		Set<Object> visited = new HashSet<>();
+		boolean[] walkFailed = {false};
+		List<String> discoveredDirsNamedFirstDir = new ArrayList<>();
 		for (File root : searchRoots) {
 			if (found.size() >= DISK_SEARCH_MAX_HITS || System.nanoTime() > deadline) {
 				break;
 			}
-			locateByFirstDirectory(root, firstDir, remaining, found, DISK_SEARCH_MAX_HITS, deadline, visited);
+			locateByFirstDirectory(
+					root, firstDir, remaining, found, DISK_SEARCH_MAX_HITS, deadline,
+					visited, walkFailed, discoveredDirsNamedFirstDir
+			);
 		}
-		boolean complete = found.size() < DISK_SEARCH_MAX_HITS && System.nanoTime() <= deadline;
-		return DiskSearchResult.of(trimDiskHits(found), complete);
+		List<String> hits = trimDiskHits(found);
+		DiskSearchStatus status;
+		if (hits.size() >= DISK_SEARCH_MAX_HITS) {
+			status = DiskSearchStatus.CAPPED;
+		} else if (System.nanoTime() > deadline) {
+			status = DiskSearchStatus.TIMED_OUT;
+		} else if (walkFailed[0]) {
+			status = DiskSearchStatus.WALK_FAILED;
+		} else {
+			status = DiskSearchStatus.EXHAUSTED;
+		}
+		if (status == DiskSearchStatus.EXHAUSTED) {
+			// 只有真正走完整棵树（未因命中上限/超时/失败提前退出）才能证明「已知道 firstDir
+			// 在项目里的全部位置」，这份枚举结果才可信、可被后续共享同一 firstDir 的 suffix 复用
+			putFirstDirLocationsCacheIfCurrent(firstDir, discoveredDirsNamedFirstDir, epoch);
+		}
+		return DiskSearchResult.of(hits, status);
 	}
 
 	@NotNull
@@ -1342,6 +1528,45 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return found;
 		}
 		return found.subList(0, DISK_SEARCH_MAX_HITS);
+	}
+
+	/**
+	 * 在已知目录列表下检查 remaining 相对路径是否为真实文件，用于复用
+	 * {@link #firstDirLocationsCache} 命中时的快速 O(k) 校验，不做任何目录树遍历。
+	 */
+	private void collectFileHitsUnderKnownDirectories(
+			@NotNull List<String> knownDirs,
+			@NotNull String remaining,
+			@NotNull List<String> found,
+			int limit
+	) {
+		for (String dirPath : knownDirs) {
+			if (found.size() >= limit) {
+				return;
+			}
+			File candidate = new File(dirPath, remaining);
+			if (candidate.isFile()) {
+				String absolute = candidate.getAbsolutePath();
+				if (!found.contains(absolute)) {
+					found.add(absolute);
+				}
+			}
+		}
+	}
+
+	/**
+	 * 世代门闩写入 firstDir 的完整位置枚举，语义与 {@link #putTruncatedPathDiskCacheIfCurrent}
+	 * 一致：世代已变（缓存已被失效）则放弃写入，避免过期观测被写回。
+	 */
+	private void putFirstDirLocationsCacheIfCurrent(
+			@NotNull String firstDir,
+			@NotNull List<String> dirPaths,
+			long observedEpoch
+	) {
+		if (truncatedPathDiskCacheEpoch.get() != observedEpoch) {
+			return;
+		}
+		firstDirLocationsCache.put(firstDir, List.copyOf(dirPaths));
 	}
 
 	/**
@@ -1404,6 +1629,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/**
 	 * 只遍历目录：找到名为 firstDir 的目录后，检查 remaining 是否为其中的真实文件。
 	 * 不递归进入文件，从而避免按文件名扫整棵树。
+	 * <p>
+	 * 无论该目录下是否命中 remaining，只要目录名等于 firstDir 就会被记入
+	 * {@code discoveredDirsNamedFirstDir}，供 walk 完整结束（{@code EXHAUSTED}）后缓存到
+	 * {@link #firstDirLocationsCache}，供后续共享同一 firstDir 的不同 suffix 复用。
 	 */
 	private void locateByFirstDirectory(
 			@NotNull File dir,
@@ -1412,18 +1641,21 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			@NotNull List<String> found,
 			int limit,
 			long deadline,
-			@NotNull Set<String> visited
+			@NotNull Set<Object> visited,
+			@NotNull boolean[] walkFailed,
+			@NotNull List<String> discoveredDirsNamedFirstDir
 	) {
 		if (found.size() >= limit || System.nanoTime() > deadline) {
 			return;
 		}
-		String canonical;
+		Object visitKey;
 		try {
-			canonical = dir.getCanonicalPath();
+			visitKey = directoryVisitKey(dir);
 		} catch (Exception e) {
+			walkFailed[0] = true;
 			return;
 		}
-		if (!visited.add(normalizePathSeparators(canonical))) {
+		if (!visited.add(visitKey)) {
 			return;
 		}
 		if (DISK_SEARCH_SKIP_DIRS.contains(dir.getName())) {
@@ -1431,6 +1663,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 
 		if (firstDir.equals(dir.getName())) {
+			discoveredDirsNamedFirstDir.add(dir.getAbsolutePath());
 			File candidate = new File(dir, remaining);
 			if (candidate.isFile()) {
 				String absolute = candidate.getAbsolutePath();
@@ -1445,6 +1678,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		File[] children = dir.listFiles(File::isDirectory);
 		if (children == null) {
+			walkFailed[0] = true;
 			return;
 		}
 		for (File child : children) {
@@ -1454,8 +1688,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			if (DISK_SEARCH_SKIP_DIRS.contains(child.getName())) {
 				continue;
 			}
-			locateByFirstDirectory(child, firstDir, remaining, found, limit, deadline, visited);
+			locateByFirstDirectory(
+					child, firstDir, remaining, found, limit, deadline,
+					visited, walkFailed, discoveredDirsNamedFirstDir
+			);
 		}
+	}
+
+	/**
+	 * 计算目录的 walk 去重 key，用于检测符号链接环。
+	 * <p>
+	 * 优先用一次 {@code stat} 取文件系统的唯一标识（Unix 上等价 dev+inode），避免每层目录都
+	 * 付出 {@link File#getCanonicalPath()} 那样解析全部祖先路径的开销；仅当文件系统不提供该标识
+	 * （{@code fileKey() == null}，少数平台/文件系统）时才回退到规范路径，保证环检测始终正确。
+	 */
+	@NotNull
+	private Object directoryVisitKey(@NotNull File dir) throws IOException {
+		BasicFileAttributes attrs = Files.readAttributes(dir.toPath(), BasicFileAttributes.class);
+		Object fileKey = attrs.fileKey();
+		return fileKey != null ? fileKey : normalizePathSeparators(dir.getCanonicalPath());
 	}
 
 	/**
@@ -1897,7 +2148,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			fileCache.putAll(newFileCache);
 			fileBaseCache.clear();
 			fileBaseCache.putAll(newFileBaseCache);
-			truncatedPathDiskCache.clear();
+			invalidateTruncatedPathDiskCacheLocked();
 			ignoredFilesCount = newIgnoredCount + absorbedIgnored;
 
 			// 在写锁内记录日志，确保 fileCache.size() 等读取一致
@@ -2004,9 +2255,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 增量删除：先记入未吸收 delta。reload 在飞时不改 published 表，只排队全量，由 swap 做 join。
+	 * 增量删除：先记入未吸收 delta。reload / 全量窗口不改 published 表，只排队全量，由 swap 做 join。
+	 * 记 D 时必须失效磁盘 memo，否则 rebuild 窗口会继续吃到旧的「已证明没有」。
 	 */
 	void processPublishedDeletions(@NotNull List<VirtualFile> filesToDelete) {
+		processPublishedDeletions(filesToDelete, false);
+	}
+
+	private void processPublishedDeletions(@NotNull List<VirtualFile> filesToDelete, boolean deferPublishedUpdate) {
 		if (filesToDelete.isEmpty()) {
 			return;
 		}
@@ -2019,7 +2275,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				unabsorbedAdds.remove(file);
 				unabsorbedDeletes.add(file);
 			}
-			if (isReloadScheduledOrRunning()) {
+			invalidateTruncatedPathDiskCacheLocked();
+			if (deferPublishedUpdate || isReloadScheduledOrRunning()) {
 				reloadFileCache("vfs change");
 				return;
 			}
@@ -2034,7 +2291,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				}
 				ignoredFilesCount = adjustIgnoredCountAfterRemoval(removed, ignoredFilesCount);
 			}
-			truncatedPathDiskCache.clear();
 			logger.info(String.format("project[%s]: precise delete %d file(s), ignored now [%d]",
 					project.getName(), removedCount, ignoredFilesCount));
 		} finally {
@@ -2043,9 +2299,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 增量新增：先记入未吸收 delta。reload 在飞时不改 published 表，只排队全量，由 swap 做 join。
+	 * 增量新增：先记入未吸收 delta。reload / 全量窗口不改 published 表，只排队全量，由 swap 做 join。
 	 */
 	void processPublishedAdditions(@NotNull List<VirtualFile> newFiles) {
+		processPublishedAdditions(newFiles, false);
+	}
+
+	private void processPublishedAdditions(@NotNull List<VirtualFile> newFiles, boolean deferPublishedUpdate) {
 		if (newFiles.isEmpty()) {
 			return;
 		}
@@ -2058,7 +2318,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				unabsorbedDeletes.remove(file);
 				unabsorbedAdds.add(file);
 			}
-			if (isReloadScheduledOrRunning()) {
+			invalidateTruncatedPathDiskCacheLocked();
+			if (deferPublishedUpdate || isReloadScheduledOrRunning()) {
 				reloadFileCache("vfs change");
 				return;
 			}
@@ -2076,9 +2337,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				addFileToMapsIfAbsent(fileCache, fileBaseCache, file);
 				addedCount++;
 			}
-			if (addedCount > 0) {
-				truncatedPathDiskCache.clear();
-			}
 			if (addedCount > 0 || ignoredCount > 0) {
 				logger.info(String.format("project[%s]: add %d file(s), ignored %d file(s), ignored total [%d]",
 						project.getName(), addedCount, ignoredCount, ignoredFilesCount));
@@ -2090,9 +2348,53 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 测试用：把文件写入 live cache（及未吸收 delta），不经过 VFS after()。
+	 * 锁 after() 丢 D 的测试禁止走这条路径。
 	 */
 	void addToLiveFileCache(@NotNull VirtualFile file) {
 		processPublishedAdditions(List.of(file));
+	}
+
+	/**
+	 * 把已分类的 VFS create/delete 交到 pooled 线程：先记 D，必要时再排队全量。
+	 * 纯 rename/move（D 为空但 needsFullRebuild）仍必须排队全量。
+	 */
+	void dispatchClassifiedVfsChanges(
+			@NotNull List<VirtualFile> newFiles,
+			@NotNull List<VirtualFile> filesToDelete,
+			boolean needsFullRebuild
+	) {
+		boolean deferPublishedUpdate = !isCacheInitialized() || needsFullRebuild || isReloadScheduledOrRunning();
+		ApplicationManager.getApplication().executeOnPooledThread(() -> {
+			try {
+				boolean defer = deferPublishedUpdate || isReloadScheduledOrRunning();
+				processPublishedDeletions(filesToDelete, defer);
+				processPublishedAdditions(newFiles, defer);
+				if (defer) {
+					reloadFileCache("vfs change");
+				}
+			} catch (Exception e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+				logger.error(String.format("project[%s]: Error processing VFS events asynchronously",
+						project.getName()), e);
+			}
+		});
+	}
+
+	boolean isUnabsorbedAdd(@NotNull VirtualFile file) {
+		cacheWriteLock.lock();
+		try {
+			return unabsorbedAdds.contains(file);
+		} finally {
+			cacheWriteLock.unlock();
+		}
+	}
+
+	boolean isTruncatedPathDiskCached(@NotNull String suffix) {
+		return truncatedPathDiskCache.containsKey(suffix);
+	}
+
+	DiskSearchResult peekTruncatedPathDiskCache(@NotNull String suffix) {
+		return truncatedPathDiskCache.get(suffix);
 	}
 
 	/**
@@ -2279,29 +2581,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				EventClassification result = classifyEvents(events);
 				if (!result.hasChanges()) return;
 
-				// Clear 之后没有完整基数，增量会在空快照上记账。
-				// 根因：静默丢掉 VFS 事件会让 git pull 的新文件永远进不了缓存。
-				// 改为排队全量重建，而不是 return。
-				if (!isCacheInitialized() || result.needsFullRebuild || isReloadScheduledOrRunning()) {
-					reloadFileCache("vfs change");
-					return;
-				}
-
-				// 缓存更新操作异步执行，避免在 VFS 事件线程上获取写锁导致阻塞
-				ApplicationManager.getApplication().executeOnPooledThread(() -> {
-					try {
-						if (isReloadScheduledOrRunning()) {
-							reloadFileCache("vfs change");
-							return;
-						}
-						processPublishedDeletions(result.filesToDelete);
-						processPublishedAdditions(result.newFiles);
-					} catch (Exception e) {
-						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
-						logger.error(String.format("project[%s]: Error processing VFS events asynchronously",
-								project.getName()), e);
-					}
-				});
+				// 根因：排队全量不能替代登记 delta。下一份 FileIndex 快照可能仍看不到
+				// 刚才的 create/delete。必须始终走 pooled 上的 processPublished* 先记 D。
+				// 禁止在 VFS 线程拿 cacheWriteLock。
+				dispatchClassifiedVfsChanges(result.newFiles, result.filesToDelete, result.needsFullRebuild);
 			} catch (Exception e) {
 				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 				logger.error(String.format("project[%s]: Error handling VFS events",
@@ -2973,7 +3256,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			fileCache.clear();
 			fileBaseCache.clear();
-			truncatedPathDiskCache.clear();
+			invalidateTruncatedPathDiskCacheLocked();
 			unabsorbedAdds.clear();
 			unabsorbedDeletes.clear();
 			cacheInitialized = false;
@@ -3282,7 +3565,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			fileCache.clear();
 			fileBaseCache.clear();
-			truncatedPathDiskCache.clear();
+			invalidateTruncatedPathDiskCacheLocked();
 			cacheInitialized = false;
 			logger.info(String.format("project[%s]: File cache cleared in dispose()", project.getName()));
 		} catch (Exception e) {
