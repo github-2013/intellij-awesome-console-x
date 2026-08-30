@@ -1479,7 +1479,8 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
     }
 
     /**
-     * 设置页打开时若 Provider 尚无 Filter，必须先创建再挂监听，首次 Building 不能被跳过。
+     * 设置页打开时若 Provider 尚无 Filter，必须先创建再挂监听，不能直接停在全 0 快照。
+     * 空夹具上首次 reload 往往在选文案前就 cacheInitialized，Building 会变成 Rebuilding，两者都算进行中。
      */
     public void testUpdateIndexStatusShowsBuildingOnFirstFilterCreate() throws Exception {
         evictProviderFilter(getProject());
@@ -1497,20 +1498,21 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                     e -> labels.add(String.valueOf(e.getNewValue())));
             form.updateIndexStatus();
             long deadline = System.currentTimeMillis() + 8000;
-            boolean sawBuilding = false;
+            boolean sawInProgress = false;
             boolean sawReady = false;
             while (System.currentTimeMillis() < deadline) {
                 PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
-                sawBuilding = labels.stream().anyMatch(t -> t != null && t.contains("Building file index"));
+                sawInProgress = labels.stream().anyMatch(t -> t != null
+                        && (t.contains("Building file index") || t.contains("Rebuilding index")));
                 sawReady = labels.stream().anyMatch(t -> t != null && t.contains("files indexed"));
-                if (sawBuilding && sawReady) {
+                if (sawInProgress && sawReady) {
                     break;
                 }
                 Thread.sleep(20);
             }
             assertNotNull("updateIndexStatus 须先创建 Filter",
                     AwesomeLinkFilterProvider.getFilterIfExists(getProject()));
-            assertTrue("首次构建须显示 Building，labels=" + labels, sawBuilding);
+            assertTrue("首次创建须显示 Building 或 Rebuilding，labels=" + labels, sawInProgress);
             assertTrue("完成后仍须 files indexed，labels=" + labels, sawReady);
         } finally {
             form.dispose();
@@ -2140,6 +2142,18 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             config.apply();
             assertFalse("关闭忽略后应写入 storage，且不得因空串抛 ConfigurationException",
                     storage.useIgnorePattern);
+            assertFalse("空串被 setter 归一后，文本框须与 storage 对齐，否则 Apply 无法收敛",
+                    config.isModified());
+
+            form.ignorePatternCheckBox.setSelected(false);
+            form.ignorePatternTextField.setText("[invalid");
+            try {
+                config.apply();
+                fail("关闭忽略时非空非法正则仍须抛 ConfigurationException");
+            } catch (ConfigurationException expected) {
+                assertTrue("错误应提到 Invalid pattern",
+                        expected.getMessage() != null && expected.getMessage().contains("Invalid pattern"));
+            }
 
             form.ignorePatternCheckBox.setSelected(true);
             form.ignorePatternTextField.setText("[invalid");

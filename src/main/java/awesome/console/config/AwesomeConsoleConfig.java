@@ -186,7 +186,10 @@ public class AwesomeConsoleConfig implements Configurable {
 		final boolean useIgnorePattern = form.ignorePatternCheckBox.isSelected();
 		final String ignorePatternText = form.ignorePatternTextField.getText().trim();
 
-		if (useIgnorePattern && !Objects.equals(ignorePatternText, storage.getIgnorePatternText())) {
+		// 关闭忽略时允许空串（R44）；非空文本无论开关都必须是合法正则，
+		// 否则 setter 会静默回落到默认值，Apply 也无法收敛。
+		if (!Objects.equals(ignorePatternText, storage.getIgnorePatternText())
+				&& (useIgnorePattern || !ignorePatternText.isEmpty())) {
 			validateRegex(ignorePatternText);
 		}
 
@@ -206,7 +209,7 @@ public class AwesomeConsoleConfig implements Configurable {
 
 		storage.useIgnorePattern = useIgnorePattern;
 		storage.setIgnorePatternText(ignorePatternText);
-		form.ignorePatternTextField.setText(ignorePatternText);
+		form.ignorePatternTextField.setText(storage.getIgnorePatternText());
 		storage.useIgnoreStyle = form.ignoreStyleCheckBox.isSelected();
 
 		storage.fixChooseTargetFile = form.fixChooseTargetFileCheckBox.isSelected();
