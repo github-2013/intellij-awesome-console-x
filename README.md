@@ -41,5 +41,5 @@ You can locate the generated JAR file in the build/libs directory.
 | Document | Description |
 |----------|-------------|
 | [USAGES.md](USAGES.md) | Usage Scenarios & Examples |
-| [CODEBUDDY.md](CODEBUDDY.md) | Project Architecture |
+| [AGENTS.md](AGENTS.md) | AI reading guide & collaboration notes |
 | [GUIDE.md](GUIDE.md) | Development Configuration & FAQ |

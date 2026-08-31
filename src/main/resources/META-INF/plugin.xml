@@ -15,6 +15,17 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.40</b><br/>
+        	<ul>
+        		<li>Added support for git --stat truncated paths with disk search fallback and unique-file resolution among homonyms</li>
+        		<li>Enhanced git rename/delete handling to link the new path and avoid unrelated same-named files after deletion</li>
+        		<li>Added real-time index progress listeners and cache-ready API so settings UI reflects live rebuild status</li>
+        		<li>Improved index status display with last-rebuild tooltip, cached file counts, and layout that no longer stretches the settings panel</li>
+        		<li>Replaced JOptionPane with IntelliJ Messages for error and confirmation dialogs to match IDE UI style</li>
+        		<li>Tightened disk search safety: bounded firstDir/memo caches, no symlink walk outside roots, generation-aware cache puts, and dispose that cannot swap a stale cache</li>
+        		<li>Fixed ignore pattern validation to allow empty values when ignore is disabled, and sync the UI from storage after apply</li>
+        		<li>Added extensive tests for git operations, truncated paths, disk search, indexing, and settings UI (~2800 lines)</li>
+        	</ul>
 	    	<b>0.1337.39</b><br/>
         	<ul>
         		<li>Fixed Windows illegal paths causing excessive SEVERE log errors by adding VALID_WINDOWS_PATH regex pre-check before Paths.get() (PR #18)</li>

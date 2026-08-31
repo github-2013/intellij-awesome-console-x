@@ -1,6 +1,6 @@
 # Awesome Console X - 使用场景与配置指南
 
-> 📖 项目架构设计请参考 [CODEBUDDY.md](CODEBUDDY.md) | 开发配置与常见问题请参考 [GUIDE.md](GUIDE.md)
+> 📖 AI 阅读与协作指南请参考 [AGENTS.md](AGENTS.md) | 开发配置与常见问题请参考 [GUIDE.md](GUIDE.md)
 
 以下展示了插件的完整配置说明和不同开发场景中的实际效果，帮助您快速了解和使用插件。
 

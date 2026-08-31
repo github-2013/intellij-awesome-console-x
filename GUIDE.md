@@ -1,6 +1,6 @@
 # Awesome Console X - 开发与使用指南
 
-> 📖 项目架构设计请参考 [CODEBUDDY.md](CODEBUDDY.md) | 使用场景与配置指南请参考 [USAGES.md](USAGES.md)
+> 📖 AI 阅读与协作指南请参考 [AGENTS.md](AGENTS.md) | 使用场景与配置指南请参考 [USAGES.md](USAGES.md)
 
 ---
 
