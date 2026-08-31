@@ -1620,6 +1620,8 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             }
             assertFalse("reload 在途时 Rebuild 须禁用", form.rebuildIndexButton.isEnabled());
             assertFalse("reload 在途时 Clear 须禁用", form.clearIndexButton.isEnabled());
+            assertEquals("禁用时文案须同步为 Rebuilding...",
+                    "Rebuilding...", form.rebuildIndexButton.getText());
 
             releaseSwap.countDown();
             waitUntilFutureDone(live.whenCacheReady(), 10_000, "reload 结束后缓存就绪");
@@ -1633,6 +1635,62 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             }
             assertTrue("就绪后 Rebuild 可点", form.rebuildIndexButton.isEnabled());
             assertTrue("就绪后 Clear 可点", form.clearIndexButton.isEnabled());
+            assertEquals("就绪后文案须恢复为 Rebuild", "Rebuild", form.rebuildIndexButton.getText());
+        } finally {
+            releaseSwap.countDown();
+            live.beforeCacheSwapHook = null;
+            form.dispose();
+        }
+    }
+
+    /** 已就绪后再 reload 时，终态刷新不得把按钮留在禁用 + Rebuild */
+    public void testReadyStatusRefreshKeepsRebuildButtonBusyFeedback() throws Exception {
+        AwesomeLinkFilter live = AwesomeLinkFilterProvider.getFilter(getProject());
+        waitUntilFutureDone(live.whenCacheReady(), 10_000, "初始缓存就绪");
+        CountDownLatch releaseSwap = new CountDownLatch(1);
+        live.beforeCacheSwapHook = () -> {
+            try {
+                if (!releaseSwap.await(15, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("Timed out waiting to release reload");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+        };
+        AwesomeConsoleConfigForm form = new AwesomeConsoleConfigForm();
+        try {
+            live.scheduleReloadAsync("r-busy-text", null, true);
+            long deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline && !live.isReloadScheduledOrRunning()) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                Thread.sleep(20);
+            }
+            assertTrue("二次 reload 须在途", live.isReloadScheduledOrRunning());
+
+            java.lang.reflect.Method refresh = AwesomeConsoleConfigForm.class
+                    .getDeclaredMethod("refreshIndexStatusFromService", Project.class);
+            refresh.setAccessible(true);
+            refresh.invoke(form, getProject());
+
+            boolean sawBusyText = false;
+            deadline = System.currentTimeMillis() + 5000;
+            while (System.currentTimeMillis() < deadline) {
+                PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
+                if (!form.rebuildIndexButton.isEnabled()
+                        && "Rebuilding...".equals(form.rebuildIndexButton.getText())) {
+                    sawBusyText = true;
+                    break;
+                }
+                Thread.sleep(20);
+            }
+            assertTrue("终态刷新碰上在途 reload 时 Rebuild 须禁用且文案为 Rebuilding...", sawBusyText);
+            String status = form.indexStatusLabel.getText();
+            assertFalse("busy 时不得用 files indexed 绿字盖住进行中, status=" + status,
+                    status != null
+                            && status.contains("files indexed")
+                            && !status.contains("Rebuilding")
+                            && !status.contains("Building"));
         } finally {
             releaseSwap.countDown();
             live.beforeCacheSwapHook = null;

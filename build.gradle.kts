@@ -98,6 +98,6 @@ tasks.withType<JavaCompile>().configureEach {
 // 配置 buildSearchableOptions 任务
 // 该任务用于构建插件设置页面的可搜索选项索引
 tasks.named("buildSearchableOptions") {
-    // 启用此任务（设为 false 可跳过，加快构建速度，但会影响设置搜索功能）
-    enabled = true
+    // 禁用此任务，跳过构建设置搜索索引，避免 headless IDE 网络请求导致 JsonEOFException
+    enabled = false
 }

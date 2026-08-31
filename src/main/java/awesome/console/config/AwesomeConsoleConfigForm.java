@@ -397,6 +397,10 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     // 必须先挂接监听，再注册 whenComplete：若重建刚好结束，
                     // completedFuture.whenComplete 会同步执行并立刻 detach
                     attachIndexingProgressListener(project, action);
+                    // 可能先拿到上一轮 completedFuture，再遇到新一轮 reload
+                    if (ready.isDone()) {
+                        ready = indexManagementService.whenCacheReady(project);
+                    }
                 }
 
                 ready.whenComplete((ignored, error) -> {
@@ -447,9 +451,16 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                     return;
                 }
                 if (stats != null) {
+                    // 只看 reload；onComplete 期间互斥仍持有，不能当 busy
+                    if (indexManagementService.isReloadScheduledOrRunning(project)) {
+                        String action = indexManagementService.isCacheBuilding(project)
+                                ? ACTION_BUILDING
+                                : ACTION_REBUILDING;
+                        showIndexingStartUI(project.getName(), action);
+                        attachIndexingProgressListener(project, action);
+                        return;
+                    }
                     updateIndexStatusUI(project.getName(), stats);
-                    // 有操作在进行时不得抢改按钮：否则会与 onStart 的禁用态互相覆盖，
-                    // 产生"可点击但文案仍是 Rebuilding..."的非法组合
                     restoreIndexButtonsIdle();
                 } else {
                     indexStatusLabel.setText("Index Status: Service not available");
@@ -471,24 +482,16 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         }
     }
 
-    /**
-     * 把索引操作按钮恢复到空闲态。
-     * <p>
-     * enabled 与文案必须一起恢复：只恢复其中之一会产生
-     * "按钮可点击但仍显示 Rebuilding..." 这类非法组合。
-     */
     private void restoreIndexButtonsIdle() {
         restoreIndexButtonsIdle(false);
     }
 
-    /**
-     * @param finishingCurrentOperation 本操作的 onComplete/onError：互斥尚未在回调结束后释放，不得当成仍 busy
-     */
+    /** @param finishingCurrentOperation onComplete/onError 期间互斥尚未释放，不当成仍 busy */
     private void restoreIndexButtonsIdle(boolean finishingCurrentOperation) {
         Project project = getCurrentProject();
         if ((!finishingCurrentOperation && indexManagementService.isOperationInProgress())
                 || (project != null && indexManagementService.isReloadScheduledOrRunning(project))) {
-            disableIndexButtonsWhileBusy();
+            applyIndexButtonsBusy();
             scheduleRestoreButtonsWhenReloadIdle();
             return;
         }
@@ -500,11 +503,13 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             clearIndexButton.setEnabled(true);
             clearIndexButton.setText("Clear");
         }
+        detachBuildingProgressListener();
     }
 
-    private void disableIndexButtonsWhileBusy() {
+    private void applyIndexButtonsBusy() {
         if (rebuildIndexButton != null) {
             rebuildIndexButton.setEnabled(false);
+            rebuildIndexButton.setText("Rebuilding...");
         }
         if (clearIndexButton != null) {
             clearIndexButton.setEnabled(false);
@@ -525,16 +530,21 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         if (dualColorProgressBarUI != null) {
             dualColorProgressBarUI.updatePercentages(0, 0);
         }
-        disableIndexButtonsWhileBusy();
+        applyIndexButtonsBusy();
         scheduleRestoreButtonsWhenReloadIdle();
     }
 
-    /**
-     * reload 结束后再求值按钮，避免 Building/onError 禁用后永远不恢复。
-     */
+    /** reload 结束后再恢复按钮；判定瞬间若已空闲也要补一次 restore */
     private void scheduleRestoreButtonsWhenReloadIdle() {
         Project project = getCurrentProject();
-        if (project == null || !indexManagementService.isReloadScheduledOrRunning(project)) {
+        if (project == null) {
+            return;
+        }
+        if (!indexManagementService.isReloadScheduledOrRunning(project)) {
+            if (!indexManagementService.isOperationInProgress()) {
+                ApplicationManager.getApplication().invokeLater(
+                        this::restoreIndexButtonsIdle, ModalityState.any());
+            }
             return;
         }
         indexManagementService.whenCacheReady(project).whenComplete((ignored, error) -> {
@@ -686,15 +696,10 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             return;
         }
 
+        applyIndexButtonsBusy();
+
         indexManagementService.rebuildIndex(project, mainPanel, new IndexManagementService.ProgressCallback() {
-            /**
-             * 代次在操作<b>被受理并真正开始</b>时才分配。
-             * <p>
-             * 早期实现把递增写在匿名类的实例初始化器里，于是 {@code new ProgressCallback(){}}
-             * 一求值就推进了代次——这发生在 rebuildIndex 的前置检查之前。一旦本次点击被互斥
-             * 或防抖拒绝，新代次已经生效，而在飞的上一次操作的 onComplete/onError 会因代次
-             * 过期被全部丢弃，按钮便永久停在禁用 + "Rebuilding..." 状态。
-             */
+            // 受理后才分配代次，避免被拒绝时把在飞回调判过期
             private volatile long generation = -1;
 
             private boolean isCurrentGeneration() {
@@ -716,8 +721,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
             @Override
             public void onRejected(String operationType, String reason) {
-                // 未受理：不推进代次，因此在飞操作的回调仍然有效，不能动它的 UI。
-                // 仅当确实没有操作在进行时兜底恢复按钮，避免 UI 停在中间态。
                 if (disposed || indexManagementService.isOperationInProgress()) {
                     return;
                 }
