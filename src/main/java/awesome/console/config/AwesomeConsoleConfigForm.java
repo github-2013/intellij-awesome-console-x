@@ -54,6 +54,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     // 索引管理相关字段
     public JLabel indexStatusLabel;
     public JProgressBar indexProgressBar;
+    public JLabel indexProgressLegendLabel;
     public JButton rebuildIndexButton;
     public JButton clearIndexButton;
 
@@ -317,15 +318,18 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private void setupIndexManagement() {
         indexStatusLabel = new JLabel("Index Status: Not initialized");
         indexStatusLabel.setForeground(JBColor.GRAY);
-        indexStatusLabel.setToolTipText("Displays the current state of the file index including total files, matched files, and ignored files.");
+        indexStatusLabel.setToolTipText("Displays the current state of the file index including total files, filename cache size, and basename cache size.");
 
         indexProgressBar = new JProgressBar(0, 100);
-        indexProgressBar.setStringPainted(true);
+        indexProgressBar.setStringPainted(false);
         indexProgressBar.setIndeterminate(false);
         indexProgressBar.setVisible(true);
         indexProgressBar.setValue(0);
-        indexProgressBar.setString("0%");
-        
+
+        indexProgressLegendLabel = new JLabel("0%");
+        indexProgressLegendLabel.setForeground(JBColor.GRAY);
+        indexProgressLegendLabel.setToolTipText("Matched and ignored file counts as a share of scanned files.");
+
         // 应用自定义双色进度条UI
         dualColorProgressBarUI = new DualColorProgressBarUI();
         indexProgressBar.setUI(dualColorProgressBarUI);
@@ -368,6 +372,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         if (project == null) {
             indexStatusLabel.setText("Index Status: No project opened");
             indexStatusLabel.setForeground(JBColor.GRAY);
+            setProgressLegend("0%");
             rebuildIndexButton.setEnabled(false);
             clearIndexButton.setEnabled(false);
             return;
@@ -516,7 +521,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
         indexProgressBar.setIndeterminate(true);
         indexProgressBar.setValue(0);
-        indexProgressBar.setString("Indexing...");
+        setProgressLegend("Indexing...");
         if (dualColorProgressBarUI != null) {
             dualColorProgressBarUI.updatePercentages(0, 0);
         }
@@ -601,15 +606,18 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 
         String statusText = String.format("Index Status [%s]: %s... %d files processed",
                 projectName, action, processed);
-        if (progress.getIgnoredCount() > 0) {
-            statusText += String.format(" (Matched: %d, Ignored: %d)",
-                    progress.getIndexedCount(), progress.getIgnoredCount());
-        }
         indexStatusLabel.setText(statusText);
         indexStatusLabel.setToolTipText(statusText);
         indexStatusLabel.setForeground(new JBColor(new Color(33, 150, 243), new Color(100, 181, 246)));
 
-        indexProgressBar.setString(processed <= 0 ? "Indexing..." : processed + " files");
+        if (processed <= 0) {
+            setProgressLegend("Indexing...");
+        } else if (progress.getIgnoredCount() > 0) {
+            setProgressLegend(String.format("Matched %d / Ignored %d",
+                    progress.getIndexedCount(), progress.getIgnoredCount()));
+        } else {
+            setProgressLegend(processed + " files");
+        }
         if (dualColorProgressBarUI != null) {
             dualColorProgressBarUI.updatePercentages(0, 0);
         }
@@ -630,7 +638,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         indexStatusLabel.setForeground(JBColor.RED);
         indexProgressBar.setIndeterminate(false);
         indexProgressBar.setValue(0);
-        indexProgressBar.setString("Error");
+        setProgressLegend("Error");
         if (dualColorProgressBarUI != null) {
             dualColorProgressBarUI.updatePercentages(0, 0);
         }
@@ -659,11 +667,6 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         StringBuilder sb = new StringBuilder();
         sb.append(String.format("Index Status [%s]: %d files indexed (%d filenames, %d basenames)",
                 projectName, stats.getTotalCachedFiles(), stats.getFileCacheSize(), stats.getFileBaseCacheSize()));
-
-        if (stats.hasIgnoreStatistics()) {
-            sb.append(String.format(" - Matched: %d, Ignored: %d",
-                    stats.getMatchedFiles(), stats.getIgnoredFiles()));
-        }
 
         String statusText = sb.toString();
         indexStatusLabel.setText(statusText);
@@ -821,7 +824,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
                 restoreIndexButtonsIdle(true);
                 // 清除完成后，索引为空，进度条应该显示 0%
                 indexProgressBar.setValue(0);
-                indexProgressBar.setString("0%");
+                setProgressLegend("0%");
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(0, 0);
                 }
@@ -845,13 +848,13 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     }
 
     /**
-     * 根据索引统计信息更新进度条。条表示扫描完成；组成比只写在字符串和双色上。
+     * 根据索引统计信息更新进度条与右侧图例。条只表示构成比；数量和占比写在图例上。
      */
     private void updateProgressBarFromStats(AwesomeLinkFilter.IndexStatistics stats) {
         indexProgressBar.setIndeterminate(false);
         if (stats == null) {
             indexProgressBar.setValue(0);
-            indexProgressBar.setString("0%");
+            setProgressLegend("0%");
             if (dualColorProgressBarUI != null) {
                 dualColorProgressBarUI.updatePercentages(0, 0);
             }
@@ -861,7 +864,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         int scannedFiles = stats.getScannedFiles();
         if (scannedFiles == 0) {
             indexProgressBar.setValue(0);
-            indexProgressBar.setString("0%");
+            setProgressLegend("0%");
             if (dualColorProgressBarUI != null) {
                 dualColorProgressBarUI.updatePercentages(0, 0);
             }
@@ -871,17 +874,24 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
             if (stats.hasIgnoreStatistics()) {
                 int matchedPercentage = stats.getMatchedPercentage();
                 int ignoredPercentage = stats.getIgnoredPercentage();
-                indexProgressBar.setString(String.format("Matched %d%% / Ignored %d%%",
-                        matchedPercentage, ignoredPercentage));
+                setProgressLegend(String.format("Matched %d (%d%%) / Ignored %d (%d%%)",
+                        stats.getMatchedFiles(), matchedPercentage,
+                        stats.getIgnoredFiles(), ignoredPercentage));
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(matchedPercentage, ignoredPercentage);
                 }
             } else {
-                indexProgressBar.setString("100%");
+                setProgressLegend("100%");
                 if (dualColorProgressBarUI != null) {
                     dualColorProgressBarUI.updatePercentages(100, 0);
                 }
             }
+        }
+    }
+
+    private void setProgressLegend(String text) {
+        if (indexProgressLegendLabel != null) {
+            indexProgressLegendLabel.setText(text);
         }
     }
 

@@ -1446,13 +1446,13 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             PlatformTestUtil.dispatchAllInvocationEventsInIdeEventQueue();
             statusText = form.indexStatusLabel.getText();
             String toolTip = form.indexStatusLabel.getToolTipText();
-            String barText = form.indexProgressBar.getString();
+            String legendText = form.indexProgressLegendLabel.getText();
             if (statusText.contains("files indexed")
                     && toolTip != null
                     && toolTip.contains("Last rebuild")
                     && !form.indexProgressBar.isIndeterminate()
-                    && ("100%".equals(barText)
-                    || (barText != null && barText.contains("Matched") && barText.contains("Ignored")))) {
+                    && ("100%".equals(legendText)
+                    || (legendText != null && legendText.contains("Matched") && legendText.contains("Ignored")))) {
                 break;
             }
             Thread.sleep(50);
@@ -1471,10 +1471,12 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                         && form.indexStatusLabel.getToolTipText().contains("Last rebuild"));
         assertFalse("完成后进度条不得仍是 indeterminate",
                 form.indexProgressBar.isIndeterminate());
-        String barText = form.indexProgressBar.getString();
-        assertTrue("进度条字符串应为 100% 或 Matched/Ignored，got: " + barText,
-                "100%".equals(barText)
-                        || (barText != null && barText.contains("Matched") && barText.contains("Ignored")));
+        String legendText = form.indexProgressLegendLabel.getText();
+        assertTrue("右侧图例应为 100% 或 Matched/Ignored，got: " + legendText,
+                "100%".equals(legendText)
+                        || (legendText != null && legendText.contains("Matched") && legendText.contains("Ignored")));
+        assertFalse("数量与占比不应再写在状态行，got: " + statusText,
+                statusText.contains("Matched:") || statusText.contains("Ignored:"));
         form.dispose();
     }
 
@@ -1993,43 +1995,46 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         // 创建配置表单实例来测试UI组件
         awesome.console.config.AwesomeConsoleConfigForm form = new awesome.console.config.AwesomeConsoleConfigForm();
         
-        // 验证进度条组件已正确初始化
+        // 验证进度条与右侧图例已正确初始化
         assertNotNull("Progress bar should be initialized", form.indexProgressBar);
+        assertNotNull("Progress legend should be initialized", form.indexProgressLegendLabel);
         assertTrue("Progress bar should be always visible", form.indexProgressBar.isVisible());
-        assertTrue("Progress bar should have string painted", form.indexProgressBar.isStringPainted());
+        assertFalse("Progress bar should not paint text inside the bar", form.indexProgressBar.isStringPainted());
         
         // 验证进度条的初始状态
         assertEquals("Progress bar should start at 0", 0, form.indexProgressBar.getValue());
         assertEquals("Progress bar should have correct range", 100, form.indexProgressBar.getMaximum());
-        assertEquals("Progress bar should have initial text", "0%", form.indexProgressBar.getString());
+        assertEquals("Progress legend should have initial text", "0%", form.indexProgressLegendLabel.getText());
         
         // 模拟进度条状态更新（重建开始）
         form.indexProgressBar.setIndeterminate(true);
-        form.indexProgressBar.setString("Starting scan...");
+        form.indexProgressLegendLabel.setText("Starting scan...");
         
         assertTrue("Progress bar should remain visible", form.indexProgressBar.isVisible());
         assertTrue("Progress bar should be indeterminate when set", form.indexProgressBar.isIndeterminate());
-        assertEquals("Progress bar should show starting text", "Starting scan...", form.indexProgressBar.getString());
+        assertEquals("Progress legend should show starting text", "Starting scan...",
+                form.indexProgressLegendLabel.getText());
         
         // 模拟进度更新
-        form.indexProgressBar.setString("Processing... 50 files");
-        assertEquals("Progress bar should show progress text", "Processing... 50 files", form.indexProgressBar.getString());
+        form.indexProgressLegendLabel.setText("Processing... 50 files");
+        assertEquals("Progress legend should show progress text", "Processing... 50 files",
+                form.indexProgressLegendLabel.getText());
         
         // 模拟带速度信息的进度更新
-        form.indexProgressBar.setString("Processing... 150 files (75 files/sec)");
-        assertTrue("Progress bar should show speed info", 
-            form.indexProgressBar.getString().contains("files/sec"));
+        form.indexProgressLegendLabel.setText("Processing... 150 files (75 files/sec)");
+        assertTrue("Progress legend should show speed info",
+            form.indexProgressLegendLabel.getText().contains("files/sec"));
         
         // 模拟进度条完成状态（重建完成）
         form.indexProgressBar.setValue(100);
         form.indexProgressBar.setIndeterminate(false);
-        form.indexProgressBar.setString("Completed! 150 files indexed in 2s");
+        form.indexProgressLegendLabel.setText("Completed! 150 files indexed in 2s");
         
         assertTrue("Progress bar should remain visible after completion", form.indexProgressBar.isVisible());
         assertFalse("Progress bar should not be indeterminate when reset", form.indexProgressBar.isIndeterminate());
         assertEquals("Progress bar should show completion status", 100, form.indexProgressBar.getValue());
-        assertTrue("Progress bar should show completion message", 
-            form.indexProgressBar.getString().contains("Completed!"));
+        assertTrue("Progress legend should show completion message",
+            form.indexProgressLegendLabel.getText().contains("Completed!"));
     }
 
     /**

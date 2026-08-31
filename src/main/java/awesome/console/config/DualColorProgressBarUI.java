@@ -66,14 +66,8 @@ class DualColorProgressBarUI extends BasicProgressBarUI {
             g2d.fillRect(b.left + matchedWidth, b.top, ignoredWidth, barRectHeight);
         }
 
-        // 绘制边框（使用JBColor自动适配主题）
+        // 绘制边框（使用JBColor自动适配主题）；百分比图例在条外，这里不画字
         g2d.setColor(JBColor.border());
         g2d.drawRect(b.left, b.top, barRectWidth - 1, barRectHeight - 1);
-
-        // 绘制文本（设置文字颜色以适配主题：亮色主题用黑色，暗色主题用白色）
-        if (progressBar.isStringPainted()) {
-            progressBar.setForeground(new JBColor(Color.BLACK, Color.WHITE));
-            paintString(g, b.left, b.top, barRectWidth, barRectHeight, 0, b);
-        }
     }
 }
