@@ -4274,23 +4274,35 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 
 	/**
 	 * 磁盘 memo 失效后，在飞 search 不得把旧闭合结果 put 回来。
+	 * <p>
+	 * 文件必须写在本用例独占、且未进 VFS 的目录里。Light 测试复用同一项目，
+	 * 前面的 {@code addFileToProject("mod-a/...")} 会让 {@code mod-a} 被监视；
+	 * 若再往该树下 {@code Files.writeString}，fileCache 可能抢先命中，
+	 * 整条用例就走不到 {@code truncatedPathDiskCache} 的世代门闩。
 	 */
 	public void testTruncatedPathDiskCachePutRespectsGeneration() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
 		String basePath = getProject().getBasePath();
 		Assert.assertNotNull("Test project base path should exist", basePath);
-		Path fileA = Path.of(basePath, "mod-a/pages/epoch/hit.ts");
+		String suffix = "pages/epoch/r44-hit.ts";
+		String statLine = " .../" + suffix + " | 2";
+		Path fileA = Path.of(basePath, "r44-epoch", suffix);
 		Files.createDirectories(fileA.getParent());
 		Files.writeString(fileA, "export const a = 1;\n");
 		CountDownLatch arrivedAtPut = new CountDownLatch(1);
 		CountDownLatch releasePut = new CountDownLatch(1);
 		try {
+			Assert.assertTrue(
+					"Setup file must stay out of fileCache so the search goes through disk memo",
+					filter.resolveCachedFilesForPath(suffix).isEmpty()
+			);
 			Assert.assertFalse(
 					"First closed search should produce a hyperlink",
-					filter.extractFileLinksFromLine(" .../pages/epoch/hit.ts | 2", 0).isEmpty()
+					filter.extractFileLinksFromLine(statLine, 0).isEmpty()
 			);
 			Assert.assertTrue(
 					"Closed disk search should populate truncatedPathDiskCache",
-					filter.isTruncatedPathDiskCached("pages/epoch/hit.ts")
+					filter.isTruncatedPathDiskCached(suffix)
 			);
 
 			filter.beforeTruncatedPathDiskCachePut = () -> {
@@ -4306,14 +4318,14 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			};
 			filter.clearCache();
 			Thread searchThread = new Thread(
-					() -> filter.extractFileLinksFromLine(" .../pages/epoch/hit.ts | 2", 0),
+					() -> filter.extractFileLinksFromLine(statLine, 0),
 					"truncated-path-disk-put"
 			);
 			searchThread.start();
 			Assert.assertTrue("Search should reach put hook", arrivedAtPut.await(10, TimeUnit.SECONDS));
 			Assert.assertFalse(
 					"In-flight search must not have put yet",
-					filter.isTruncatedPathDiskCached("pages/epoch/hit.ts")
+					filter.isTruncatedPathDiskCached(suffix)
 			);
 
 			filter.clearCache();
@@ -4322,7 +4334,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			Assert.assertFalse("Search thread should finish", searchThread.isAlive());
 			Assert.assertFalse(
 					"Stale generation must not put the old closed result back",
-					filter.isTruncatedPathDiskCached("pages/epoch/hit.ts")
+					filter.isTruncatedPathDiskCached(suffix)
 			);
 		} finally {
 			releasePut.countDown();
