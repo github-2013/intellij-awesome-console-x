@@ -333,6 +333,242 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("No extension: testfile", "testfile");
 	}
 
+	/**
+	 * 形态分类：有分隔符才算显式路径；目录自证与缓存回退是另一套判定。
+	 */
+	public void testExplicitPathCitationShape() {
+		Assert.assertFalse("裸词 app 不是显式路径", AwesomeLinkFilter.isExplicitPathCitation("app"));
+		Assert.assertFalse("Dockerfile 不是显式路径", AwesomeLinkFilter.isExplicitPathCitation("Dockerfile"));
+		Assert.assertFalse("仅扩展名不是显式路径", AwesomeLinkFilter.isExplicitPathCitation("app.js"));
+		Assert.assertTrue("尾斜杠是目录自证", AwesomeLinkFilter.isExplicitPathCitation("app/"));
+		Assert.assertTrue("./ 前缀是显式路径", AwesomeLinkFilter.isExplicitPathCitation("./gradlew"));
+		Assert.assertTrue("带目录分隔符", AwesomeLinkFilter.isExplicitPathCitation("scripts/app"));
+		Assert.assertTrue("app/page.tsx 是显式路径", AwesomeLinkFilter.isExplicitPathCitation("app/page.tsx"));
+		Assert.assertTrue("Windows 盘符路径", AwesomeLinkFilter.isExplicitPathCitation("C:/src/app"));
+		Assert.assertTrue("Windows 反斜杠", AwesomeLinkFilter.isExplicitPathCitation("src\\app"));
+
+		Assert.assertTrue("目标是文件即放行；拼根由 processExistingFile 负责", AwesomeLinkFilter.allowsResolvedTarget("app", true));
+		Assert.assertFalse("裸词不能链到目录", AwesomeLinkFilter.allowsResolvedTarget("app", false));
+		Assert.assertTrue("尾斜杠可链目录", AwesomeLinkFilter.allowsResolvedTarget("app/", false));
+		Assert.assertTrue("./app 可链目录", AwesomeLinkFilter.allowsResolvedTarget("./app", false));
+		Assert.assertFalse("bin/app 是目录时不成链", AwesomeLinkFilter.allowsResolvedTarget("bin/app", false));
+		Assert.assertTrue("bin/app 是文件时可链", AwesomeLinkFilter.allowsResolvedTarget("bin/app", true));
+
+		Assert.assertFalse("help 里的 app 不应按文件名搜缓存", AwesomeLinkFilter.shouldSearchFileCache("app"));
+		Assert.assertFalse("./app 目标不存在时不应按文件名搜缓存", AwesomeLinkFilter.shouldSearchFileCache("./app"));
+		Assert.assertFalse("app/ 目标不存在时不应按文件名搜缓存", AwesomeLinkFilter.shouldSearchFileCache("app/"));
+		Assert.assertFalse(".../app 截断后只剩裸名，不应按文件名搜缓存", AwesomeLinkFilter.shouldSearchFileCache(".../app"));
+		Assert.assertFalse("Dockerfile 只认项目根上的真实文件", AwesomeLinkFilter.shouldSearchFileCache("Dockerfile"));
+		Assert.assertFalse("./gradlew 只认拼到根后的真实文件", AwesomeLinkFilter.shouldSearchFileCache("./gradlew"));
+		Assert.assertTrue("带扩展名仍走缓存", AwesomeLinkFilter.shouldSearchFileCache("app.js"));
+		Assert.assertTrue("./package.json 仍走缓存", AwesomeLinkFilter.shouldSearchFileCache("./package.json"));
+		Assert.assertTrue("显式文件路径走缓存", AwesomeLinkFilter.shouldSearchFileCache("bin/app"));
+		Assert.assertTrue("FQCN 走缓存", AwesomeLinkFilter.shouldSearchFileCache("awesome.console.IntegrationTest"));
+
+		List<FileLinkMatch> trailingSlash = filter.detectPaths("app/");
+		Assert.assertFalse("app/ 应被识别为路径", trailingSlash.isEmpty());
+		Assert.assertTrue(
+				"path 组本身含尾斜杠，不是只出现在 match 上",
+				AwesomeLinkFilter.isExplicitPathCitation(trailingSlash.get(0).path)
+		);
+	}
+
+	/**
+	 * CLI --help 描述里的 app / tools 即使根上有同名目录，也不应上链；
+	 * 真正的路径、Dockerfile、./gradlew 仍应可点。
+	 * <p>
+	 * 必须在 {@code project.getBasePath()} 下造真实目录：{@code addFileToProject} 只写内存 VFS，
+	 * {@code processExistingFile} 的 exists 闸门根本走不到。
+	 */
+	public void testBareWordDoesNotLinkDirectoryButExplicitPathDoes() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+
+		Path appDir = Path.of(basePath, "app");
+		Path toolsDir = Path.of(basePath, "tools");
+		Path page = appDir.resolve("page.tsx");
+		Path dockerfile = Path.of(basePath, "Dockerfile");
+		Path gradlew = Path.of(basePath, "gradlew");
+		try {
+			Files.createDirectories(appDir);
+			Files.createDirectories(toolsDir);
+			Files.writeString(page, "export default function Page() { return null; }\n");
+			Files.writeString(dockerfile, "FROM scratch\n");
+			Files.writeString(gradlew, "#!/bin/sh\n");
+			Assert.assertTrue(
+					"help 描述里的 app 不应链到根目录 app/",
+					filter.extractFileLinksFromLine(
+							"  app-server    [experimental] Run the app server or related tooling", 0
+					).isEmpty()
+			);
+			Assert.assertTrue(
+					"help 描述里的 tools 不应链到根目录 tools/",
+					filter.extractFileLinksFromLine("  debug         Debugging tools", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"cd app 无斜杠，接受漏链",
+					filter.extractFileLinksFromLine("cd app", 0).isEmpty()
+			);
+
+			List<Filter.ResultItem> dirLinks = filter.extractFileLinksFromLine("app/", 0);
+			assertSingleHyperlinkEndsWith(dirLinks, "/app");
+
+			List<Filter.ResultItem> dotDirLinks = filter.extractFileLinksFromLine("./app", 0);
+			assertSingleHyperlinkEndsWith(dotDirLinks, "/app");
+
+			List<Filter.ResultItem> pageLinks = filter.extractFileLinksFromLine(
+					"Error in app/page.tsx:10", 0
+			);
+			assertSingleHyperlinkEndsWith(pageLinks, "app/page.tsx");
+
+			List<Filter.ResultItem> mixedLinks = filter.extractFileLinksFromLine(
+					"Run the app server in app/page.tsx", 0
+			);
+			Assert.assertEquals("同一行只链真正的路径", 1, mixedLinks.size());
+			assertSingleHyperlinkEndsWith(mixedLinks, "app/page.tsx");
+
+			List<Filter.ResultItem> dockerLinks = filter.extractFileLinksFromLine("Build with Dockerfile", 0);
+			assertSingleHyperlinkEndsWith(dockerLinks, "Dockerfile");
+
+			List<Filter.ResultItem> gradlewLinks = filter.extractFileLinksFromLine("run ./gradlew test", 0);
+			assertSingleHyperlinkEndsWith(gradlewLinks, "gradlew");
+		} finally {
+			Files.deleteIfExists(page);
+			Files.deleteIfExists(dockerfile);
+			Files.deleteIfExists(gradlew);
+			Files.deleteIfExists(appDir);
+			Files.deleteIfExists(toolsDir);
+		}
+	}
+
+	/**
+	 * 控制台里写出 bin/app 且确实是文件才成链；help 里的单词 app 即使仓库有
+	 * scripts/app，也只是普通文本，不应被做成超链接。
+	 * 本用例根上的 {@code app} 是目录；若改成文件，help 里的 app 按口径会成链。
+	 */
+	public void testBareWordDoesNotLinkHomonymFileInSubdirectory() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path appDir = Path.of(basePath, "app");
+		Files.createDirectories(appDir);
+		try {
+			myFixture.addFileToProject("scripts/app", "#!/bin/sh\necho ok\n");
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			Assert.assertTrue(
+					"help 里的 app 不应链到 scripts/app",
+					filter.extractFileLinksFromLine(
+							"  app-server    [experimental] Run the app server", 0
+					).isEmpty()
+			);
+			List<Filter.ResultItem> pathLinks = filter.extractFileLinksFromLine("Error in scripts/app", 0);
+			assertSingleHyperlinkEndsWith(pathLinks, "scripts/app");
+		} finally {
+			Files.deleteIfExists(appDir);
+		}
+	}
+
+	/**
+	 * 根上真实存在的无扩展名文件（不必是 Dockerfile）被裸名引用时应成链。
+	 * 这是口径，不是白名单例外。
+	 */
+	public void testBareWordLinksOrdinaryRootFile() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path rootFile = Path.of(basePath, "payloadgen");
+		try {
+			Files.writeString(rootFile, "#!/bin/sh\necho ok\n");
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					"build finished, see payloadgen for the binary", 0
+			);
+			assertSingleHyperlinkEndsWith(links, "payloadgen");
+		} finally {
+			Files.deleteIfExists(rootFile);
+		}
+	}
+
+	/**
+	 * git rename 展开后的新路径若是裸词，即使原文花括号里有斜杠，也不得链到根目录。
+	 */
+	public void testGitRenameBareNewNameDoesNotLinkDirectory() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path appDir = Path.of(basePath, "app");
+		Files.createDirectories(appDir);
+		try {
+			Assert.assertTrue(
+					"{docs/foo => app} 展开后是裸词 app，不应链到根上 app/",
+					filter.extractFileLinksFromLine(
+							" rename {docs/foo => app} (100%)", 0
+					).isEmpty()
+			);
+		} finally {
+			Files.deleteIfExists(appDir);
+		}
+	}
+
+	/**
+	 * 根上没有 app/ 时，./app 和 app/ 不得按文件名退化成 scripts/app。
+	 */
+	public void testDecoratedBareNameDoesNotFallBackToHomonymFile() throws Exception {
+		myFixture.addFileToProject("scripts/app", "#!/bin/sh\necho ok\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertTrue(
+				"./app 目标不存在时不应退化成 scripts/app",
+				filter.extractFileLinksFromLine("./app", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"app/ 目标不存在时不应退化成 scripts/app",
+				filter.extractFileLinksFromLine("app/", 0).isEmpty()
+		);
+		List<Filter.ResultItem> pathLinks = filter.extractFileLinksFromLine("Error in scripts/app", 0);
+		assertSingleHyperlinkEndsWith(pathLinks, "scripts/app");
+	}
+
+	/**
+	 * 写出 bin/app 且目标是目录时不成链；目标是文件时成链。
+	 */
+	public void testExplicitBinAppLinksFileButNotDirectory() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path binDir = Path.of(basePath, "bin");
+		Path binApp = binDir.resolve("app");
+		try {
+			Files.createDirectories(binApp);
+			Assert.assertTrue(
+					"bin/app 是目录时不成链",
+					filter.extractFileLinksFromLine("Error in bin/app", 0).isEmpty()
+			);
+		} finally {
+			Files.deleteIfExists(binApp);
+			Files.deleteIfExists(binDir);
+		}
+
+		try {
+			Files.createDirectories(binDir);
+			Files.writeString(binApp, "#!/bin/sh\necho ok\n");
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine("Error in bin/app", 0);
+			assertSingleHyperlinkEndsWith(links, "bin/app");
+		} finally {
+			Files.deleteIfExists(binApp);
+			Files.deleteIfExists(binDir);
+		}
+	}
+
+	/**
+	 * 带目录的 scripts/app 是显式路径，即使最后一段叫 app 也应上链。
+	 */
+	public void testExplicitRelativePathToExtensionlessFileStillLinks() throws Exception {
+		myFixture.addFileToProject("scripts/app", "#!/bin/sh\necho ok\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+		List<Filter.ResultItem> scriptLinks = filter.extractFileLinksFromLine("Error in scripts/app", 0);
+		assertSingleHyperlinkEndsWith(scriptLinks, "scripts/app");
+	}
+
 
 	/**
 	 * 测试Unicode字符的文件名（中文）

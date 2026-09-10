@@ -1010,6 +1010,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				if (processExistingFile(candidate, startPoint, results)) {
 					break;
 				}
+				// 剥掉 ./、尾斜杠、.../ 之后若只剩无点裸名，不按文件名搜缓存。
+				if (!shouldSearchFileCache(candidate.path)) {
+					continue;
+				}
 				int sizeBefore = results.size();
 				processCachedFiles(candidate, startPoint, results, deleteModeExactRelative);
 				if (results.size() > sizeBefore) {
@@ -1086,7 +1090,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		final boolean exists = FileUtils.quickExists(filePath);
 		
 		if (exists) {
-			// 文件存在，创建超链接
+			// 只看展开后的 match.path。拼到项目根后是文件即可（Dockerfile 口径）；
+			// bin/app 必须是文件；目录只允许 app/、./app 这类自证形态。
+			if (!allowsResolvedTarget(match.path, file.isFile())) {
+				return false;
+			}
 			final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
 					project, filePath, match.linkedRow, match.linkedCol
 			);
@@ -1315,6 +1323,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 按路径解析缓存中的最佳匹配文件，供测试验证不会退化成同名文件列表。
+	 * 不经过 {@link #shouldSearchFileCache}，不能用来断言裸词 help 文本会不会上链。
 	 */
 	@NotNull
 	List<VirtualFile> resolveCachedFilesForPath(@NotNull String path) {
@@ -1749,6 +1758,78 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * 含 {@code /} 或 {@code \\} 视为显式路径引用（含 {@code ./gradlew}、{@code app/}）。
+	 * 判定对象应是展开后的路径（{@code FileLinkMatch.path}），不是原文 {@code match}。
+	 */
+	static boolean isExplicitPathCitation(@NotNull final String path) {
+		return path.indexOf('/') >= 0 || path.indexOf('\\') >= 0;
+	}
+
+	/**
+	 * 去掉 {@code ./}、{@code ../}、git {@code .../} 和尾斜杠，得到缓存判定用的核心路径。
+	 */
+	@NotNull
+	static String stripCitationDecorators(@NotNull final String path) {
+		String result = path.replace('\\', '/');
+		int truncated = result.indexOf(".../");
+		if (truncated >= 0) {
+			result = result.substring(truncated + 4);
+		}
+		while (result.startsWith("./")) {
+			result = result.substring(2);
+		}
+		while (result.startsWith("../")) {
+			result = result.substring(3);
+		}
+		while (result.endsWith("/") && !result.isEmpty()) {
+			result = result.substring(0, result.length() - 1);
+		}
+		return result;
+	}
+
+	/**
+	 * 目录自证：尾分隔符，或 {@code ./app}、{@code ../app} 这种相对前缀且核心名不再含目录。
+	 * {@code bin/app} 看起来像文件路径，即使目标是目录也不算自证。
+	 */
+	static boolean isDirectorySelfCitation(@NotNull final String path) {
+		String unix = path.replace('\\', '/');
+		if (unix.endsWith("/") && unix.length() > 1) {
+			return true;
+		}
+		if (!(unix.startsWith("./") || unix.startsWith("../"))) {
+			return false;
+		}
+		String core = stripCitationDecorators(unix);
+		return !core.isEmpty() && core.indexOf('/') < 0;
+	}
+
+	/**
+	 * 真实文件可链；目录只允许 {@link #isDirectorySelfCitation} 形态。
+	 *
+	 * @param targetIsFile 对应 {@link File#isFile()}
+	 */
+	static boolean allowsResolvedTarget(@NotNull final String citationPath, boolean targetIsFile) {
+		return targetIsFile || isDirectorySelfCitation(citationPath);
+	}
+
+	/**
+	 * 是否允许按文件名/类名走 fileCache。
+	 * 剥掉 {@code ./}、尾斜杠、{@code .../} 之后仍带目录或 {@code .} 才可以；
+	 * {@code app}、{@code ./app}、{@code app/}、{@code Dockerfile} 不行
+	 * （{@code Dockerfile} 由 {@link #processExistingFile} 的拼根 stat 处理）。
+	 */
+	static boolean shouldSearchFileCache(@NotNull final String path) {
+		String core = stripCitationDecorators(path);
+		if (core.isEmpty()) {
+			return false;
+		}
+		if (core.indexOf('/') >= 0) {
+			return true;
+		}
+		return core.indexOf('.') >= 0;
 	}
 
 	@NotNull
