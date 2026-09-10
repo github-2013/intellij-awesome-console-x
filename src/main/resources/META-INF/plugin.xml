@@ -15,6 +15,10 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.41</b><br/>
+        	<ul>
+        		<li>Fixed bare words such as "app" or "tools" in CLI help text being linked to same-named project directories</li>
+        	</ul>
 	    	<b>0.1337.40</b><br/>
         	<ul>
         		<li>Added support for git --stat truncated paths with disk search fallback and unique-file resolution among homonyms</li>
