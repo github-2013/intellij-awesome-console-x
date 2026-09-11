@@ -24,8 +24,8 @@
 | **Match file paths** | 是否匹配控制台输出中的文件路径。支持 Unix/Windows 路径、相对/绝对路径、带行列号的路径等多种格式。关闭后文件路径将不再生成超链接 | ✅ 开启 |
 | **Match Java-like Classes** | 是否匹配 Java 风格的完全限定类名（如 `com.example.MyClass`）。关闭后堆栈跟踪中的类名将不再生成可点击的超链接。此选项依赖于"Match file paths"开启 | ✅ 开启 |
 | **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当项目中存在同名文件时，限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
-| **Ignore matches** | 使用正则表达式排除特定匹配项。匹配到的内容将不会生成超链接。适用于过滤 `node_modules`、相对路径符号、常见命令参数等误匹配。此选项依赖于"Match file paths"开启 | ✅ 开启 |
-| **Ignore matches（正则表达式）** | 忽略模式的正则表达式内容。支持标准 Java 正则语法和 Unicode 字符类 | `^("?)[./\\]+\1$\|^node_modules/\|^(?i)(start\|dev\|test)$` |
+| **Ignore matches** | 使用正则表达式排除特定匹配项。匹配到的内容将不会生成超链接。适用于过滤 `node_modules`、相对路径符号等误匹配。此选项依赖于"Match file paths"开启 | ✅ 开启 |
+| **Ignore matches（正则表达式）** | 忽略模式的正则表达式内容。支持标准 Java 正则语法和 Unicode 字符类 | `^("?)[./\\]+\1$\|^node_modules/` |
 | **Use ignore style** | 对被忽略的匹配项套用特殊样式，避免被其他插件再做成超链接。终端（Terminal）中不支持此功能（实验性） | ❌ 关闭 |
 
 ### Advanced Settings（高级设置）

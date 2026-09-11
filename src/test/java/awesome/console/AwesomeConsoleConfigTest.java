@@ -319,11 +319,11 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             // 应该匹配 node_modules
             assertTrue("Should match node_modules/", defaultPattern.matcher("node_modules/xxx").find());
             
-            // 应该匹配常见命令（不区分大小写）
-            assertTrue("Should match 'start'", defaultPattern.matcher("start").find());
-            assertTrue("Should match 'dev'", defaultPattern.matcher("dev").find());
-            assertTrue("Should match 'test'", defaultPattern.matcher("test").find());
-            assertTrue("Should match 'TEST'", defaultPattern.matcher("TEST").find());
+            // 裸命令词不再进默认忽略；由路径引用口径处理
+            assertFalse("Should not match 'start'", defaultPattern.matcher("start").find());
+            assertFalse("Should not match 'dev'", defaultPattern.matcher("dev").find());
+            assertFalse("Should not match 'test'", defaultPattern.matcher("test").find());
+            assertFalse("Should not match 'TEST'", defaultPattern.matcher("TEST").find());
             
             // 不应该匹配正常路径
             assertFalse("Should not match normal path", 
@@ -1043,10 +1043,11 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             storage.setIgnorePatternText(AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
             filter = new AwesomeLinkFilter(getProject());
             
-            // 默认忽略模式应该过滤单独的命令参数（整行只包含命令）
-            assertPathNoMatches("dev");
-            assertPathNoMatches("test");
-            assertPathNoMatches("start");
+            // 默认忽略模式过滤相对路径符号和 node_modules，不再覆盖裸命令词
+            assertPathNoMatches("./");
+            assertPathNoMatches("../");
+            assertPathNoMatches("node_modules/");
+            assertPathNoMatches("node_modules/package");
             
             // 但是包含路径分隔符的应该被检测
             assertPathDetection("Error in src/dev/index.js:10", "src/dev/index.js:10");

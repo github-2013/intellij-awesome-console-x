@@ -14,6 +14,7 @@ import awesome.console.match.URLLinkMatch;
 import awesome.console.util.PathListHyperlinkInfo;
 import awesome.console.util.SingleFileFileHyperlinkInfo;
 import com.intellij.execution.filters.Filter;
+import com.intellij.ide.browsers.OpenUrlHyperlinkInfo;
 import com.intellij.openapi.application.ReadAction;
 import com.intellij.openapi.application.WriteAction;
 import com.intellij.openapi.roots.ProjectFileIndex;
@@ -24,6 +25,8 @@ import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
 import java.io.File;
+import java.io.IOException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -3279,35 +3282,26 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * 测试忽略模式禁用时的行为
-	 * 验证当忽略模式被禁用时，命令参数可能会被识别为文件（如果文件存在）
+	 * 关闭 Ignore 后，默认会挡的 {@code node_modules/} 和 {@code ./} 应重新被 detectPaths 认出。
 	 */
 	public void testIgnorePatternDisabled() {
-		System.out.println("Test with ignore pattern disabled:");
-		
 		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
-		
-		// 保存原始配置
 		boolean originalUseIgnorePattern = storage.useIgnorePattern;
-		
+		String originalIgnorePattern = storage.getIgnorePatternText();
 		try {
-			// 禁用忽略模式
-			storage.useIgnorePattern = false;
-			
-			// 重新创建过滤器以应用新配置
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
 			filter = new AwesomeLinkFilter(getProject());
-			
-			// 当忽略模式禁用时，单个单词可能会被识别为文件（如果文件存在）
-			// 这里我们只是验证配置生效，不测试具体的文件匹配
-			// 因为文件匹配依赖于实际的文件系统状态
-			
-			// 验证相对路径符号不会被忽略（但可能也不会被识别为有效路径）
-			System.out.println("With ignore pattern disabled, relative path symbols may be processed differently");
-			
+			assertPathNoMatches("Path: ", "node_modules/foo.js");
+			assertPathNoMatches("Path: ", "./");
+
+			storage.useIgnorePattern = false;
+			filter = new AwesomeLinkFilter(getProject());
+			assertPathDetection("Error in node_modules/foo.js", "node_modules/foo.js");
+			assertPathDetection("Path: ./", "./");
 		} finally {
-			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
-			// 重新创建过滤器以恢复原始配置
+			storage.setIgnorePatternText(originalIgnorePattern);
 			filter = new AwesomeLinkFilter(getProject());
 		}
 	}
@@ -3403,11 +3397,9 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 重新创建过滤器以应用配置
 			filter = new AwesomeLinkFilter(getProject());
 			
-			// 验证过滤器仍然正常工作
-			// 使用默认忽略模式，常见命令应该被忽略
-			assertPathNoMatches("Command: ", "dev");
-			assertPathNoMatches("Command: ", "test");
-			assertPathNoMatches("Command: ", "start");
+			// 空串回退到默认忽略：相对路径符号和 node_modules 仍被挡
+			assertPathNoMatches("Path: ", "./");
+			assertPathNoMatches("Path: ", "node_modules/");
 			
 			// 正常的文件路径应该能被识别
 			assertPathDetection(
@@ -3706,7 +3698,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 
-			// 默认忽略模式: ^(\"?)[./\\\\]+\\1$|^node_modules/|^(?i)(start|dev|test)$
+			// 默认忽略模式: ^(\"?)[./\\\\]+\\1$|^node_modules/
 			System.out.println("Testing default ignore pattern with ignore style:");
 		
 			// 测试相对路径符号被忽略（匹配 ^(\"?)[./\\\\]+\\1$ 部分）
@@ -3722,24 +3714,13 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			assertPathNoMatches("Path: ", "node_modules/");
 			assertPathNoMatches("Path: ", "node_modules/package");
 		
-			// 测试常见命令参数被忽略（匹配 ^(?i)(start|dev|test)$ 部分，不区分大小写）
-			assertPathNoMatches("Command: ", "start");
-			assertPathNoMatches("Command: ", "dev");
-			assertPathNoMatches("Command: ", "test");
-			assertPathNoMatches("Command: ", "Start");
-			assertPathNoMatches("Command: ", "Dev");
-			assertPathNoMatches("Command: ", "Test");
-		
 			// ./src/main.java:10 不匹配忽略模式（包含文件名和扩展名，不是单纯的相对路径符号）
 			assertPathDetection("Error in ./src/main.java:10", "./src/main.java:10");
 		
 			// ./node_modules/package/index.js:20 不匹配 ^node_modules/（因为以 ./ 开头，不是以 node_modules/ 开头）
 			assertPathDetection("Build: ./node_modules/package/index.js:20", "./node_modules/package/index.js:20");
 		
-			// start.sh 不匹配 ^(?i)(start|dev|test)$（因为包含扩展名 .sh，不是单纯的命令词）
 			assertPathDetection("File: start.sh", "start.sh");
-		
-			// dev.config.js 不匹配 ^(?i)(start|dev|test)$（因为包含 .config.js，不是单纯的命令词）
 			assertPathDetection("Script: dev.config.js", "dev.config.js");
 		} finally {
 			// 恢复原始配置
@@ -3752,13 +3733,13 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * 测试更正后的默认忽略模式正则表达式
+	 * 测试默认忽略模式正则表达式
 	 * 验证 DEFAULT_IGNORE_PATTERN_TEXT 中的正则表达式是否正确工作
-	 * 
-	 * 该正则表达式包含三个部分：
+	 *
+	 * 该正则表达式包含两个部分：
 	 * 1. ^(\"?)[./\\\\]+\1$ - 匹配相对路径符号（如 .、..、./、.\、"."、".."等）
 	 * 2. ^node_modules/ - 匹配 node_modules 目录
-	 * 3. ^(?i)(start|dev|test)$ - 不区分大小写匹配命令参数
+	 * 裸命令词（start/dev/test）不再写入默认忽略，由路径引用口径处理。
 	 */
 	public void testCorrectedDefaultIgnorePattern() {
 		System.out.println("Test corrected DEFAULT_IGNORE_PATTERN_TEXT:");
@@ -3770,9 +3751,9 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		String originalIgnorePattern = storage.getIgnorePatternText();
 		
 		try {
-			// 使用更正后的默认忽略模式
+			// 使用当前默认忽略模式
 			storage.useIgnorePattern = true;
-			storage.setIgnorePatternText("^(\"?)[./\\\\]+\\1$|^node_modules/|^(?i)(start|dev|test)$");
+			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
 			
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
@@ -3815,17 +3796,19 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			assertPathNoMatches("Path: ", "node_modules/package/index.js");
 			assertPathNoMatches("Path: ", "node_modules/@scope/package");
 			
-			// 测试第三部分：命令参数应该被忽略（不区分大小写）
-			System.out.println("Testing command parameters (should be ignored, case-insensitive):");
-			assertPathNoMatches("Command: ", "start");
-			assertPathNoMatches("Command: ", "dev");
-			assertPathNoMatches("Command: ", "test");
-			assertPathNoMatches("Command: ", "START");
-			assertPathNoMatches("Command: ", "Dev");
-			assertPathNoMatches("Command: ", "TEST");
-			assertPathNoMatches("Command: ", "StArT");
-			assertPathNoMatches("Command: ", "dEv");
-			assertPathNoMatches("Command: ", "TeSt");
+			// 裸命令词不再被默认忽略模式过滤（detectPaths 仍可能认出，上链由路径引用口径决定）
+			System.out.println("Testing command words are no longer ignored by default pattern:");
+			assertPathDetection("Command: start", "start");
+			assertPathDetection("Command: dev", "dev");
+			assertPathDetection("Command: test", "test");
+			Assert.assertTrue(
+					"npm run dev 不应因默认忽略收窄而重新上链",
+					filter.extractFileLinksFromLine("npm run dev", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"单独的 start 不应上链",
+					filter.extractFileLinksFromLine("Command: start", 0).isEmpty()
+			);
 			
 			// 测试不应该被忽略的路径（组合路径）
 			System.out.println("Testing paths that should NOT be ignored:");
@@ -3836,9 +3819,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			assertPathDetection("Path: .gitignore", ".gitignore");
 			assertPathDetection("Path: ..config", "..config");
 			
-			// 测试不应该被忽略的文件名（包含命令参数但不完全匹配）
-			// 这些文件名虽然以 start/dev/test 开头，但因为有扩展名，不应该被忽略模式过滤
-			// 忽略模式 ^(?i)(start|dev|test)$ 只匹配完全等于这些单词的情况
+			// 带扩展名的文件名不应被默认忽略
 			System.out.println("Testing filenames that should NOT be ignored (contain command prefixes but have extensions):");
 			assertPathDetection("File: start.js", "start.js");
 			assertPathDetection("File: dev.config", "dev.config");
@@ -3858,6 +3839,111 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
 			// 重新创建过滤器以恢复原始配置
+			filter = new AwesomeLinkFilter(getProject());
+		}
+	}
+
+	/**
+	 * 默认 Ignore 在 applyFilter 上也不上链。
+	 * {@code ./src/...} 带真实文件名，不应被第一段相对路径符号规则误伤。
+	 */
+	public void testDefaultIgnorePatternDoesNotCreateHyperlinks() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path mainJava = Path.of(basePath, "src/acx-ignore-link/Main.java");
+		Path lodash = Path.of(basePath, "node_modules/acx-lodash/index.js");
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUse = storage.useIgnorePattern;
+		String originalPattern = storage.getIgnorePatternText();
+		try {
+			Files.createDirectories(mainJava.getParent());
+			Files.createDirectories(lodash.getParent());
+			Files.writeString(mainJava, "class Main {}\n");
+			Files.writeString(lodash, "module.exports = {};\n");
+
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
+			filter = new AwesomeLinkFilter(getProject());
+
+			assertApplyFilterHasNoLinks("./");
+			assertApplyFilterHasNoLinks("Error in node_modules/acx-lodash/index.js:10");
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					"Error in ./src/acx-ignore-link/Main.java:10", 0
+			);
+			assertSingleHyperlinkEndsWith(links, "src/acx-ignore-link/Main.java");
+		} finally {
+			storage.useIgnorePattern = originalUse;
+			storage.setIgnorePatternText(originalPattern);
+			filter = new AwesomeLinkFilter(getProject());
+			deleteCreatedPathTree(mainJava, mainJava.getParent(), Path.of(basePath, "src"));
+			deleteCreatedPathTree(lodash, lodash.getParent(), Path.of(basePath, "node_modules"));
+		}
+	}
+
+	/**
+	 * 默认 {@code ^node_modules/} 只挡根上依赖目录；嵌套的
+	 * {@code packages/.../node_modules/} 仍应识别并可上链。
+	 */
+	public void testDefaultIgnoreDoesNotBlockNestedNodeModules() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path nested = Path.of(basePath, "packages/acx-app/node_modules/x.js");
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUse = storage.useIgnorePattern;
+		String originalPattern = storage.getIgnorePatternText();
+		try {
+			Files.createDirectories(nested.getParent());
+			Files.writeString(nested, "module.exports = 1;\n");
+
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
+			filter = new AwesomeLinkFilter(getProject());
+
+			assertPathNoMatches("Path: ", "node_modules/x.js");
+			assertPathDetection("Error in packages/acx-app/node_modules/x.js", "packages/acx-app/node_modules/x.js");
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					"Error in packages/acx-app/node_modules/x.js", 0
+			);
+			assertSingleHyperlinkEndsWith(links, "packages/acx-app/node_modules/x.js");
+		} finally {
+			storage.useIgnorePattern = originalUse;
+			storage.setIgnorePatternText(originalPattern);
+			filter = new AwesomeLinkFilter(getProject());
+			deleteCreatedPathTree(
+					nested,
+					nested.getParent(),
+					Path.of(basePath, "packages/acx-app"),
+					Path.of(basePath, "packages")
+			);
+		}
+	}
+
+	/**
+	 * Ignore 在 applyFilter 里对 URL 生效；detectURLs 仍能认出被忽略的 URL。
+	 */
+	public void testIgnorePatternFiltersUrls() {
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean originalUse = storage.useIgnorePattern;
+		String originalPattern = storage.getIgnorePatternText();
+		try {
+			storage.useIgnorePattern = true;
+			storage.setIgnorePatternText("^https://example\\.com");
+			filter = new AwesomeLinkFilter(getProject());
+
+			assertURLDetection("Visit https://example.com/docs", "https://example.com/docs");
+			assertApplyFilterHasNoLinks("Visit https://example.com/docs");
+
+			String keptLine = "Visit https://github.com/foo";
+			Filter.Result kept = filter.applyFilter(keptLine, keptLine.length());
+			Assert.assertNotNull("未命中忽略的 URL 应有 Result", kept);
+			Assert.assertEquals("该行只应有一条 URL 链", 1, kept.getResultItems().size());
+			Assert.assertTrue(
+					"未命中忽略的应是 URL 超链接",
+					kept.getResultItems().get(0).getHyperlinkInfo() instanceof OpenUrlHyperlinkInfo
+			);
+		} finally {
+			storage.useIgnorePattern = originalUse;
+			storage.setIgnorePatternText(originalPattern);
 			filter = new AwesomeLinkFilter(getProject());
 		}
 	}
@@ -5256,9 +5342,33 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		);
 	}
 
+	private void assertApplyFilterHasNoLinks(@NotNull String line) {
+		Filter.Result result = filter.applyFilter(line, line.length());
+		Assert.assertNotNull("applyFilter 对无链行仍应返回 Result", result);
+		Assert.assertTrue("不应上链: " + line, result.getResultItems().isEmpty());
+	}
+
 	/**
-	 * 断言控制台解析出的超链接指向以 suffix 结尾的文件，而不是「有链即可」。
+	 * 删除本用例创建的文件，再由内向外尝试删除空目录。
+	 * 目录非空（项目里原先就有内容）则保留，不往上强删。
 	 */
+	private static void deleteCreatedPathTree(@NotNull Path file, Path... dirsInnermostFirst) {
+		try {
+			Files.deleteIfExists(file);
+		} catch (IOException ignored) {
+		}
+		for (Path dir : dirsInnermostFirst) {
+			try {
+				Files.deleteIfExists(dir);
+			} catch (DirectoryNotEmptyException ignored) {
+				return;
+			} catch (IOException ignored) {
+				return;
+			}
+		}
+	}
+
+	/** 断言解析出的超链接指向以 suffix 结尾的文件，而不是「有链即可」。 */
 	private void assertSingleHyperlinkEndsWith(List<Filter.ResultItem> links, String suffix) {
 		Assert.assertFalse("Expected a hyperlink", links.isEmpty());
 		Assert.assertNotNull("Hyperlink info should be present", links.get(0).getHyperlinkInfo());

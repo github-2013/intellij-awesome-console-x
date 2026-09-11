@@ -18,6 +18,7 @@
 	    	<b>0.1337.41</b><br/>
         	<ul>
         		<li>Fixed bare words such as "app" or "tools" in CLI help text being linked to same-named project directories</li>
+        		<li>Dropped start|dev|test from the default ignore pattern; bare command words are already skipped by path citation rules</li>
         	</ul>
 	    	<b>0.1337.40</b><br/>
         	<ul>
