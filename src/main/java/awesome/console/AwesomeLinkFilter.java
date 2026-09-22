@@ -997,7 +997,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		final List<ResultItem> results = new ArrayList<>();
 		final List<FileLinkMatch> matches = detectPaths(line);
 
-		boolean deleteModeExactRelative = isGitDeleteModeLine(line);
 		for(final FileLinkMatch match: matches) {
 			// 处理被忽略的匹配项
 			if (shouldIgnore(match.match)) {
@@ -1015,7 +1014,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					continue;
 				}
 				int sizeBefore = results.size();
-				processCachedFiles(candidate, startPoint, results, deleteModeExactRelative);
+				processCachedFiles(
+						candidate, startPoint, results, shouldRequireExactRelative(candidate.path)
+				);
 				if (results.size() > sizeBefore) {
 					break;
 				}
@@ -1075,7 +1076,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @param match 文件链接匹配项
 	 * @param startPoint 起始位置
 	 * @param results 结果列表
-	 * @return 如果文件存在并已处理则返回true
+	 * @return 该候选已有定论（已成链，或按字面确定不成链）时返回 true，不再走缓存查找
 	 */
 	private boolean processExistingFile(final FileLinkMatch match, final int startPoint, final List<ResultItem> results) {
 		String matchPath = match.path;
@@ -1088,12 +1089,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		final boolean isExternal = isExternal(file);
 		String filePath = file.getAbsolutePath();
 		final boolean exists = FileUtils.quickExists(filePath);
+		// 项目内的绝对路径以字面为准：转成相对路径后会对齐到 content root / source root 下的另一个文件
+		final boolean absoluteInProject = !isExternal && isAbsolutePath(matchPath);
 		
 		if (exists) {
 			// 只看展开后的 match.path。拼到项目根后是文件即可（Dockerfile 口径）；
 			// bin/app 必须是文件；目录只允许 app/、./app 这类自证形态。
 			if (!allowsResolvedTarget(match.path, file.isFile())) {
-				return false;
+				return absoluteInProject;
 			}
 			final HyperlinkInfo linkInfo = HyperlinkUtils.buildFileHyperlinkInfo(
 					project, filePath, match.linkedRow, match.linkedCol
@@ -1105,7 +1108,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return true;
 		}
 		
-		return false;
+		return absoluteInProject;
 	}
 
 	/**
@@ -1150,7 +1153,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return;
 		}
 
-		// 带目录只按完整后缀匹配，不再剥前缀去撞同名路径
+		// 是否精确由 shouldRequireExactRelative 决定：带目录对齐已知根，截断才走后缀
 		final List<VirtualFile> bestMatchingFiles = findBestMatchingFiles(
 				suffixPath, candidates.files(), requireExactRelative
 		);
@@ -1339,7 +1342,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (candidates.resolvedByClassName()) {
 			return candidates.files();
 		}
-		List<VirtualFile> best = findBestMatchingFiles(suffixPath, candidates.files(), false);
+		List<VirtualFile> best = findBestMatchingFiles(
+				suffixPath, candidates.files(), shouldRequireExactRelative(path)
+		);
 		return best == null ? Collections.emptyList() : best;
 	}
 
@@ -2171,11 +2176,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/**
 	 * 查找最佳匹配的文件列表。
 	 * <p>
-	 * 带目录的路径只按完整后缀匹配，不再逐级剥前缀：
-	 * 否则 {@code delete mode ... e2e/dashboard/package.json} 会命中仍存在的
-	 * {@code apps/dashboard/package.json}。create / 相对路径只要真实文件以该完整后缀结尾
-	 *（如 {@code src/e2e/dashboard/server.js}）仍能命中，不必依赖剥目录。
-	 * 仅文件名时，候选已是同名文件，suffix 匹配即全部候选。
+	 * 精确或后缀只由候选路径决定。纯文件名精确对齐时只保留项目根上的那一个。
 	 *
 	 * @param generalizedMatchPath 标准化后的匹配路径（使用正斜杠）
 	 * @param matchingFiles 候选文件列表
@@ -2188,31 +2189,90 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (suffix.isEmpty()) {
 			return null;
 		}
-		final List<VirtualFile> foundFiles = requireExactRelative && suffix.contains("/")
+		final List<VirtualFile> foundFiles = requireExactRelative
 				? filterFilesByExactRelativePath(suffix, matchingFiles)
 				: filterFilesByPathSuffix(suffix, matchingFiles);
 		return foundFiles.isEmpty() ? null : foundFiles;
 	}
 
 	/**
-	 * 识别 git {@code delete mode} 行。带目录的删除路径只允许恰好等于该相对路径，禁止后缀回退。
+	 * 该候选是否必须相对已知根精确对齐，禁止无界路径后缀回退。
+	 * 只看候选路径，不看所在行的 Git 文案、直方图或 {@code +}/{@code -}。
+	 * <p>
+	 * {@code .../} 截断的字面路径不完整，仍走后缀和磁盘查找。
+	 * 其余路径一律精确：带目录对齐项目根 / content root / source root，
+	 * 纯文件名只对齐项目根。
 	 */
-	static boolean isGitDeleteModeLine(@NotNull String line) {
-		int i = 0;
-		while (i < line.length() && (line.charAt(i) == ' ' || line.charAt(i) == '\t')) {
-			i++;
-		}
-		return line.startsWith("delete mode ", i);
+	boolean shouldRequireExactRelative(@NotNull String candidatePath) {
+		return !isGitTruncatedPath(candidatePath);
 	}
 
+	/**
+	 * 引用路径必须恰好等于文件相对某一已知根的路径。
+	 * 带目录：项目 basePath、content roots、source roots。
+	 * 纯文件名只相对项目根。{@code package.json} 指仓库根上那一个，
+	 * 普通日志和 Git 摘要都不搜子目录同名文件。
+	 */
 	@NotNull
 	private List<VirtualFile> filterFilesByExactRelativePath(
 			@NotNull String relativePath,
 			@NotNull List<VirtualFile> matchingFiles
 	) {
+		Set<String> targets = exactRelativeTargets(relativePath);
 		return matchingFiles.stream()
-				.filter(file -> relativePath.equals(getRelativePath(file.getPath())))
+				.filter(file -> targets.contains(normalizePathSeparators(file.getPath())))
 				.collect(Collectors.toList());
+	}
+
+	@NotNull
+	private Set<String> exactRelativeTargets(@NotNull String relativePath) {
+		Set<String> targets = new HashSet<>();
+		String base = project.getBasePath();
+		if (base == null || base.isEmpty()) {
+			targets.add(relativePath);
+		} else {
+			String basePrefix = rootPrefix(stripTrailingSlashes(normalizePathSeparators(base)));
+			targets.add(basePrefix + relativePath);
+			// 与 getRelativePath 同口径：根外文件保持原路径，绝对引用可直接等值命中
+			if (!relativePath.startsWith(basePrefix)) {
+				targets.add(relativePath);
+			}
+		}
+		if (!relativePath.contains("/")) {
+			return targets;
+		}
+		Set<String> roots = new HashSet<>();
+		addNormalizedRoots(roots, contentRoots);
+		addNormalizedRoots(roots, srcRoots);
+		for (String root : roots) {
+			targets.add(rootPrefix(root) + relativePath);
+		}
+		return targets;
+	}
+
+	@NotNull
+	private static String rootPrefix(@NotNull String root) {
+		return root.endsWith("/") ? root : root + "/";
+	}
+
+	private void addNormalizedRoots(@NotNull Set<String> roots, @Nullable List<String> from) {
+		if (from == null) {
+			return;
+		}
+		for (String root : from) {
+			if (root != null && !root.isEmpty()) {
+				roots.add(stripTrailingSlashes(normalizePathSeparators(root)));
+			}
+		}
+	}
+
+	@NotNull
+	private static String stripTrailingSlashes(@NotNull String path) {
+		String result = path;
+		while (result.endsWith("/") && result.length() > 1) {
+			result = result.substring(0, result.length() - 1);
+		}
+		return result;
 	}
 
 	/**
@@ -2242,18 +2302,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 根据路径过滤文件列表
-	 * 从候选文件列表中筛选出路径以指定路径结尾的文件
-	 * 使用并行流提高处理性能
+	 * 从已复制出读锁的候选里，按路径段后缀筛选。
+	 * 只用于 {@code .../} 截断路径；完整引用走 {@link #filterFilesByExactRelativePath}。
 	 *
 	 * @param generalizedMatchPath 标准化后的匹配路径（使用正斜杠）
 	 * @param matchingFiles 候选文件列表
 	 * @return 路径匹配的文件列表
 	 */
-	// 定义私有方法，根据路径过滤文件列表
 	private List<VirtualFile> filterFilesByPathSuffix(final String generalizedMatchPath, final List<VirtualFile> matchingFiles) {
-		// 注意：此方法在 cacheReadLock 内调用，不使用 parallelStream 以避免
-		// ForkJoinPool.commonPool 线程参与导致的潜在阻塞风险
 		return matchingFiles.stream()
 			// 按路径“段”比较，而不是按字符比较
 			.filter(file -> endsWithPathSegments(normalizePathSeparators(file.getPath()), generalizedMatchPath))

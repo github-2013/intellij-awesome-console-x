@@ -1224,8 +1224,8 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 也不应按文件名回退生成超链接（否则 package.json / index.html 可点，
 	 * 而唯一的 server.js 不可点）。
 	 * <p>
-	 * 先放 decoy 并断言「仅文件名仍可链」，作为 fileCache 已索引的 canary；
-	 * 否则 cache 为空时，带目录的 delete 行在旧逻辑下也会无链，断言会假绿。
+	 * 先放 decoy，并用它的完整相对路径确认 fileCache 已索引；
+	 * 纯文件名只认项目根，不得链到 other/ 下的同名文件。
 	 */
 	public void testGitPullDeleteModeDoesNotLinkUnrelatedSameNamedFile() throws Exception {
 		myFixture.addFileToProject("other/package.json", "{}\n");
@@ -1235,14 +1235,13 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		waitForReloadsToQuiesce(500, 5000);
 
 		for (String fileName : new String[]{"package.json", "index.html", "server.js"}) {
-			List<Filter.ResultItem> filenameLinks = filter.extractFileLinksFromLine("Error in " + fileName, 0);
 			Assert.assertFalse(
-					"Filename-only " + fileName + " should still create a hyperlink (cache canary)",
-					filenameLinks.isEmpty()
+					"完整路径 " + fileName + " 应可链（cache canary）",
+					filter.extractFileLinksFromLine("Error in other/" + fileName, 0).isEmpty()
 			);
-			Assert.assertNotNull(
-					"Filename-only hyperlink info should be present for " + fileName,
-					filenameLinks.get(0).getHyperlinkInfo()
+			Assert.assertTrue(
+					"纯文件名 " + fileName + " 不得链到 other/ 下的同名文件",
+					filter.extractFileLinksFromLine("Error in " + fileName, 0).isEmpty()
 			);
 		}
 
@@ -1257,6 +1256,213 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		Assert.assertTrue(
 				"Deleted index.html should not link to an unrelated index.html",
 				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/public/index.html", 0).isEmpty()
+		);
+	}
+
+	/**
+	 * git delete 仓库根下的纯文件名：不得按文件名回退到子目录同名文件。
+	 * <p>
+	 * 带目录的 delete mode 已走精确相对路径；根文件没有 {@code /}，
+	 * 旧逻辑会退化成 suffix 匹配，于是 {@code delete mode 100644 package.json}
+	 * 会点到仍存活的 {@code other/package.json}。
+	 */
+	public void testGitPullDeleteModeRootFileDoesNotLinkHomonym() throws Exception {
+		myFixture.addFileToProject("other/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"完整路径 other/package.json 应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in other/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"普通日志 package.json 不得链到 other/package.json",
+				filter.extractFileLinksFromLine("Error in package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"Deleted root package.json should not link to other/package.json",
+				filter.extractFileLinksFromLine(" delete mode 100644 package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"./package.json delete mode 同样不得回退到子目录同名文件",
+				filter.extractFileLinksFromLine(" delete mode 100644 ./package.json", 0).isEmpty()
+		);
+	}
+
+	/**
+	 * Git 摘要行里的纯文件名（create / modify / status deleted / rename）
+	 * 与 delete mode 同一口径：不得按文件名回退到子目录同名文件。
+	 */
+	public void testGitSummaryRootFilenameDoesNotLinkHomonym() throws Exception {
+		myFixture.addFileToProject("other/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"完整路径 other/package.json 应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in other/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"普通日志 package.json 不得链到 other/package.json",
+				filter.extractFileLinksFromLine("Error in package.json", 0).isEmpty()
+		);
+		assertPathDetection(" create mode 100644 package.json", "package.json");
+		assertPathDetection("\tnew file:   package.json", "package.json");
+		assertPathDetection("\tmodified:   package.json", "package.json");
+		assertPathDetection("\tdeleted:    package.json", "package.json");
+		assertPathDetection(
+				" rename {gone.json => package.json} (100%)",
+				"{gone.json => package.json}"
+		);
+		Assert.assertTrue(
+				"create mode 根文件不得链到 other/package.json",
+				filter.extractFileLinksFromLine(" create mode 100644 package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"./package.json create mode 同样不得回退",
+				filter.extractFileLinksFromLine(" create mode 100644 ./package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"new file: 根文件不得链到 other/package.json",
+				filter.extractFileLinksFromLine("\tnew file:   package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"modified: 根文件不得链到 other/package.json",
+				filter.extractFileLinksFromLine("\tmodified:   package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"deleted: 根文件不得链到 other/package.json",
+				filter.extractFileLinksFromLine("\tdeleted:    package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"rename 到根上纯文件名不得链到 other/package.json",
+				filter.extractFileLinksFromLine(
+						" rename {gone.json => package.json} (100%)", 0
+				).isEmpty()
+		);
+	}
+
+	/**
+	 * git status 的 deleted: 带目录路径，与 delete mode 一样不得后缀回退到更长的仍存活文件。
+	 */
+	public void testGitStatusDeletedPathDoesNotFallBackToLongerLiveSuffix() throws Exception {
+		myFixture.addFileToProject("apps/e2e/dashboard/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"更长后缀的存活文件本身必须可链（缓存 canary）",
+				filter.extractFileLinksFromLine("Error in apps/e2e/dashboard/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"deleted: e2e/dashboard/package.json 不得回退到 apps/e2e/...",
+				filter.extractFileLinksFromLine(
+						"\tdeleted:    e2e/dashboard/package.json", 0
+				).isEmpty()
+		);
+		Assert.assertTrue(
+				"modified: e2e/dashboard/package.json 同样不得后缀回退到 apps/e2e/...",
+				filter.extractFileLinksFromLine(
+						"\tmodified:   e2e/dashboard/package.json", 0
+				).isEmpty()
+		);
+	}
+
+	/**
+	 * {@code delete mode} / {@code deleted:} 只是 Git 文案：精确路径文件仍在则成链。
+	 */
+	public void testGitDeleteLineLinksWhenExactFileExists() throws Exception {
+		myFixture.addFileToProject("i18n/README.md", "# readme\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"普通日志里的 i18n/README.md 仍应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in i18n/README.md", 0).isEmpty()
+		);
+		List<Filter.ResultItem> deleteModeLinks = filter.extractFileLinksFromLine(
+				" delete mode 100644 i18n/README.md", 0);
+		Assert.assertFalse("delete mode 且文件仍在时应成链", deleteModeLinks.isEmpty());
+		assertSingleHyperlinkEndsWith(deleteModeLinks, "i18n/README.md");
+
+		List<Filter.ResultItem> deletedLinks = filter.extractFileLinksFromLine(
+				"\tdeleted:    i18n/README.md", 0);
+		Assert.assertFalse("deleted: 且文件仍在时应成链", deletedLinks.isEmpty());
+		assertSingleHyperlinkEndsWith(deletedLinks, "i18n/README.md");
+
+		List<Filter.ResultItem> statLinks = filter.extractFileLinksFromLine(
+				" i18n/README.md | 20 -", 0);
+		Assert.assertFalse("--stat 仅删除且文件仍在时应成链", statLinks.isEmpty());
+		assertSingleHyperlinkEndsWith(statLinks, "i18n/README.md");
+	}
+
+	/**
+	 * Git 摘要根文件：仓库根上文件还在时，{@code delete mode} 应成链。
+	 */
+	public void testGitDeleteModeRootFileLinksWhenPresent() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("测试项目 basePath 应存在", basePath);
+		Path rootFile = Path.of(basePath, "package.json");
+		Files.createDirectories(rootFile.getParent());
+		Files.writeString(rootFile, "{}\n");
+		try {
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
+					" delete mode 100644 package.json", 0);
+			Assert.assertFalse("根上 package.json 仍在时 delete mode 应成链", links.isEmpty());
+			assertSingleHyperlinkEndsWith(links, "package.json");
+
+			List<Filter.ResultItem> shortLinks = filter.extractFileLinksFromLine(
+					" D package.json", 0);
+			Assert.assertEquals(1, shortLinks.size());
+			assertSingleHyperlinkEndsWith(shortLinks, "package.json");
+
+			myFixture.addFileToProject("other/package.json", "{\"decoy\":true}\n");
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			List<Filter.ResultItem> ordinaryLinks = filter.extractFileLinksFromLine(
+					"Error in package.json", 0);
+			Assert.assertEquals("普通日志 package.json 只链项目根", 1, ordinaryLinks.size());
+			String ordinaryPath = ((SingleFileFileHyperlinkInfo) ordinaryLinks.get(0).getHyperlinkInfo())
+					.getFilePath().replace('\\', '/');
+			Assert.assertTrue(
+					"应链到项目根 package.json，实际: " + ordinaryPath,
+					ordinaryPath.endsWith("/package.json") || ordinaryPath.equals("package.json")
+			);
+			Assert.assertFalse(
+					"普通日志不得链到 other/package.json，实际: " + ordinaryPath,
+					ordinaryPath.contains("/other/")
+			);
+		} finally {
+			Files.deleteIfExists(rootFile);
+		}
+	}
+
+	/**
+	 * git pull --stat：引用路径不是已知根下的精确相对路径时，
+	 * 仅删除和含新增都不得后缀回退到更长的存活文件。
+	 */
+	public void testGitDiffStatDeletedPathDoesNotLink() throws Exception {
+		myFixture.addFileToProject("apps/src/pages/tbds/chat-ui/hooks/useChatLogic.ts", "export {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"更长后缀的存活文件本身必须可链（缓存 canary）",
+				filter.extractFileLinksFromLine(
+						"Error in apps/src/pages/tbds/chat-ui/hooks/useChatLogic.ts", 0
+				).isEmpty()
+		);
+		Assert.assertTrue(
+				"--stat 仅删除不得回退到 apps/src/...",
+				filter.extractFileLinksFromLine(
+						" src/pages/tbds/chat-ui/hooks/useChatLogic.ts | 372 -", 0
+				).isEmpty()
+		);
+		Assert.assertTrue(
+				"含新增的 --stat 同样不得把 src/... 后缀链到 apps/src/...",
+				filter.extractFileLinksFromLine(
+						" src/pages/tbds/chat-ui/hooks/useChatLogic.ts | 10 +++++", 0
+				).isEmpty()
 		);
 	}
 
@@ -1304,6 +1510,25 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 精确与否只看候选路径：非截断一律精确，{@code .../} 走后缀。
+	 * 行里的 {@code +}、{@code -}、{@code Bin} 不参与。
+	 */
+	public void testExactRelativeDependsOnlyOnPath() {
+		Assert.assertTrue("纯文件名精确",
+				filter.shouldRequireExactRelative("package.json"));
+		Assert.assertTrue("./ 前缀剥掉后仍是纯文件名",
+				filter.shouldRequireExactRelative("./package.json"));
+		Assert.assertTrue("带目录精确",
+				filter.shouldRequireExactRelative("e2e/dashboard/package.json"));
+		Assert.assertTrue("行尾像直方图的纯文件名也精确",
+				filter.shouldRequireExactRelative("error"));
+		Assert.assertFalse(".../ 截断走后缀",
+				filter.shouldRequireExactRelative(".../foo.ts"));
+		Assert.assertFalse("多段截断路径走后缀",
+				filter.shouldRequireExactRelative(".../visualizations/s08.tsx"));
+	}
+
+	/**
 	 * 完全限定类名必须真的生成超链接，而不只是被正则切出来。
 	 * <p>
 	 * 类名候选由包路径精确匹配得出，若再拿点分名去做路径后缀比较必然失败
@@ -1321,6 +1546,27 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				"\tat com.example.demo.OrderService:42", 0);
 		Assert.assertFalse("FQCN should produce a hyperlink, not just a regex match", links.isEmpty());
 		assertSingleHyperlinkEndsWith(links, "com/example/demo/OrderService.java");
+	}
+
+	/**
+	 * Log4j2 {@code %C:%L}、Logback {@code %class:%line} 打出的完全限定类名按 source root 成链；
+	 * {@code %F:%L} 只有源文件名，不在项目根就不成链。
+	 */
+	public void testLoggerClassLocationLinksButFileNameOnlyDoesNot() throws Exception {
+		myFixture.addFileToProject("com/example/demo/OrderService.java",
+				"package com.example.demo;\npublic class OrderService {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(
+				"14:30:45.123 [main] ERROR - Error occurred (com.example.demo.OrderService:42)", 0
+		), "com/example/demo/OrderService.java");
+		Assert.assertTrue(
+				"%F:%L 只有文件名，不得链到 source root 下的同名文件",
+				filter.extractFileLinksFromLine(
+						"14:30:45.123 [main] ERROR - Error occurred (OrderService.java:42)", 0
+				).isEmpty()
+		);
 	}
 
 	/**
@@ -1346,9 +1592,8 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
-	 * git delete 的根因不是「剥到纯文件名」，而是逐级剥前缀：
-	 * {@code e2e/dashboard/package.json} 仍会命中 {@code apps/dashboard/package.json}。
-	 * 带目录时必须按完整后缀匹配。
+	 * 带目录引用必须相对已知根精确对齐，不能只要求「完整后缀」。
+	 * {@code e2e/dashboard/package.json} 仍会以后缀命中 {@code apps/dashboard/package.json}。
 	 */
 	public void testGitPullDeleteModeDoesNotLinkSameDirectorySuffix() throws Exception {
 		myFixture.addFileToProject("apps/dashboard/package.json", "{}\n");
@@ -1362,6 +1607,10 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		Assert.assertTrue(
 				"Deleted e2e/dashboard/package.json should not link to apps/dashboard/package.json",
 				filter.extractFileLinksFromLine(" delete mode 100644 e2e/dashboard/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"普通日志同样不得把 e2e/... 后缀链到 apps/dashboard/...",
+				filter.extractFileLinksFromLine("Error in e2e/dashboard/package.json", 0).isEmpty()
 		);
 	}
 
@@ -1480,6 +1729,92 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 无花括号 {@code old => new}：左右两侧各自按存在性成链。
+	 * 旧名只在子目录时，Git 摘要的纯文件名精确匹配不成链；根上的新文件成链。
+	 */
+	public void testGitRenameWithoutBracesLinksOnlyExistingNewFile() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Path newFile = Path.of(basePath, "eslint.config.js");
+		myFixture.addFileToProject("other/eslint.config.mjs", "export default {};\n");
+		Files.createDirectories(newFile.getParent());
+		Files.writeString(newFile, "export default {};\n");
+		try {
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			Assert.assertFalse(
+					"完整路径 other/eslint.config.mjs 应可链（cache canary）",
+					filter.extractFileLinksFromLine("Error in other/eslint.config.mjs", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"普通日志 eslint.config.mjs 不得链到 other/ 下的同名文件",
+					filter.extractFileLinksFromLine("Error in eslint.config.mjs", 0).isEmpty()
+			);
+
+			String summaryLine = " rename eslint.config.mjs => eslint.config.js (88%)";
+			List<Filter.ResultItem> summaryLinks = filter.extractFileLinksFromLine(summaryLine, 0);
+			Assert.assertEquals(1, summaryLinks.size());
+			assertSingleHyperlinkEndsWith(summaryLinks, "eslint.config.js");
+			assertHyperlinkRange(summaryLinks.get(0), summaryLine, "eslint.config.js");
+
+			String statLine = " eslint.config.mjs => eslint.config.js | 10 ++--";
+			List<Filter.ResultItem> statLinks = filter.extractFileLinksFromLine(statLine, 0);
+			Assert.assertEquals(1, statLinks.size());
+			assertSingleHyperlinkEndsWith(statLinks, "eslint.config.js");
+			assertHyperlinkRange(statLinks.get(0), statLine, "eslint.config.js");
+		} finally {
+			Files.deleteIfExists(newFile);
+		}
+	}
+
+	/**
+	 * 无花括号 rename 的旧文件仍在引用路径上时，该侧成链；不存在的新文件不成链。
+	 */
+	public void testGitRenameWithoutBracesLinksExistingOldFile() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("测试项目 basePath 应存在", basePath);
+		Path oldFile = Path.of(basePath, "eslint.config.mjs");
+		Files.createDirectories(oldFile.getParent());
+		Files.writeString(oldFile, "export default {};\n");
+		try {
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			String line = " rename eslint.config.mjs => eslint.config.js (88%)";
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+			Assert.assertEquals(1, links.size());
+			assertSingleHyperlinkEndsWith(links, "eslint.config.mjs");
+			assertHyperlinkRange(links.get(0), line, "eslint.config.mjs");
+		} finally {
+			Files.deleteIfExists(oldFile);
+		}
+	}
+
+	/**
+	 * 编译错误里的函数类型 {@code () => void} 不是 git rename。
+	 * 箭头左侧的文件路径对得上就应成链。
+	 */
+	public void testTypeScriptErrorArrowStillLinksFile() throws Exception {
+		myFixture.addFileToProject("src/index.ts", "export {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String line = "src/index.ts:3:5 - error TS2322: Type '() => void' is not assignable to type 'string'.";
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+		Assert.assertEquals(1, links.size());
+		assertSingleHyperlinkEndsWith(links, "src/index.ts");
+		int start = line.indexOf("src/index.ts");
+		Assert.assertEquals(start, links.get(0).getHighlightStartOffset());
+		String highlighted = line.substring(
+				links.get(0).getHighlightStartOffset(),
+				links.get(0).getHighlightEndOffset()
+		);
+		Assert.assertTrue(highlighted.startsWith("src/index.ts"));
+		Assert.assertFalse(highlighted.contains("=>"));
+	}
+
+	/**
 	 * 新旧路径都不存在时，即使项目里有同名诱饵文件，也不应按文件名误链。
 	 */
 	public void testGitPullRenameDoesNotLinkUnrelatedHomonym() throws Exception {
@@ -1488,7 +1823,11 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		waitForReloadsToQuiesce(500, 5000);
 
 		Assert.assertFalse(
-				"Filename-only decoy should still be linkable (cache canary)",
+				"完整路径 other/s08-context-compact.tsx 应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in other/s08-context-compact.tsx", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"普通日志纯文件名不得链到 other/ 下的同名文件",
 				filter.extractFileLinksFromLine("Error in s08-context-compact.tsx", 0).isEmpty()
 		);
 		Assert.assertTrue(
@@ -1542,32 +1881,207 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 						" delete mode 100644 e2e/dashboard/package.json", 0
 				).isEmpty()
 		);
-		List<Filter.ResultItem> createLinks = filter.extractFileLinksFromLine(
-				" create mode 100644 e2e/dashboard/package.json",
-				0
+		Assert.assertTrue(
+				"create mode e2e/dashboard/package.json 同样不得后缀回退到 apps/e2e/...",
+				filter.extractFileLinksFromLine(
+						" create mode 100644 e2e/dashboard/package.json", 0
+				).isEmpty()
 		);
-		Assert.assertFalse(
-				"同一夹具下 create mode 仍应按完整后缀链到存活文件",
-				createLinks.isEmpty()
-		);
-		assertSingleHyperlinkEndsWith(createLinks, "apps/e2e/dashboard/package.json");
 	}
 
 	/**
-	 * 带目录的相对路径只要后缀仍能对上真实文件，就应继续生成超链接。
-	 * 例如控制台是 e2e/dashboard/server.js，文件在 src/e2e/dashboard/server.js。
+	 * 带目录引用必须相对已知根精确对齐：Git 与普通日志同一准则。
+	 * {@code e2e/...} 不得链到 {@code src/e2e/...}；写出完整相对路径才成链。
 	 */
-	public void testDirectorySuffixStillLinksWhenFileExists() throws Exception {
+	public void testDirectoryCitationRequiresExactRelative() throws Exception {
 		myFixture.addFileToProject("src/e2e/dashboard/server.js", "console.log('ok');\n");
 		filter.manualRebuild();
 		waitForReloadsToQuiesce(500, 5000);
 
-		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(
-				" create mode 100644 e2e/dashboard/server.js",
-				0
+		Assert.assertTrue(
+				"普通日志不完整相对路径不得后缀链到 src/e2e/...",
+				filter.extractFileLinksFromLine("Error in e2e/dashboard/server.js", 0).isEmpty()
 		);
-		Assert.assertFalse("Path suffix e2e/dashboard/server.js should become a hyperlink", links.isEmpty());
-		assertSingleHyperlinkEndsWith(links, "src/e2e/dashboard/server.js");
+		Assert.assertTrue(
+				"create mode 同样不得后缀回退",
+				filter.extractFileLinksFromLine(
+						" create mode 100644 e2e/dashboard/server.js", 0
+				).isEmpty()
+		);
+		Assert.assertTrue(
+				"modified: 同样不得后缀回退",
+				filter.extractFileLinksFromLine(
+						"\tmodified:   e2e/dashboard/server.js", 0
+				).isEmpty()
+		);
+		Assert.assertTrue(
+				"含新增的 --stat 同样不得后缀回退",
+				filter.extractFileLinksFromLine(
+						" e2e/dashboard/server.js | 10 +++++", 0
+				).isEmpty()
+		);
+
+		List<Filter.ResultItem> exactLogLinks = filter.extractFileLinksFromLine(
+				"Error in src/e2e/dashboard/server.js", 0
+		);
+		Assert.assertFalse("写出完整相对路径的普通日志应成链", exactLogLinks.isEmpty());
+		assertSingleHyperlinkEndsWith(exactLogLinks, "src/e2e/dashboard/server.js");
+
+		List<Filter.ResultItem> exactCreateLinks = filter.extractFileLinksFromLine(
+				" create mode 100644 src/e2e/dashboard/server.js", 0
+		);
+		Assert.assertFalse("写出完整相对路径的 create mode 应成链", exactCreateLinks.isEmpty());
+		assertSingleHyperlinkEndsWith(exactCreateLinks, "src/e2e/dashboard/server.js");
+
+		List<Filter.ResultItem> exactStatLinks = filter.extractFileLinksFromLine(
+				" src/e2e/dashboard/server.js | 10 +++++", 0
+		);
+		Assert.assertFalse("写出完整相对路径的 --stat 应成链", exactStatLinks.isEmpty());
+		assertSingleHyperlinkEndsWith(exactStatLinks, "src/e2e/dashboard/server.js");
+	}
+
+	/**
+	 * 精确对齐的已知根包含 source root：
+	 * {@code com/example/Foo.java} 相对 {@code src/main/java} 成链，更短后缀不成链。
+	 */
+	public void testDirectoryCitationExactAgainstSourceRoot() throws Exception {
+		PsiFile psi = myFixture.addFileToProject(
+				"src/main/java/com/example/ExactRootHit.java",
+				"package com.example;\npublic class ExactRootHit {}\n"
+		);
+		VirtualFile sourceRoot = psi.getVirtualFile().getParent().getParent().getParent();
+		Assert.assertEquals("java", sourceRoot.getName());
+		try {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.addSourceRoot(getModule(), sourceRoot));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			List<Filter.ResultItem> exactLinks = filter.extractFileLinksFromLine(
+					"Error in com/example/ExactRootHit.java", 0);
+			Assert.assertFalse("相对 source root 的精确路径应成链", exactLinks.isEmpty());
+			assertSingleHyperlinkEndsWith(exactLinks, "src/main/java/com/example/ExactRootHit.java");
+
+			Assert.assertTrue(
+					"更短的后缀 example/ExactRootHit.java 不得成链",
+					filter.extractFileLinksFromLine("Error in example/ExactRootHit.java", 0).isEmpty()
+			);
+		} finally {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.removeSourceRoot(getModule(), sourceRoot));
+		}
+	}
+
+	/**
+	 * 项目内的绝对路径以字面为准：磁盘上不存在就不成链，
+	 * 不得转成相对路径后对齐到 content root 下的同路径文件；存在则照常成链。
+	 */
+	public void testMissingAbsolutePathInProjectDoesNotAlignToOtherRoot() throws Exception {
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("测试项目 basePath 应存在", basePath);
+		myFixture.addFileToProject("abs_probe/app.ts", "export {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse(
+				"相对路径 abs_probe/app.ts 经 content root 应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in abs_probe/app.ts:3", 0).isEmpty()
+		);
+		String missingAbsolute = basePath.replace('\\', '/') + "/abs_probe/app.ts";
+		Assert.assertTrue(
+				"项目根下不存在的绝对路径不得链到 content root 下的同路径文件",
+				filter.extractFileLinksFromLine("Error in " + missingAbsolute + ":3", 0).isEmpty()
+		);
+
+		Path realFile = Path.of(basePath, "abs_real", "app.ts");
+		Files.createDirectories(realFile.getParent());
+		Files.writeString(realFile, "export {}\n");
+		try {
+			assertSingleHyperlinkEndsWith(
+					filter.extractFileLinksFromLine(
+							"Error in " + realFile.toString().replace('\\', '/') + ":3", 0),
+					"abs_real/app.ts"
+			);
+		} finally {
+			deleteCreatedPathTree(realFile, realFile.getParent());
+		}
+	}
+
+	/**
+	 * 项目外、不存在的 Unix 绝对路径（如 Vite 的 {@code /src/main.ts}）仍按项目根下的相对路径解析。
+	 */
+	public void testMissingExternalUnixAbsolutePathFallsBackToProjectRelative() throws Exception {
+		myFixture.addFileToProject("abs_vite/main.ts", "export {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		assertSingleHyperlinkEndsWith(
+				filter.extractFileLinksFromLine("[vite] Internal server error: /abs_vite/main.ts:10:5", 0),
+				"abs_vite/main.ts"
+		);
+	}
+
+	/**
+	 * Git 在仓库根打出的纯文件名只指项目根上的文件。
+	 * content root 在子目录时，同名文件不得被这条摘要链上；相对该 content root 的带目录路径仍成链。
+	 */
+	public void testGitSummaryFilenameDoesNotMatchContentRootHomonym() throws Exception {
+		PsiFile psi = myFixture.addFileToProject("apps/web/content-root-only.json", "{}\n");
+		myFixture.addFileToProject("apps/web/e2e/ContentRootHit.ts", "export {}\n");
+		VirtualFile contentRoot = psi.getVirtualFile().getParent();
+		Assert.assertEquals("web", contentRoot.getName());
+		try {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), contentRoot));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			Assert.assertFalse(
+					"相对 content root 的带目录路径应可链（cache canary）",
+					filter.extractFileLinksFromLine("Error in e2e/ContentRootHit.ts", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"普通日志纯文件名不得链到 content root 下的同名文件",
+					filter.extractFileLinksFromLine("Error in content-root-only.json", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"./ 写法仍是纯文件名，同样不得链到 content root 下的同名文件",
+					filter.extractFileLinksFromLine("Error in ./content-root-only.json", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"delete mode 的 content-root-only.json 不得链到 apps/web/ 下的同名文件",
+					filter.extractFileLinksFromLine(
+							" delete mode 100644 content-root-only.json", 0
+					).isEmpty()
+			);
+			Assert.assertTrue(
+					"git status -s 的纯文件名不得链到 content root 同名文件",
+					filter.extractFileLinksFromLine(" D content-root-only.json", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"git diff --name-status 的纯文件名不得链到 content root 同名文件",
+					filter.extractFileLinksFromLine("D\tcontent-root-only.json", 0).isEmpty()
+			);
+			Assert.assertTrue(
+					"mode change 的纯文件名不得链到 content root 同名文件",
+					filter.extractFileLinksFromLine(
+							" mode change 100644 => 100755 content-root-only.json", 0
+					).isEmpty()
+			);
+
+			List<Filter.ResultItem> shortDirectoryLinks = filter.extractFileLinksFromLine(
+					" D apps/web/content-root-only.json", 0);
+			Assert.assertFalse("短格式里带目录的路径应成链", shortDirectoryLinks.isEmpty());
+			assertSingleHyperlinkEndsWith(shortDirectoryLinks, "apps/web/content-root-only.json");
+
+			List<Filter.ResultItem> directoryLinks = filter.extractFileLinksFromLine(
+					"Error in e2e/ContentRootHit.ts", 0);
+			Assert.assertFalse("相对 content root 的带目录路径应成链", directoryLinks.isEmpty());
+			assertSingleHyperlinkEndsWith(directoryLinks, "apps/web/e2e/ContentRootHit.ts");
+		} finally {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), contentRoot));
+		}
 	}
 
 	/**
@@ -1605,7 +2119,11 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		waitForReloadsToQuiesce(500, 5000);
 
 		Assert.assertFalse(
-				"Filename-only package.json should still create a hyperlink (cache canary)",
+				"完整路径 other/package.json 应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in other/package.json", 0).isEmpty()
+		);
+		Assert.assertTrue(
+				"普通日志 package.json 不得链到 other/package.json",
 				filter.extractFileLinksFromLine("Error in package.json", 0).isEmpty()
 		);
 		Assert.assertTrue(
@@ -5379,6 +5897,25 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		String path = ((SingleFileFileHyperlinkInfo) links.get(0).getHyperlinkInfo()).getFilePath()
 				.replace('\\', '/');
 		Assert.assertTrue("Expected hyperlink to end with " + suffix + ", got: " + path, path.endsWith(suffix));
+	}
+
+	private void assertHyperlinkRange(
+			Filter.ResultItem link,
+			@NotNull String line,
+			@NotNull String expectedText
+	) {
+		int expectedStart = line.indexOf(expectedText);
+		Assert.assertTrue("Expected text should appear in the line: " + expectedText, expectedStart >= 0);
+		Assert.assertEquals(
+				"Hyperlink should start at the cited path",
+				expectedStart,
+				link.getHighlightStartOffset()
+		);
+		Assert.assertEquals(
+				"Hyperlink should cover only the cited path",
+				expectedStart + expectedText.length(),
+				link.getHighlightEndOffset()
+		);
 	}
 
 	// ========== Go语言测试用例 ==========

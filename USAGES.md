@@ -22,8 +22,8 @@
 |--------|------|--------|
 | **Match URLs** | 是否匹配控制台输出中的 URL 链接，支持 `http(s)`、`ftp`、`file`、JetBrains IDE URL 等协议。关闭后控制台中的 URL 将不再生成可点击的超链接 | ✅ 开启 |
 | **Match file paths** | 是否匹配控制台输出中的文件路径。支持 Unix/Windows 路径、相对/绝对路径、带行列号的路径等多种格式。关闭后文件路径将不再生成超链接 | ✅ 开启 |
-| **Match Java-like Classes** | 是否匹配 Java 风格的完全限定类名（如 `com.example.MyClass`）。关闭后堆栈跟踪中的类名将不再生成可点击的超链接。此选项依赖于"Match file paths"开启 | ✅ 开启 |
-| **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当项目中存在同名文件时，限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
+| **Match Java-like Classes** | 是否匹配 Java 风格的完全限定类名（如 `com.example.MyClass`）。关闭后日志中的完全限定类名（如 `%C:%L` 输出的 `com.example.MyClass:42`）将不再生成可点击的超链接。此选项依赖于"Match file paths"开启 | ✅ 开启 |
+| **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当一个引用命中多个文件时（同一相对路径出现在多个 content root / source root 下、类名在多个 source root 下命中、`.../` 截断路径命中多个文件），限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
 | **Ignore matches** | 使用正则表达式排除特定匹配项。匹配到的内容将不会生成超链接。适用于过滤 `node_modules`、相对路径符号等误匹配。此选项依赖于"Match file paths"开启 | ✅ 开启 |
 | **Ignore matches（正则表达式）** | 忽略模式的正则表达式内容。支持标准 Java 正则语法和 Unicode 字符类 | `^("?)[./\\]+\1$\|^node_modules/` |
 | **Use ignore style** | 对被忽略的匹配项套用特殊样式，避免被其他插件再做成超链接。终端（Terminal）中不支持此功能（实验性） | ❌ 关闭 |
@@ -72,17 +72,23 @@
 ### 日志文件快速跳转
 
 ```java
-// Log4j2 配置 - 包含文件名和行号
-<PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} - %msg (%F:%L)%n"/>
+// Log4j2 配置 - 完全限定类名和行号
+<PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level - %msg (%C:%L)%n"/>
 
-// Logback 配置 - 详细位置信息
-<pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{50} - %msg (%file:%line)%n</pattern>
+// Logback 配置 - 完全限定类名和行号
+<pattern>%d{HH:mm:ss.SSS} [%thread] %-5level - %msg (%class:%line)%n</pattern>
 
 // 控制台输出示例
-14:30:45.123 [main] ERROR com.example.MyClass - Error occurred (MyClass.java:42)
+14:30:45.123 [main] ERROR - Error occurred (com.example.MyClass:42)
 ```
 
-**效果**: 点击 `MyClass.java:42` 直接跳转到第 42 行
+**效果**: 点击 `com.example.MyClass:42` 直接跳转到 source root 下 `com/example/MyClass.java` 的第 42 行
+
+`%C` / `%class` 需要开启 **Match Java-like Classes**（默认开启），且类所在目录已标记为 source root。请输出完整包名，不要用 `%C{1}` 这类缩写；内部类（如 `Outer$Inner`）不成链。
+
+`%F` / `%file` 只输出源文件名（如 `MyClass.java:42`），不带目录。插件按字面路径解析，纯文件名只对应项目根下的文件，因此这类输出通常不会成链；需要跳转时请改用上面的 `%C` / `%class`。
+
+其他语言同理：Python 用 `%(pathname)s:%(lineno)d`、Go 用 `log.Llongfile`，都会输出完整路径；`%(filename)s`、`log.Lshortfile` 只输出文件名。
 
 ### 构建工具集成
 
@@ -112,10 +118,9 @@ src/components/MyComponent.tsx:42:15 - error TS2345: Argument type mismatch
 modified:   src/main/java/MyClass.java
 renamed:    old/OldClass.java -> new/NewClass.java
 deleted:    deprecated/LegacyClass.java
-
-# Git diff 输出
-diff --git a/src/MyClass.java b/src/MyClass.java
 ```
+
+已删除的文件（如上面的 `deprecated/LegacyClass.java`）不再存在，不会成链，也不会链到别处的同名文件。`diff --git a/... b/...` 这类带 `a/`、`b/` 前缀的路径不成链。
 
 #### 其他 VCS 工具
 - **SVN**: 支持 `svn status` 和 `svn diff` 输出
@@ -141,6 +146,8 @@ at com.example.MyTest.testMethod(MyTest.java:42)
 - **Jest**: 支持 JavaScript 测试输出
 
 **效果**: 点击堆栈跟踪中的文件和行号（如 `MyTest.java:25`）直接跳转到测试失败位置，快速定位断言错误
+
+以 `at ` 开头的 Java/Kotlin 栈帧由 IntelliJ 平台自带的链接处理，本插件会跳过这些行。
 
 ### 现代语言支持
 
@@ -202,6 +209,22 @@ E/AndroidRuntime: FATAL EXCEPTION: main
 /Users/dev/Project/ViewController.swift:42:15: error: use of unresolved identifier
 ```
 
-**效果**: 点击移动端日志或编译输出中的文件路径（如 `MainActivity.java:25`、`ViewController.swift:42:15`）直接跳转到源码对应行，快速定位崩溃和编译错误
+**效果**: 点击移动端日志或编译输出中的文件路径（如 `MainActivity.java:25`、`ViewController.swift:42:15`）直接跳转到源码对应行，快速定位崩溃和编译错误（`at ` 开头的 Java 栈帧由 IntelliJ 平台处理）
+
+---
+
+## 路径解析规则
+
+插件按控制台里打出来的字面路径找文件：找到就成链，找不到就不成链。除 `.../` 截断路径外，不会按文件名或路径后缀在整个项目里搜索。
+
+| 输出形态 | 对齐到哪里 |
+|----------|------------|
+| 绝对路径 | 存在就打开该文件；在项目内但不存在的不成链；在项目外且不存在的 Unix 绝对路径（如 Vite 的 `/src/main.ts`），去掉开头的 `/` 后按相对路径处理 |
+| 带目录的相对路径（如 `src/index.ts`） | 先看项目根下是否存在；不存在再对齐 content root、source root，必须完全一致；多个根下都有时弹出选择列表 |
+| 纯文件名（如 `package.json`、`./package.json`） | 只对应项目根下的文件 |
+| 完全限定类名（如 `com.example.MyClass:42`） | source root 下的包路径，需开启 **Match Java-like Classes** |
+| Git `--stat` 截断路径（如 `.../hooks/useChat.ts`） | 字面路径本身不完整，按路径段后缀匹配，多个命中弹出选择列表；缓存未命中时在预算内查找磁盘，查找不完整时不成链 |
+
+因此，工具在子目录（如 monorepo 的子包）里运行时：输出带目录的相对路径，只有该子目录是 content root 或 source root 才会成链；输出纯文件名（包括 `./main.go` 这种写法），始终只对应项目根。
 
 
