@@ -22,6 +22,7 @@ import com.intellij.execution.filters.Filter;
 import com.intellij.execution.filters.HyperlinkInfo;
 import com.intellij.ide.browsers.OpenUrlHyperlinkInfo;
 import com.intellij.notification.NotificationAction;
+import com.intellij.openapi.diagnostic.ControlFlowException;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.openapi.project.DumbAware;
@@ -2527,15 +2528,20 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return;
 		}
 
-		Exception reloadError = null;
+		// 终态只在 finally 结算一次。不要在 try/catch 里提前 completeWaiters：
+		// futures 已从 pendingReloadFutures 取走，重抛取消信号、Error、
+		// runReloadFileCache 的 filterDisposed 早退都会让它们永久失联。
+		Throwable reloadError = null;
 		try {
 			runReloadFileCache(reason, combineProgressCallbacks(callbacks));
-			completeWaiters(futures, null);
 		} catch (Exception e) {
-			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+			// 先记终态再传播：取消信号照旧原样抛出，但终态不能随之丢失
 			reloadError = e;
-			completeWaiters(futures, e);
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.error(String.format("project[%s]: Error reloading file cache ( %s )", project.getName(), reason), e);
+		} catch (Error e) {
+			reloadError = e;
+			throw e;
 		} finally {
 			List<CompletableFuture<Void>> readyWaiters = Collections.emptyList();
 			synchronized (reloadLock) {
@@ -2549,9 +2555,36 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					readyWaiters = drainCacheReadyWaitersLocked();
 				}
 			}
-			// 本轮结束且无后续排队时唤醒等待者；失败则带上异常，避免设置页把半截缓存当成成功
-			completeWaiters(readyWaiters, reloadError);
+			Throwable terminalState = resolveReloadTerminalState(reloadError);
+			// 请求方已不在共享列表里，此处是唯一完成点，必须无条件结算
+			completeWaiters(futures, terminalState);
+			// 就绪等待者仅在本轮收尾且无排队时唤醒；带上终态，避免把半截缓存当成成功
+			completeWaiters(readyWaiters, terminalState);
 		}
+	}
+
+	/**
+	 * 归一本轮 reload 的终态：null 为成功，{@link CancellationException} 为取消/释放，
+	 * 其它异常为失败。成功、失败、取消、释放必须共用一套协议，否则等待方无法区分
+	 * 「索引已就绪」和「索引根本没建成」。
+	 * <p>
+	 * 取消统一转成 {@code CancellationException}，不能把平台的
+	 * {@link ControlFlowException} 塞进 Future：消费端会对拿到的异常调用
+	 * {@link ExceptionHandling#rethrowIfExceptionMustNotBeLogged}，导致取消信号
+	 * 在无关线程上被重抛，跳过失败分支。
+	 */
+	@Nullable
+	private Throwable resolveReloadTerminalState(@Nullable Throwable error) {
+		if (error instanceof ControlFlowException) {
+			return new CancellationException(
+					String.format("File cache reload canceled: %s", error.getClass().getSimpleName()));
+		}
+		if (error != null) {
+			return error;
+		}
+		// filterDisposed 早退是正常 return，但此时缓存已被 dispose 清空，
+		// 报告成功等于宣称一份不存在的索引可用
+		return filterDisposed ? new CancellationException("AwesomeLinkFilter disposed") : null;
 	}
 
 	/**
@@ -3840,6 +3873,12 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 同步等待缓存重建完成（带超时保护）
+	 * <p>
+	 * 成功正常返回；超时与失败抛 {@link IllegalStateException}；取消与中断抛
+	 * {@link CancellationException}。四种终态不能压平成「正常返回」，否则调用方
+	 * （{@link awesome.console.config.IndexManagementService#rebuildIndex}）
+	 * 会读旧快照发出「重建成功」通知。抛出的都不是 {@link ControlFlowException}，
+	 * 确保调用方 catch 能稳定进入失败分支。
 	 *
 	 * @param future  缓存重建的 Future
 	 * @param context 操作上下文描述，用于日志输出
@@ -3857,8 +3896,23 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		} catch (InterruptedException e) {
 			Thread.currentThread().interrupt();
 			logger.warn(String.format("project[%s]: %s interrupted", project.getName(), context));
+			// 等待被打断不等于重建完成，重建很可能仍在后台进行
+			throw new CancellationException(String.format("%s interrupted", context));
+		} catch (CancellationException e) {
+			// future.get() 对取消终态不做 ExecutionException 包装，直接原样抛出
+			logger.info(String.format("project[%s]: %s canceled", project.getName(), context));
+			throw e;
 		} catch (ExecutionException e) {
-			logger.error(String.format("project[%s]: %s failed", project.getName(), context), e.getCause());
+			Throwable cause = e.getCause();
+			if (cause instanceof CancellationException) {
+				logger.info(String.format("project[%s]: %s canceled", project.getName(), context));
+				throw new CancellationException(String.format("%s canceled", context));
+			}
+			// 用 warn 而非 error：失败会上抛，由调用方统一记 error
+			logger.warn(String.format("project[%s]: %s failed", project.getName(), context), cause);
+			throw new IllegalStateException(
+					String.format("%s failed: %s", context, cause == null ? "unknown error" : cause.getMessage()),
+					cause);
 		}
 	}
 
