@@ -18,9 +18,10 @@
 	    	<b>0.1337.42</b><br/>
         	<ul>
         		<li>A path in the console now opens only the file it names. A bare name such as MyClass.java no longer jumps to a same-named file in another folder.</li>
-        		<li>Loggers that print only the file name (Log4j %F, Logback %file) no longer land on the right file. Print a full path, or for Java a class name like com.example.MyClass:42 (%C:%L / %class:%line).</li>
+        		<li>Loggers that print only the file name (Log4j %F, Logback %file) are no longer linked. Print a full path, or for Java a class name like com.example.MyClass:42 (%C:%L / %class:%line).</li>
         		<li>A missing or deleted path is no longer linked to a different file that merely ends with the same name, including git delete and status lines.</li>
         		<li>Shortened git .../ paths still open the matching file.</li>
+        		<li>Rebuilding the file index no longer reports success when the reload is canceled, the filter is disposed, or the rebuild fails.</li>
         	</ul>
 	    	<b>0.1337.41</b><br/>
         	<ul>
