@@ -15,6 +15,12 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+	    	<b>0.1337.43</b><br/>
+        	<ul>
+        		<li>With "Preserve ANSI color" turned off, links in colored output now underline the exact path or URL instead of shifting onto neighboring text.</li>
+        		<li>On macOS and Linux, a symlink whose target has been deleted is no longer treated as an existing file or folder, so it is not linked.</li>
+        		<li>Faster link detection on busy consoles: each path is checked on disk once instead of twice, existence checks do less work, and regex group lookups no longer rely on exceptions.</li>
+        	</ul>
 	    	<b>0.1337.42</b><br/>
         	<ul>
         		<li>A path in the console now opens only the file it names. A bare name such as MyClass.java no longer jumps to a same-named file in another folder.</li>

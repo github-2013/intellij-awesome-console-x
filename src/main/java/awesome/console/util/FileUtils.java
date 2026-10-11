@@ -12,6 +12,7 @@ import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
@@ -71,7 +72,7 @@ public class FileUtils {
             return null;
         }
         String filePath = path.substring(0, splitIdx);
-        // remove "!/"
+        // 去掉 "!/" 分隔符
         String pathInsideJar = path.substring(splitIdx + 2);
         return new Pair<>(filePath, pathInsideJar);
     }
@@ -117,47 +118,15 @@ public class FileUtils {
                 (path.startsWith("//") || path.startsWith("\\\\"));
     }
 
-    /**
-     * 检测是否为连接点/重解析点（Windows特有）
-     *
-     * @see <a href="https://stackoverflow.com/a/74801717">Cross platform way to detect a symbolic link / junction point</a>
-     * @see sun.nio.fs.WindowsFileAttributes#isReparsePoint(int)
-     * 
-     * @param path 待检查的路径
-     * @return 如果是重解析点则返回true
-     */
-    @SuppressWarnings("JavadocReference")
-    public static boolean isReparsePoint(@NotNull Path path) {
-        try {
-            Object attribute = Files.getAttribute(path, "dos:attributes", LinkOption.NOFOLLOW_LINKS);
-            if (attribute instanceof Integer) {
-                // is junction or symlink
-                return ((Integer) attribute & 0x400) != 0;
-            }
-        } catch (Exception ignored) {
-            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(ignored);
-        }
-        return false;
-    }
-
-    /**
-     * 判断文件路径是否为重解析点或符号链接
-     * 
-     * @param filePath 文件路径
-     * @return 如果是重解析点或符号链接则返回true
-     */
-    public static boolean isReparsePointOrSymlink(@NotNull String filePath) {
-        try {
-            Path path = Path.of(filePath);
-            return Files.isSymbolicLink(path) || isReparsePoint(path);
-        } catch (InvalidPathException e) {
-            return false;
-        }
-    }
+    /** NTFS 的 FILE_ATTRIBUTE_REPARSE_POINT 位：symlink、junction、挂载点等重解析点都带这一位 */
+    private static final int FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
 
     /**
      * 快速检查文件或目录是否存在
      * 注意：UNC路径会被跳过以避免网络访问导致的UI冻结
+     * <p>
+     * 非 Windows 跟随末级 symlink：目标不存在的悬空 symlink 视为不存在。
+     * Windows 不跟随链接：只要 symlink / junction 条目本身还在就视为存在，见 {@link #existsOnWindows(String)}。
      *
      * @see java.net.JarURLConnection
      * 
@@ -165,20 +134,61 @@ public class FileUtils {
      * @return 如果路径不是UNC路径且文件或目录存在则返回true，否则返回false
      */
     public static boolean quickExists(@NotNull String path) {
-        // Finding the UNC path will access the network,
-        // which takes a long time and causes the UI to freeze.
-        // ref: https://stackoverflow.com/a/48554407
+        // 查找 UNC 路径会访问网络，耗时很长，会导致 UI 冻结
+        // 参考：https://stackoverflow.com/a/48554407
         if (isUncPath(path)) {
             return false;
         }
 
         Pair<String, String> paths = splitJarPath(normalizeSlashes(path));
         if (null != paths && new File(paths.first).isFile()) {
-            // is jar file path
+            // jar 内条目路径：jar 文件本身存在即视为存在
             return true;
         }
 
-        return isReparsePointOrSymlink(path) || new File(path).exists();
+        if (!SystemUtils.isWindows()) {
+            // 控制台每个候选单词都会走到这里。File.exists() 一次 native stat 直接返回结果，不抛异常；
+            // 不跟随链接的查询（lstat）对不存在的路径会先抛再吞一次异常，实测慢一个数量级
+            return new File(path).exists();
+        }
+        return existsOnWindows(path);
+    }
+
+    /**
+     * Windows 上判断路径条目是否存在，不跟随链接。
+     * <p>
+     * 只读一次 dos:attributes（NOFOLLOW_LINKS），同时得到“条目是否存在”和“是否为重解析点”：
+     * symlink 与 junction 在 NTFS 上都带 {@link #FILE_ATTRIBUTE_REPARSE_POINT}，按条目本身存在处理，即使目标已不存在。
+     * 原写法先 lstat（Files.isSymbolicLink）再读一次 dos:attributes，对不存在的路径两步各抛一次异常；这里最多一次。
+     *
+     * @see <a href="https://stackoverflow.com/a/74801717">Cross platform way to detect a symbolic link / junction point</a>
+     *
+     * @param path 文件路径
+     * @return 条目存在（含悬空的 symlink / junction）时返回 true
+     */
+    private static boolean existsOnWindows(@NotNull String path) {
+        final Path nioPath;
+        try {
+            nioPath = Path.of(path);
+        } catch (InvalidPathException e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+            return new File(path).exists();
+        }
+        try {
+            Object attributes = Files.getAttribute(nioPath, "dos:attributes", LinkOption.NOFOLLOW_LINKS);
+            if (attributes instanceof Integer && ((Integer) attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+                return true;
+            }
+        } catch (NoSuchFileException e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+            // 路径上没有任何条目（连悬空链接都没有），跟随链接再查也不可能存在
+            return false;
+        } catch (Exception e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+            // 其它失败（如无权读取属性）退回原写法，保证结果与改动前一致
+            return Files.isSymbolicLink(nioPath) || new File(path).exists();
+        }
+        return new File(path).exists();
     }
 
     /**

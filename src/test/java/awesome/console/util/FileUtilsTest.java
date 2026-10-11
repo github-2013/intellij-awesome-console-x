@@ -76,6 +76,37 @@ public class FileUtilsTest extends BasePlatformTestCase {
 		}
 	}
 
+	/**
+	 * 非 Windows 上 quickExists 跟随末级 symlink：指向存在目标的 symlink 算存在，悬空 symlink 算不存在。
+	 * Windows 保持原逻辑（symlink / junction 本身即算存在），且创建 symlink 需要特权，故跳过。
+	 */
+	public void testQuickExistsTreatsDanglingSymlinkAsMissingOnUnix() throws Exception {
+		if (SystemUtils.isWindows()) {
+			return;
+		}
+		Path workDir = Files.createTempDirectory("r46-quick-exists");
+		Path regularFile = workDir.resolve("regular.txt");
+		Path aliveLink = workDir.resolve("alive-link.txt");
+		Path danglingLink = workDir.resolve("dangling-link.txt");
+		try {
+			Files.writeString(regularFile, "r46\n");
+			Files.createSymbolicLink(aliveLink, regularFile);
+			Files.createSymbolicLink(danglingLink, workDir.resolve("missing-target.txt"));
+
+			Assert.assertTrue("普通文件应存在", FileUtils.quickExists(regularFile.toString()));
+			Assert.assertTrue("目录应存在", FileUtils.quickExists(workDir.toString()));
+			Assert.assertTrue("指向存在目标的 symlink 应存在", FileUtils.quickExists(aliveLink.toString()));
+			Assert.assertFalse("悬空 symlink 不应算存在", FileUtils.quickExists(danglingLink.toString()));
+			Assert.assertFalse("不存在的路径不应算存在",
+					FileUtils.quickExists(workDir.resolve("no-such-file.txt").toString()));
+		} finally {
+			Files.deleteIfExists(danglingLink);
+			Files.deleteIfExists(aliveLink);
+			Files.deleteIfExists(regularFile);
+			Files.deleteIfExists(workDir);
+		}
+	}
+
 	private static VirtualFile refreshOnPooled(Supplier<VirtualFile> action) {
 		AtomicReference<VirtualFile> result = new AtomicReference<>();
 		AtomicBoolean done = new AtomicBoolean();

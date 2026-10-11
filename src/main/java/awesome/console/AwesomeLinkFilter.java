@@ -756,17 +756,103 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 当 preserveAnsiColors 配置为 false 时，会移除这些序列以便更准确地识别路径
 	 *
 	 * @param line 原始输入行，可能包含 ANSI 转义序列
-	 * @return 处理后的行，根据配置可能已移除 ANSI 转义序列
+	 * @return 用于匹配的文本，以及把匹配下标换算回原文下标的映射
 	 */
-	// 定义私有方法，预处理输入行，根据配置决定是否移除 ANSI 转义序列
-	private String preprocessLine(@NotNull final String line) {
-		// 如果配置为不保留 ANSI 颜色
+	private AnsiStrippedLine preprocessLine(@NotNull final String line) {
 		if (!config.preserveAnsiColors) {
-			// 移除ANSI转义序列 - 使用正则表达式匹配并替换为空字符串
-			return ANSI_ESCAPE_PATTERN.matcher(line).replaceAll("");
+			return stripAnsiEscapes(line);
 		}
-		// 如果配置为保留 ANSI 颜色，直接返回原始行
-		return line;
+		return AnsiStrippedLine.createUnchanged(line);
+	}
+
+	/**
+	 * 移除 ANSI 转义序列，并记录剥离后每个字符在原文中的下标。
+	 * 不含 ESC 的行（绝大多数）直接返回原行，不分配映射。
+	 * 包级可见供单测直接验证剥离结果与区间换算。
+	 *
+	 * @param line 原始输入行
+	 * @return 剥离结果
+	 */
+	static AnsiStrippedLine stripAnsiEscapes(@NotNull final String line) {
+		if (line.indexOf('\u001B') < 0) {
+			return AnsiStrippedLine.createUnchanged(line);
+		}
+		final Matcher escapeMatcher = ANSI_ESCAPE_PATTERN.matcher(line);
+		final StringBuilder strippedText = new StringBuilder(line.length());
+		// 按原行长度分配，只用前 strippedText.length() 项，省掉收尾的 Arrays.copyOf
+		final int[] rawIndexes = new int[line.length()];
+		int rawPos = 0;
+		while (escapeMatcher.find()) {
+			appendKeptSegment(line, rawPos, escapeMatcher.start(), strippedText, rawIndexes);
+			rawPos = escapeMatcher.end();
+		}
+		appendKeptSegment(line, rawPos, line.length(), strippedText, rawIndexes);
+		if (strippedText.length() == line.length()) {
+			// 只有孤立的 ESC、没有完整序列：未剥离任何字符，下标一致
+			return AnsiStrippedLine.createUnchanged(line);
+		}
+		return new AnsiStrippedLine(strippedText.toString(), rawIndexes);
+	}
+
+	/**
+	 * 把原行 [from, to) 这一段整段追加到剥离文本，并逐个记录这些字符的原文下标。
+	 */
+	private static void appendKeptSegment(
+			@NotNull final String line,
+			final int from,
+			final int to,
+			@NotNull final StringBuilder strippedText,
+			final int @NotNull [] rawIndexes
+	) {
+		int keptIndex = strippedText.length();
+		strippedText.append(line, from, to);
+		for (int rawIndex = from; rawIndex < to; rawIndex++) {
+			rawIndexes[keptIndex++] = rawIndex;
+		}
+	}
+
+	/**
+	 * ANSI 剥离后的行。
+	 * 匹配必须在剥离后的文本上做（转义序列会打断路径），超链接区间必须落在原文上，二者靠映射换算。
+	 * 包级可见供单测使用。
+	 *
+	 * @param text 剥离后的文本
+	 * @param rawIndexes rawIndexes[i] 为 text 第 i 个字符在原文中的下标，只有前 text.length() 项有效；
+	 *                   null 表示未剥离，下标一致
+	 */
+	record AnsiStrippedLine(@NotNull String text, int @Nullable [] rawIndexes) {
+
+		/**
+		 * 创建未剥离的结果：文本即原行，下标与原文一致，不分配映射。
+		 */
+		static AnsiStrippedLine createUnchanged(@NotNull String line) {
+			return new AnsiStrippedLine(line, null);
+		}
+
+		/**
+		 * 把剥离后文本中的区间 [start, end) 换算为原文区间。
+		 * 起点取首字符的原文下标，终点取末字符的原文下标 + 1；夹在中间的转义序列随区间一并覆盖。
+		 *
+		 * @return {原文起点, 原文终点}
+		 */
+		int[] convertRangeToRaw(int start, int end) {
+			if (rawIndexes == null) {
+				return new int[]{start, end};
+			}
+			final int rawStart = convertStartToRaw(start);
+			final int rawEnd = end > start ? rawIndexes[end - 1] + 1 : rawStart;
+			return new int[]{rawStart, rawEnd};
+		}
+
+		private int convertStartToRaw(int start) {
+			// rawIndexes 按原行长度分配，有效项只有前 text.length() 个，不能用数组长度判断边界
+			final int keptCount = text.length();
+			if (start < keptCount) {
+				return rawIndexes[start];
+			}
+			// 区间起点在文本末尾：落在最后一个保留字符之后
+			return keptCount == 0 ? 0 : rawIndexes[keptCount - 1] + 1;
+		}
 	}
 
 	/**
@@ -1007,7 +1093,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 			// git rename 的 {old => new} 不是真实路径，按新路径优先、旧路径回退依次解析
 			for (FileLinkMatch candidate : gitRenameResolutionCandidates(match)) {
-				if (processExistingFile(candidate, startPoint, results)) {
+				// 字面判定与缓存查找共用同一次磁盘解析，避免对同一候选重复 resolveFile 与 stat
+				final ResolvedCandidatePath resolved = resolveCandidatePath(candidate.path);
+				if (processExistingFile(candidate, resolved, startPoint, results)) {
 					break;
 				}
 				// 剥掉 ./、尾斜杠、.../ 之后若只剩无点裸名，不按文件名搜缓存。
@@ -1016,7 +1104,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				}
 				int sizeBefore = results.size();
 				processCachedFiles(
-						candidate, startPoint, results, shouldRequireExactRelative(candidate.path)
+						candidate, resolved, startPoint, results, shouldRequireExactRelative(candidate.path)
 				);
 				if (results.size() > sizeBefore) {
 					break;
@@ -1072,24 +1160,57 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
+	 * 候选路径在磁盘上的解析结果。同一候选的字面判定（{@link #processExistingFile}）
+	 * 与缓存查找（{@link #processCachedFiles}）共用一份，避免重复 resolveFile 与 stat。
+	 *
+	 * @param file 解析出的文件；路径非法或不支持（如 UNC）时为 null，此时其余字段无意义
+	 * @param isExternal file 是否在项目根之外
+	 * @param exists file 在磁盘上是否存在（{@link FileUtils#quickExists} 口径）
+	 */
+	private record ResolvedCandidatePath(@Nullable File file, boolean isExternal, boolean exists) {
+		static final ResolvedCandidatePath UNRESOLVED = new ResolvedCandidatePath(null, false, false);
+	}
+
+	/**
+	 * 把候选路径解析到磁盘：拼项目根、判断是否在项目外、检查是否存在。
+	 *
+	 * @param matchPath 候选路径（{@link FileLinkMatch#path}）
+	 * @return 解析结果；路径无法解析时为 {@link ResolvedCandidatePath#UNRESOLVED}
+	 */
+	@NotNull
+	private ResolvedCandidatePath resolveCandidatePath(@NotNull final String matchPath) {
+		final File file = resolveFile(matchPath);
+		if (null == file) {
+			return ResolvedCandidatePath.UNRESOLVED;
+		}
+		return new ResolvedCandidatePath(file, isExternal(file), FileUtils.quickExists(file.getAbsolutePath()));
+	}
+
+	/**
 	 * 处理实际存在的文件，创建直接的文件超链接
 	 *
 	 * @param match 文件链接匹配项
+	 * @param resolved match.path 的磁盘解析结果
 	 * @param startPoint 起始位置
 	 * @param results 结果列表
 	 * @return 该候选已有定论（已成链，或按字面确定不成链）时返回 true，不再走缓存查找
 	 */
-	private boolean processExistingFile(final FileLinkMatch match, final int startPoint, final List<ResultItem> results) {
+	private boolean processExistingFile(
+			final FileLinkMatch match,
+			@NotNull final ResolvedCandidatePath resolved,
+			final int startPoint,
+			final List<ResultItem> results
+	) {
 		String matchPath = match.path;
-		File file = resolveFile(matchPath);
+		File file = resolved.file();
 		
 		if (null == file) {
 			return false;
 		}
 
-		final boolean isExternal = isExternal(file);
+		final boolean isExternal = resolved.isExternal();
 		String filePath = file.getAbsolutePath();
-		final boolean exists = FileUtils.quickExists(filePath);
+		final boolean exists = resolved.exists();
 		// 项目内的绝对路径以字面为准：转成相对路径后会对齐到 content root / source root 下的另一个文件
 		final boolean absoluteInProject = !isExternal && isAbsolutePath(matchPath);
 		
@@ -1116,17 +1237,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 在缓存中查找匹配的文件并创建超链接
 	 *
 	 * @param match 文件链接匹配项
+	 * @param resolved match.path 的磁盘解析结果，与 processExistingFile 共用
 	 * @param startPoint 起始位置
 	 * @param results 结果列表
 	 */
 	private void processCachedFiles(
 			final FileLinkMatch match,
+			@NotNull final ResolvedCandidatePath resolved,
 			final int startPoint,
 			final List<ResultItem> results,
 			boolean requireExactRelative
 	) {
 		// 解析并标准化匹配路径
-		String matchPath = resolveAndNormalizeMatchPath(match.path);
+		String matchPath = normalizeResolvedMatchPath(match.path, resolved);
 		// git --stat 的 `.../` 不是真实目录，必须先剥掉再做 endsWith，
 		// 否则会退化成按文件名匹配，index.tsx 这类同名文件会弹出 Choose Target File
 		String suffixPath = suffixPathForCacheMatch(match.path, matchPath);
@@ -1331,7 +1454,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	@NotNull
 	List<VirtualFile> resolveCachedFilesForPath(@NotNull String path) {
-		String suffixPath = suffixPathForCacheMatch(path, resolveAndNormalizeMatchPath(path));
+		String suffixPath = suffixPathForCacheMatch(path, normalizeResolvedMatchPath(path, resolveCandidatePath(path)));
 		String fileName = extractFileName(suffixPath);
 		CachedCandidates candidates = findCachedCandidates(
 				fileName, !hasDirectoryComponent(suffixPath)
@@ -1350,18 +1473,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 解析并标准化匹配路径，处理外部文件的特殊情况
+	 * 基于已有的磁盘解析结果标准化匹配路径，处理外部文件的特殊情况
 	 *
 	 * @param matchPath 原始匹配路径
+	 * @param resolved matchPath 的磁盘解析结果，不再重复 resolveFile 与 stat
 	 * @return 标准化后的相对路径
 	 */
-	private String resolveAndNormalizeMatchPath(String matchPath) {
-		File file = resolveFile(matchPath);
+	private String normalizeResolvedMatchPath(String matchPath, @NotNull ResolvedCandidatePath resolved) {
+		File file = resolved.file();
 		if (null != file) {
-			final boolean isExternal = isExternal(file);
 			String filePath = file.getAbsolutePath();
-			final boolean exists = FileUtils.quickExists(filePath);
-			if (!exists && isExternal && isUnixAbsolutePath(matchPath)) {
+			if (!resolved.exists() && resolved.isExternal() && isUnixAbsolutePath(matchPath)) {
 				// 作为回退方案，将以斜杠开头的绝对路径解析为基于项目根目录的相对路径
 				filePath = new File(project.getBasePath(), matchPath).getAbsolutePath();
 			}
@@ -3460,15 +3582,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 		List<FileLinkMatch> results = new LinkedList<>();
 		prepareFilter();
-		line = preprocessLine(line);
+		final AnsiStrippedLine strippedLine = preprocessLine(line);
 
 		final Matcher fileMatcher = this.fileMatcher.get();
-		fileMatcher.reset(line);
+		fileMatcher.reset(strippedLine.text());
 		
 		while (fileMatcher.find()) {
-			FileLinkMatch linkMatch = extractFileLinkMatch(fileMatcher, line);
+			// 忽略判定（句末点号、省略号等）依赖相邻字符，必须用剥离后的文本与下标
+			FileLinkMatch linkMatch = extractFileLinkMatch(fileMatcher, strippedLine.text());
 			if (linkMatch != null) {
-				results.add(linkMatch);
+				results.add(convertFileLinkMatchToRaw(linkMatch, strippedLine));
 			}
 		}
 
@@ -3476,11 +3599,31 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
+	 * 把基于剥离后文本的匹配区间换算回原文区间，供超链接定位使用。
+	 *
+	 * @param linkMatch 基于剥离后文本的匹配
+	 * @param strippedLine 剥离结果
+	 * @return 区间落在原文上的匹配；未剥离时原样返回
+	 */
+	private static FileLinkMatch convertFileLinkMatchToRaw(
+			@NotNull final FileLinkMatch linkMatch,
+			@NotNull final AnsiStrippedLine strippedLine
+	) {
+		if (strippedLine.rawIndexes() == null) {
+			return linkMatch;
+		}
+		final int[] rawRange = strippedLine.convertRangeToRaw(linkMatch.start, linkMatch.end);
+		return new FileLinkMatch(
+				linkMatch.match, linkMatch.path, rawRange[0], rawRange[1], linkMatch.linkedRow, linkMatch.linkedCol
+		);
+	}
+
+	/**
 	 * 从匹配器中提取文件链接匹配项
 	 *
 	 * @param fileMatcher 文件路径匹配器
-	 * @param line 原始行内容
-	 * @return 文件链接匹配项，如果应该忽略则返回null
+	 * @param line 剥离 ANSI 后的匹配文本，坐标与 fileMatcher 一致；不得传原始行，否则忽略判定会读错相邻字符
+	 * @return 文件链接匹配项（区间为剥离后坐标），如果应该忽略则返回null
 	 */
 	private FileLinkMatch extractFileLinkMatch(final Matcher fileMatcher, final String line) {
 		// 提取匹配内容和路径
@@ -3671,13 +3814,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return Collections.emptyList();
 		}
 
-		// 预处理：根据配置决定是否移除ANSI转义序列
-		line = preprocessLine(line);
+		// 预处理：根据配置决定是否移除ANSI转义序列，匹配在剥离后的文本上做
+		final AnsiStrippedLine strippedLine = preprocessLine(line);
 
 		// 获取线程本地的URL匹配器实例
 		final Matcher urlMatcher = this.urlMatcher.get();
 		// 重置匹配器并设置新的输入文本
-		urlMatcher.reset(line);
+		urlMatcher.reset(strippedLine.text());
 		// 创建结果列表用于存储所有匹配到的URL链接
 		final List<URLLinkMatch> results = new LinkedList<>();
 		// 循环查找所有匹配的URL
@@ -3719,8 +3862,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					}
 				}
 			}
-			// 将处理后的URL链接匹配结果添加到结果列表中，包含URL文本和调整后的位置信息
-			results.add(new URLLinkMatch(match, urlMatcher.start() + startOffset, urlMatcher.end() - endOffset));
+			// 区间换算回原文，超链接才能落在原文的 URL 上
+			final int[] rawRange = strippedLine.convertRangeToRaw(
+					urlMatcher.start() + startOffset, urlMatcher.end() - endOffset
+			);
+			results.add(new URLLinkMatch(match, rawRange[0], rawRange[1]));
 		}
 		// 返回所有匹配到的URL链接列表
 		return results;

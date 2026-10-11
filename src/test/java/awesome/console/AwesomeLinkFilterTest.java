@@ -2696,6 +2696,51 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 非 Windows：symlink 指向存在的目标才成链；目标已删除的悬空 symlink 不成链，
+	 * 包括目录自证形态（{@code dir/}）与 {@code file://} URL。每种形态都先断言有效 symlink 成链作对照，
+	 * 避免“根本没识别出来”也被当成“正确不成链”。
+	 * Windows 保持原逻辑且创建 symlink 需特权，故跳过。
+	 */
+	public void testDanglingSymlinkIsNotLinkedOnUnix() throws Exception {
+		if (awesome.console.util.SystemUtils.isWindows()) {
+			return;
+		}
+		String basePath = getProject().getBasePath();
+		Assert.assertNotNull("Test project base path should exist", basePath);
+		Files.createDirectories(Path.of(basePath));
+		// 唯一目录名：上次运行被强杀留下的残留不会让本次 createSymbolicLink 失败
+		Path dir = Files.createTempDirectory(Path.of(basePath), "r46-symlink");
+		String dirName = dir.getFileName().toString();
+		try {
+			Path targetFile = Files.writeString(dir.resolve("target.ts"), "export {};\n");
+			Path targetDir = Files.createDirectories(dir.resolve("target-dir"));
+			Path aliveFileLink = Files.createSymbolicLink(dir.resolve("alive.ts"), targetFile);
+			Files.createSymbolicLink(dir.resolve("alive-dir"), targetDir);
+			Path danglingFileLink = Files.createSymbolicLink(dir.resolve("dangling.ts"), dir.resolve("deleted.ts"));
+			Files.createSymbolicLink(dir.resolve("gone-dir"), dir.resolve("deleted-dir"));
+
+			String aliveFileLine = "Error in " + dirName + "/alive.ts:3";
+			assertHyperlinkRange(assertApplyFilterHasSingleLink(aliveFileLine), aliveFileLine, dirName + "/alive.ts:3");
+			// 防护而非回归探针：旧 quickExists 把悬空 symlink 判为存在后，allowsResolvedTarget 仍因 isFile() 为 false 拒绝
+			assertApplyFilterHasNoLinks("Error in " + dirName + "/dangling.ts:3");
+
+			String aliveDirLine = "Output in " + dirName + "/alive-dir/";
+			assertHyperlinkRange(assertApplyFilterHasSingleLink(aliveDirLine), aliveDirLine, dirName + "/alive-dir/");
+			assertApplyFilterHasNoLinks("Output in " + dirName + "/gone-dir/");
+
+			// 只测 URL 分支：file:// 文本在文件分支也会被识别，applyFilter 上会叠出第二条链
+			String aliveUrlLine = "See " + aliveFileLink.toUri();
+			Assert.assertEquals("有效 symlink 的 file:// URL 应成链: " + aliveUrlLine,
+					1, filter.extractUrlLinksFromLine(aliveUrlLine, 0).size());
+			String danglingUrlLine = "See " + danglingFileLink.toUri();
+			Assert.assertTrue("悬空 symlink 的 file:// URL 不应成链: " + danglingUrlLine,
+					filter.extractUrlLinksFromLine(danglingUrlLine, 0).isEmpty());
+		} finally {
+			deletePathTreeQuietly(dir);
+		}
+	}
+
+	/**
 	 * Ignore 过滤闭合多命中后只剩 1 个：与 fileCache 不收录 ignore 文件对齐，允许单链。
 	 * K 仍按未过滤的 EXHAUSTED_MANY 存储。
 	 */
@@ -3675,6 +3720,85 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		} finally {
 			storage.preserveAnsiColors = originalValue;
 		}
+	}
+
+	/**
+	 * 剥离 ANSI 后再匹配，超链接区间必须换算回原文：链接前有转义序列时下划线不得左移。
+	 * 链接后的转义序列不影响区间；夹在路径中间的转义序列随区间一并覆盖。
+	 */
+	public void testAnsiStrippedFileLinkCoversRawPath() {
+		myFixture.addFileToProject("src/ansi/App.java", "class App {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String prefixed = "\u001b[31mError:\u001b[0m src/ansi/App.java:10";
+		assertHyperlinkRange(assertApplyFilterHasSingleLink(prefixed), prefixed, "src/ansi/App.java:10");
+
+		String suffixed = "src/ansi/App.java:10 \u001b[32mOK\u001b[0m";
+		assertHyperlinkRange(assertApplyFilterHasSingleLink(suffixed), suffixed, "src/ansi/App.java:10");
+
+		String wrapped = "\u001b[36msrc/ansi/App.java\u001b[0m:10";
+		assertHyperlinkRange(assertApplyFilterHasSingleLink(wrapped), wrapped, "src/ansi/App.java\u001b[0m:10");
+
+		// 转义序列紧跟链接末尾：终点必须停在末字符之后，不得吞进结尾的 ESC[0m
+		String colored = "\u001b[36msrc/ansi/App.java:10\u001b[0m done";
+		assertHyperlinkRange(assertApplyFilterHasSingleLink(colored), colored, "src/ansi/App.java:10");
+	}
+
+	/**
+	 * URL 与文件路径走同一套换算：转义序列在 URL 前面时，下划线仍落在 URL 本身。
+	 * 括号包围时先在剥离后坐标上去掉括号，再换算回原文。
+	 */
+	public void testAnsiStrippedUrlLinkCoversRawUrl() {
+		String prefixed = "\u001b[1;31mERROR\u001b[0m see \u001b[4mhttps://example.com/docs\u001b[0m";
+		List<Filter.ResultItem> prefixedLinks = filter.extractUrlLinksFromLine(prefixed, 0);
+		Assert.assertEquals("该行只应有一条 URL 链", 1, prefixedLinks.size());
+		assertHyperlinkRange(prefixedLinks.get(0), prefixed, "https://example.com/docs");
+
+		String parenthesized = "\u001b[2m(https://example.com/docs)\u001b[0m";
+		List<Filter.ResultItem> parenthesizedLinks = filter.extractUrlLinksFromLine(parenthesized, 0);
+		Assert.assertEquals("该行只应有一条 URL 链", 1, parenthesizedLinks.size());
+		assertHyperlinkRange(parenthesizedLinks.get(0), parenthesized, "https://example.com/docs");
+	}
+
+	/**
+	 * 句末单词判定必须在剥离后的文本上做：被转义序列包住的 "Building." 仍按句末单词忽略，不得成链。
+	 */
+	public void testAnsiWrappedSentenceWordStaysIgnored() {
+		List<FileLinkMatch> matches = filter.detectPaths("\u001b[32mBuilding.\u001b[0m done");
+		Assert.assertTrue(
+				"句末单词不应被识别为路径: " + matches.stream().map(m -> m.match).collect(Collectors.toList()),
+				matches.stream().noneMatch(m -> m.match.startsWith("Building"))
+		);
+	}
+
+	/**
+	 * 剥离与区间换算的纯函数边界：无 ESC、孤立 ESC、多段序列、序列夹在区间中间、末尾空区间、整行只有序列。
+	 */
+	public void testStripAnsiEscapesConvertsRangesToRawLine() {
+		String plain = "src/a.ts:1";
+		AwesomeLinkFilter.AnsiStrippedLine plainStripped = AwesomeLinkFilter.stripAnsiEscapes(plain);
+		Assert.assertSame("无 ESC 应原样返回", plain, plainStripped.text());
+		Assert.assertArrayEquals(new int[]{2, 5}, plainStripped.convertRangeToRaw(2, 5));
+
+		// 孤立 ESC 与不完整的 CSI 不构成转义序列，不得剥离任何字符
+		String loneEscape = "a\u001b[3";
+		AwesomeLinkFilter.AnsiStrippedLine loneStripped = AwesomeLinkFilter.stripAnsiEscapes(loneEscape);
+		Assert.assertSame("孤立 ESC 应原样返回", loneEscape, loneStripped.text());
+		Assert.assertArrayEquals(new int[]{0, 4}, loneStripped.convertRangeToRaw(0, 4));
+
+		// 原文下标：ESC[31m=0..4，a=5，b=6，ESC[0m=7..10，c=11，d=12，ESC[1m=13..16
+		String segmented = "\u001b[31mab\u001b[0mcd\u001b[1m";
+		AwesomeLinkFilter.AnsiStrippedLine segmentedStripped = AwesomeLinkFilter.stripAnsiEscapes(segmented);
+		Assert.assertEquals("abcd", segmentedStripped.text());
+		Assert.assertArrayEquals("首段", new int[]{5, 7}, segmentedStripped.convertRangeToRaw(0, 2));
+		Assert.assertArrayEquals("末段不含结尾 ESC", new int[]{11, 13}, segmentedStripped.convertRangeToRaw(2, 4));
+		Assert.assertArrayEquals("夹在中间的序列随区间覆盖", new int[]{6, 12}, segmentedStripped.convertRangeToRaw(1, 3));
+		Assert.assertArrayEquals("末尾空区间落在末字符之后", new int[]{13, 13}, segmentedStripped.convertRangeToRaw(4, 4));
+
+		AwesomeLinkFilter.AnsiStrippedLine escapesOnly = AwesomeLinkFilter.stripAnsiEscapes("\u001b[31m\u001b[0m");
+		Assert.assertEquals("整行只有序列应剥成空串", "", escapesOnly.text());
+		Assert.assertArrayEquals(new int[]{0, 0}, escapesOnly.convertRangeToRaw(0, 0));
 	}
 
 	/**
@@ -5897,6 +6021,32 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		String path = ((SingleFileFileHyperlinkInfo) links.get(0).getHyperlinkInfo()).getFilePath()
 				.replace('\\', '/');
 		Assert.assertTrue("Expected hyperlink to end with " + suffix + ", got: " + path, path.endsWith(suffix));
+	}
+
+	/**
+	 * 对整行跑 applyFilter，断言恰好一条链并返回。endPoint 取行长，区间即行内下标。
+	 * 与 {@link #assertApplyFilterHasNoLinks} 对称，正负向用同一入口。
+	 */
+	private Filter.ResultItem assertApplyFilterHasSingleLink(@NotNull String line) {
+		Filter.Result result = filter.applyFilter(line, line.length());
+		Assert.assertNotNull("applyFilter 应返回 Result: " + line, result);
+		Assert.assertEquals("该行应恰好一条链: " + line, 1, result.getResultItems().size());
+		return result.getResultItems().get(0);
+	}
+
+	/**
+	 * 递归删除测试在磁盘上建的目录树，不跟随 symlink（只删链接本身），清理失败不掩盖原始断言失败。
+	 */
+	private static void deletePathTreeQuietly(@NotNull Path root) {
+		try (Stream<Path> paths = Files.walk(root)) {
+			paths.sorted(Collections.reverseOrder()).forEach(path -> {
+				try {
+					Files.deleteIfExists(path);
+				} catch (IOException ignored) {
+				}
+			});
+		} catch (IOException ignored) {
+		}
 	}
 
 	private void assertHyperlinkRange(

@@ -4,10 +4,10 @@ import static awesome.console.config.AwesomeConsoleDefaults.DEFAULT_GROUP_RETRIE
 
 import com.intellij.openapi.util.text.StringUtil;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
-import java.util.stream.IntStream;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -59,13 +59,14 @@ public class RegexUtils {
      */
     public static int[] tryGetGroupRange(final Matcher matcher, final String group, final int retries) {
         int start = matcher.start(), end = matcher.end();
+        // 先查分组名是否存在，避免用 IllegalArgumentException 试探（热路径上每次抛异常代价很高）
+        final Map<String, Integer> namedGroups = matcher.namedGroups();
         for (int i = 0; i <= retries; i++) {
             String groupName = i > 0 ? group + i : group;
-            try {
+            if (namedGroups.containsKey(groupName)) {
                 start = matcher.start(groupName);
                 end = matcher.end(groupName);
                 break;
-            } catch (IllegalArgumentException ignored) {
             }
         }
         return new int[]{start, end};
@@ -92,8 +93,15 @@ public class RegexUtils {
      * @return 匹配到的字符串，失败时返回null
      */
     public static String tryMatchGroup(final Matcher matcher, final String group, final int retries) {
-        String[] groups = IntStream.range(0, retries + 1).mapToObj(i -> i > 0 ? group + i : group).toArray(String[]::new);
-        return matchGroup(matcher, groups);
+        // 逐个生成候选分组名并就地查找，命中即返回：不为每次调用分配 Stream 与数组，也不拼用不到的名字
+        final Map<String, Integer> namedGroups = matcher.namedGroups();
+        for (int i = 0; i <= retries; i++) {
+            final String match = matchGroupIfPresent(matcher, namedGroups, i > 0 ? group + i : group);
+            if (null != match) {
+                return match;
+            }
+        }
+        return null;
     }
 
     /**
@@ -104,16 +112,26 @@ public class RegexUtils {
      * @return 匹配到的字符串，失败时返回null
      */
     public static String matchGroup(final Matcher matcher, final String... groups) {
+        final Map<String, Integer> namedGroups = matcher.namedGroups();
         for (String group : groups) {
-            try {
-                String match = matcher.group(group);
-                if (null != match) {
-                    return match;
-                }
-            } catch (IllegalArgumentException ignored) {
+            final String match = matchGroupIfPresent(matcher, namedGroups, group);
+            if (null != match) {
+                return match;
             }
         }
         return null;
+    }
+
+    /**
+     * 分组名存在时返回它匹配到的文本（未参与匹配为 null）；分组名不存在直接返回 null。
+     * 先查 Matcher 缓存的分组名表，不再靠抛 IllegalArgumentException 试探。
+     */
+    private static String matchGroupIfPresent(
+            final Matcher matcher,
+            final Map<String, Integer> namedGroups,
+            final String group
+    ) {
+        return namedGroups.containsKey(group) ? matcher.group(group) : null;
     }
 
     /**
@@ -128,7 +146,8 @@ public class RegexUtils {
                 Pattern.compile(pattern);
                 return true;
             }
-        } catch (PatternSyntaxException ignored) {
+        } catch (PatternSyntaxException e) {
+            ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
         }
         return false;
     }
