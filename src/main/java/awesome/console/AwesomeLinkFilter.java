@@ -36,6 +36,7 @@ import com.intellij.openapi.module.ModuleManager;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.StandardFileSystems;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileCopyEvent;
@@ -1257,9 +1258,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 提取文件名
 		String fileName = extractFileName(suffixPath);
 
-		// 带目录后缀时先不按 resultLimit 裁剪：正确文件可能排在第 100 个同名文件之后
-		boolean hasDirs = hasDirectoryComponent(suffixPath);
-		CachedCandidates candidates = findCachedCandidates(fileName, !hasDirs);
+		CachedCandidates candidates = findCachedCandidates(fileName);
 		if (candidates.isEmpty()) {
 			// git --stat 会把长路径截成 `.../remaining/file.ts`，字面路径在磁盘上不存在，
 			// 只能靠文件名缓存。git pull 刚写入的新文件此时往往还没进入 VFS/fileCache，
@@ -1456,9 +1455,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	List<VirtualFile> resolveCachedFilesForPath(@NotNull String path) {
 		String suffixPath = suffixPathForCacheMatch(path, normalizeResolvedMatchPath(path, resolveCandidatePath(path)));
 		String fileName = extractFileName(suffixPath);
-		CachedCandidates candidates = findCachedCandidates(
-				fileName, !hasDirectoryComponent(suffixPath)
-		);
+		CachedCandidates candidates = findCachedCandidates(fileName);
 		if (candidates.isEmpty()) {
 			return Collections.emptyList();
 		}
@@ -1547,6 +1544,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 		List<String> absolutePaths = searchResult.paths().stream()
 				.filter(path -> !shouldIgnorePath(path))
+				.filter(FileUtils::quickExists)
 				.collect(Collectors.toList());
 		if (absolutePaths.isEmpty()) {
 			return false;
@@ -2242,11 +2240,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 在缓存中查找候选文件，并保留候选的来源语义。
 	 *
 	 * @param fileName 文件名或完全限定类名
-	 * @param applyResultLimit 为 true 时按配置截断结果
 	 * @return 候选集（{@code files} 可能为 null）
 	 */
 	@NotNull
-	private CachedCandidates findCachedCandidates(final String fileName, final boolean applyResultLimit) {
+	private CachedCandidates findCachedCandidates(final String fileName) {
 		List<VirtualFile> matchingFiles;
 		boolean resolvedByClassName = false;
 		cacheReadLock.lock();
@@ -2261,13 +2258,24 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				matchingFiles = matchingFiles.stream()
 						.filter(VirtualFile::isValid)  // 惰性验证：过滤已失效的文件
 						.filter(f -> !shouldIgnoreFile(f))  // 使用统一的忽略检查方法
-						.limit(applyResultLimit && config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
 						.collect(Collectors.toList());
 			}
 		} finally {
 			cacheReadLock.unlock();
 		}
+		if (resolvedByClassName) {
+			matchingFiles = filterExistingCachedFiles(matchingFiles);
+		}
 		return new CachedCandidates(matchingFiles, resolvedByClassName);
+	}
+
+	@NotNull
+	private List<VirtualFile> filterExistingCachedFiles(@NotNull List<VirtualFile> files) {
+		return files.stream()
+				.filter(VirtualFile::isValid)
+				.filter(file -> !StandardFileSystems.FILE_PROTOCOL.equals(file.getFileSystem().getProtocol())
+						|| FileUtils.quickExists(file.getPath()))
+				.collect(Collectors.toList());
 	}
 
 	/**
@@ -2312,9 +2320,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (suffix.isEmpty()) {
 			return null;
 		}
-		final List<VirtualFile> foundFiles = requireExactRelative
+		final List<VirtualFile> matchingPaths = requireExactRelative
 				? filterFilesByExactRelativePath(suffix, matchingFiles)
 				: filterFilesByPathSuffix(suffix, matchingFiles);
+		final List<VirtualFile> foundFiles = filterExistingCachedFiles(matchingPaths);
 		return foundFiles.isEmpty() ? null : foundFiles;
 	}
 
@@ -2414,14 +2423,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 		}
 		return result;
-	}
-
-	/**
-	 * 判断标准化路径在去掉 {@code ./}、{@code ../} 后是否仍包含目录。
-	 * {@code ./package.json} 视为仅文件名；{@code e2e/dashboard/server.js} 视为带目录。
-	 */
-	private boolean hasDirectoryComponent(@NotNull String normalizedPath) {
-		return stripLeadingDotSegments(normalizedPath).contains("/");
 	}
 
 	/**
@@ -3583,13 +3584,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		List<FileLinkMatch> results = new LinkedList<>();
 		prepareFilter();
 		final AnsiStrippedLine strippedLine = preprocessLine(line);
+		// JediTerm 拼接软换行时用 NUL 补齐未占满的行；等长替换为已有的 DWC 标记，
+		// 避免正则在补位处切断路径，并复用后续标记清理，保留原始高亮区间。
+		final String matchingLine = strippedLine.text().replace('\0', DWC.charAt(0));
 
 		final Matcher fileMatcher = this.fileMatcher.get();
-		fileMatcher.reset(strippedLine.text());
+		fileMatcher.reset(matchingLine);
 		
 		while (fileMatcher.find()) {
 			// 忽略判定（句末点号、省略号等）依赖相邻字符，必须用剥离后的文本与下标
-			FileLinkMatch linkMatch = extractFileLinkMatch(fileMatcher, strippedLine.text());
+			FileLinkMatch linkMatch = extractFileLinkMatch(fileMatcher, matchingLine);
 			if (linkMatch != null) {
 				results.add(convertFileLinkMatchToRaw(linkMatch, strippedLine));
 			}

@@ -24,6 +24,12 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.jediterm.terminal.HyperlinkStyle;
+import com.jediterm.terminal.TextStyle;
+import com.jediterm.terminal.model.CharBuffer;
+import com.jediterm.terminal.model.StyleState;
+import com.jediterm.terminal.model.TerminalTextBuffer;
+import com.jediterm.terminal.model.hyperlinks.TextProcessing;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.DirectoryNotEmptyException;
@@ -1217,6 +1223,296 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection(" delete mode 100644 e2e/dashboard/package.json", "e2e/dashboard/package.json");
 		assertPathDetection(" delete mode 100644 e2e/dashboard/public/index.html", "e2e/dashboard/public/index.html");
 		assertPathDetection(" delete mode 100644 e2e/dashboard/server.js", "e2e/dashboard/server.js");
+	}
+
+	public void testGitPullCreateModeWithTerminalPadding() throws Exception {
+		String path = "app/tbds-manager-web/src/pages/tbds-registry/container/core-detail/"
+				+ "service-plugin/tm-platform插件管理接口说明.md";
+		myFixture.addFileToProject(path, "# 接口说明\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String terminalPath = path.replace("插件管理接口说明",
+				"插\uE000件\uE000管\uE000理\uE000\0接\uE000口\uE000说\uE000明\uE000");
+		String firstLine = " create mode 100644 " + terminalPath.substring(0, terminalPath.indexOf('\0'));
+		TextProcessing processing = new TextProcessing(TextStyle.EMPTY, HyperlinkStyle.HighlightMode.ALWAYS);
+		TerminalTextBuffer buffer = new TerminalTextBuffer(firstLine.length() + 1, 2, new StyleState(), processing);
+		processing.setTerminalTextBuffer(buffer);
+		List<String> processedLines = new ArrayList<>();
+		processing.addHyperlinkFilter(line -> {
+			processedLines.add(line);
+			return null;
+		});
+		buffer.writeString(0, 1, new CharBuffer(firstLine));
+		buffer.getLine(0).setWrapped(true);
+		buffer.writeString(0, 2, new CharBuffer(terminalPath.substring(terminalPath.indexOf('\0') + 1)));
+		String joinedLine = processedLines.get(processedLines.size() - 1);
+		Assert.assertEquals(" create mode 100644 " + terminalPath, joinedLine);
+		Filter.ResultItem terminalLink = assertApplyFilterHasSingleLink(joinedLine);
+		assertSingleHyperlinkEndsWith(List.of(terminalLink), path);
+		assertHyperlinkRange(terminalLink, joinedLine, terminalPath);
+
+		for (String displayedPath : new String[]{path, terminalPath.replace("\0", ""), terminalPath}) {
+			String line = " create mode 100644 " + displayedPath + "\n";
+			Filter.ResultItem link = assertApplyFilterHasSingleLink(line);
+			assertSingleHyperlinkEndsWith(List.of(link), path);
+			assertHyperlinkRange(link, line, displayedPath);
+		}
+		for (String separator : new String[]{" ", "\t", "\n"}) {
+			assertApplyFilterHasNoLinks(" create mode 100644 " + terminalPath.replace("\0", separator));
+		}
+	}
+
+	public void testGitPullCreateModeWithTerminalPaddingBeforeIndexing() throws Exception {
+		Path root = Path.of(getProject().getBasePath());
+		Files.createDirectories(root);
+		Path file = root.resolve("tm-platform插件管理接口说明.md");
+		Files.writeString(file, "# 接口说明\n");
+		awesome.console.config.AwesomeConsoleStorage storage =
+				awesome.console.config.AwesomeConsoleStorage.getInstance();
+		boolean previousPreserveAnsiColors = storage.preserveAnsiColors;
+		try {
+			String terminalPath = "tm-platform插\uE000件\uE000管\uE000理\uE000\0接\uE000口\uE000说\uE000明\uE000.md";
+			for (boolean preserve : new boolean[]{false, true}) {
+				storage.preserveAnsiColors = preserve;
+				String displayedPath = preserve ? terminalPath
+						: terminalPath.replace("\0", "\u001B[32m\0\u001B[0m");
+				String line = " create mode 100644 " + displayedPath + "\n";
+				int startPoint = 123;
+				Filter.Result result = filter.applyFilter(line, startPoint + line.length());
+				Assert.assertNotNull(result);
+				Assert.assertEquals(1, result.getResultItems().size());
+				Filter.ResultItem link = result.getResultItems().get(0);
+				assertSingleHyperlinkEndsWith(List.of(link), file.getFileName().toString());
+				Assert.assertEquals(startPoint + line.indexOf(displayedPath), link.getHighlightStartOffset());
+				Assert.assertEquals(startPoint + line.indexOf(displayedPath) + displayedPath.length(),
+						link.getHighlightEndOffset());
+			}
+		} finally {
+			storage.preserveAnsiColors = previousPreserveAnsiColors;
+			Files.deleteIfExists(file);
+		}
+	}
+
+	public void testGitPullTerminalPaddingDoesNotLinkPathFragmentsOrHomonyms() throws Exception {
+		String path = "docs/tm-platform插件管理接口说明.md";
+		myFixture.addFileToProject("docs/tm-platform插件管理", "前半段\n");
+		myFixture.addFileToProject("other/tm-platform插件管理接口说明.md", "同名文件\n");
+		Path fragment = Path.of(getProject().getBasePath(), "接口说明.md");
+		Files.createDirectories(fragment.getParent());
+		Files.writeString(fragment, "后半段\n");
+		try {
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			assertApplyFilterHasSingleLink("docs/tm-platform插件管理");
+			assertApplyFilterHasSingleLink("other/tm-platform插件管理接口说明.md");
+			assertApplyFilterHasSingleLink("接口说明.md");
+			String displayedPath = path.replace("管理接口", "管理\0接口");
+			assertApplyFilterHasNoLinks(" create mode 100644 " + displayedPath);
+			assertApplyFilterHasNoLinks(" delete mode 100644 " + displayedPath);
+		} finally {
+			Files.deleteIfExists(fragment);
+		}
+	}
+
+	public void testDeletedLocalFileDoesNotLinkBeforeVfsRefresh() throws Exception {
+		String path = "app/tbds-manager-web/src/pages/tbds-registry/container/core-detail/"
+				+ "service-plugin/K8s查询接口.md";
+		Path root = Files.createTempDirectory("console-deleted-");
+		com.intellij.openapi.vfs.newvfs.impl.VfsRootAccess.allowRootAccess(getTestRootDisposable(), root.toString());
+		Path file = root.resolve(path);
+		Files.createDirectories(file.getParent());
+		Files.writeString(file, "# 查询接口\n");
+		for (String decoy : new String[]{"other/K8s查询接口.md", "other/" + path}) {
+			Path decoyFile = root.resolve(decoy);
+			Files.createDirectories(decoyFile.getParent());
+			Files.writeString(decoyFile, "# 同名干扰\n");
+		}
+		VirtualFile contentRoot = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root);
+		VirtualFile cachedFile = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(file);
+		Assert.assertNotNull(contentRoot);
+		Assert.assertNotNull(cachedFile);
+		try {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), contentRoot));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			Assert.assertEquals(List.of(cachedFile), filter.resolveCachedFilesForPath(path));
+			assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink(" delete mode 100644 " + path)), path);
+			assertApplyFilterHasSingleLink("other/K8s查询接口.md");
+			assertApplyFilterHasSingleLink("other/" + path);
+
+			ReadAction.run(() -> {
+				Files.delete(file);
+				Assert.assertFalse("磁盘上的文件必须已删除", Files.exists(file));
+				Assert.assertTrue("VFS 快照仍有效才是本用例要覆盖的窗口", cachedFile.isValid());
+				for (String displayedPath : new String[]{path,
+						path.replace("查询接口", "查\uE000询\uE000接\uE000口\uE000"),
+						path.replace("查询接口", "查\uE000询\uE000\0接\uE000口\uE000")}) {
+					assertApplyFilterHasNoLinks(" delete mode 100644 " + displayedPath);
+					assertApplyFilterHasNoLinks(" create mode 100644 " + displayedPath);
+					assertApplyFilterHasNoLinks("Error in " + displayedPath);
+				}
+				assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink(
+						" .../service-plugin/K8s查询接口.md | 20 -")), "other/" + path);
+				Files.writeString(file, "# 重新创建\n");
+				assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink(" create mode 100644 " + path)), path);
+			});
+		} finally {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), contentRoot));
+			deletePathTreeQuietly(root);
+		}
+	}
+
+	public void testDeletedLocalRenameTargetFallsBackBeforeVfsRefresh() throws Exception {
+		Path root = Files.createTempDirectory("console-rename-");
+		com.intellij.openapi.vfs.newvfs.impl.VfsRootAccess.allowRootAccess(getTestRootDisposable(), root.toString());
+		Path oldFile = root.resolve("docs/old.md");
+		Path newFile = root.resolve("docs/new.md");
+		Files.createDirectories(oldFile.getParent());
+		Files.writeString(oldFile, "old\n");
+		Files.writeString(newFile, "new\n");
+		VirtualFile contentRoot = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root);
+		VirtualFile cachedNew = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(newFile);
+		Assert.assertNotNull(contentRoot);
+		Assert.assertNotNull(cachedNew);
+		try {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), contentRoot));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			String line = " rename docs/{old.md => new.md} (100%)";
+			assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink(line)), "docs/new.md");
+			ReadAction.run(() -> {
+				Files.delete(newFile);
+				Assert.assertTrue("新侧 VirtualFile 仍有效", cachedNew.isValid());
+				Filter.ResultItem link = assertApplyFilterHasSingleLink(line);
+				assertSingleHyperlinkEndsWith(List.of(link), "docs/old.md");
+				assertHyperlinkRange(link, line, "docs/{old.md => new.md}");
+			});
+		} finally {
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), contentRoot));
+			deletePathTreeQuietly(root);
+		}
+	}
+
+	public void testDeletedLocalFileDoesNotLinkFromDiskMemo() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		String basePath = getProject().getBasePath();
+		Files.createDirectories(Path.of(basePath));
+		Path root = Files.createTempDirectory(Path.of(basePath), "console-memo-");
+		Path file = root.resolve("docs/memo/deleted.md");
+		Files.createDirectories(file.getParent());
+		Files.writeString(file, "# deleted\n");
+		String line = " .../docs/memo/deleted.md | 20 -";
+		try {
+			Assert.assertTrue("必须走磁盘回退而非文件缓存", filter.resolveCachedFilesForPath(".../docs/memo/deleted.md").isEmpty());
+			assertApplyFilterHasSingleLink(line);
+			AwesomeLinkFilter.DiskSearchResult memo = filter.peekTruncatedPathDiskCache("docs/memo/deleted.md");
+			Assert.assertNotNull(memo);
+			Assert.assertTrue(memo.canLink());
+			ReadAction.run(() -> {
+				Files.delete(file);
+				Assert.assertSame("删除尚未触发 memo 失效", memo, filter.peekTruncatedPathDiskCache("docs/memo/deleted.md"));
+				assertApplyFilterHasNoLinks(line);
+			});
+		} finally {
+			deletePathTreeQuietly(root);
+		}
+	}
+
+	public void testDeletedLocalClassCandidatesDoNotHideLiveResult() throws Exception {
+		Path root = Files.createTempDirectory("console-class-");
+		com.intellij.openapi.vfs.newvfs.impl.VfsRootAccess.allowRootAccess(getTestRootDisposable(), root.toString());
+		List<Path> paths = new ArrayList<>();
+		for (String module : new String[]{"module-a", "module-b"}) {
+			Path file = root.resolve(module + "/com/example/LiveClass.java");
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, "package com.example; public class LiveClass {}\n");
+			paths.add(file);
+		}
+		VirtualFile contentRoot = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(root);
+		Assert.assertNotNull(contentRoot);
+		List<VirtualFile> sourceRoots = new ArrayList<>();
+		for (Path path : paths) {
+			sourceRoots.add(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(path.getParent().getParent().getParent()));
+		}
+		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
+		int previousLimit = storage.getResultLimit();
+		boolean previousUseLimit = storage.useResultLimit;
+		try {
+			WriteAction.runAndWait(() -> {
+				com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), contentRoot);
+				for (VirtualFile sourceRoot : sourceRoots) {
+					com.intellij.testFramework.PsiTestUtil.addSourceRoot(getModule(), sourceRoot);
+				}
+			});
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			List<VirtualFile> candidates = filter.resolveCachedFilesForPath("com.example.LiveClass");
+			Assert.assertEquals(2, candidates.size());
+			String line = "Error in com.example.LiveClass:42:3";
+			Filter.ResultItem multiple = assertApplyFilterHasSingleLink(line);
+			Assert.assertFalse("两个存活候选应提供选择", multiple.getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+			storage.useResultLimit = true;
+			storage.setResultLimit(1);
+			ReadAction.run(() -> {
+				Files.delete(Path.of(candidates.get(0).getPath()));
+				Assert.assertTrue("首个候选仍是有效的旧 VFS 快照", candidates.get(0).isValid());
+				Assert.assertEquals(List.of(candidates.get(1)), filter.resolveCachedFilesForPath("com.example.LiveClass"));
+				Filter.ResultItem link = assertApplyFilterHasSingleLink(line);
+				assertSingleHyperlinkEndsWith(List.of(link), candidates.get(1).getPath());
+				assertHyperlinkRange(link, line, "com.example.LiveClass:42:3");
+				assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink("com/example/LiveClass.java")), candidates.get(1).getPath());
+				assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink(".../com/example/LiveClass.java")), candidates.get(1).getPath());
+				Files.delete(Path.of(candidates.get(1).getPath()));
+				assertApplyFilterHasNoLinks(line);
+				assertApplyFilterHasNoLinks("com/example/LiveClass.java");
+			});
+		} finally {
+			storage.setResultLimit(previousLimit);
+			storage.useResultLimit = previousUseLimit;
+			WriteAction.runAndWait(() ->
+					com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), contentRoot));
+			deletePathTreeQuietly(root);
+		}
+	}
+
+	public void testDeletedLocalDiskMemoCandidatesKeepOnlyLiveTargets() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		Path base = Path.of(getProject().getBasePath());
+		Files.createDirectories(base);
+		Path root = Files.createTempDirectory(base, "console-memo-pair-");
+		Path first = root.resolve("a/docs/memo-pair/target.md");
+		Path second = root.resolve("b/docs/memo-pair/target.md");
+		for (Path file : List.of(first, second)) {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, "# target\n");
+		}
+		String line = " .../docs/memo-pair/target.md | 20 -";
+		try {
+			Assert.assertTrue(filter.resolveCachedFilesForPath(".../docs/memo-pair/target.md").isEmpty());
+			Filter.ResultItem pair = assertApplyFilterHasSingleLink(line);
+			Assert.assertTrue(pair.getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+			Assert.assertEquals(2, ((PathListHyperlinkInfo) pair.getHyperlinkInfo()).getAbsolutePaths().size());
+			AwesomeLinkFilter.DiskSearchResult memo = filter.peekTruncatedPathDiskCache("docs/memo-pair/target.md");
+			Assert.assertNotNull(memo);
+			ReadAction.run(() -> {
+				Files.delete(first);
+				Assert.assertSame(memo, filter.peekTruncatedPathDiskCache("docs/memo-pair/target.md"));
+				Filter.ResultItem remaining = assertApplyFilterHasSingleLink(line);
+				assertSingleHyperlinkEndsWith(List.of(remaining), "b/docs/memo-pair/target.md");
+				assertHyperlinkRange(remaining, line, ".../docs/memo-pair/target.md");
+				Files.delete(second);
+				assertApplyFilterHasNoLinks(line);
+				Files.writeString(first, "# recreated\n");
+				assertSingleHyperlinkEndsWith(List.of(assertApplyFilterHasSingleLink(line)), "a/docs/memo-pair/target.md");
+			});
+		} finally {
+			deletePathTreeQuietly(root);
+		}
 	}
 
 	/**
