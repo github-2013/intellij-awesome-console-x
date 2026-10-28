@@ -2221,6 +2221,118 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 外部新增文件尚未进入 VFS 时，旧的空结果不能永久遮蔽 git 截断路径。
+	 */
+	public void testGitPullNewFileRecoversFromNegativeDiskMemo() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		String suffix = "src/pages/tbds-virtual/container/detail/summary/RequestQPSTrend.tsx";
+		String relative = "app/tbds-manager-web/" + suffix;
+		String stat = " .../" + suffix + " | 272 ++++";
+		Path added = Path.of(getProject().getBasePath(), relative);
+		try {
+			Files.createDirectories(added.getParent());
+			Assert.assertTrue(filter.extractFileLinksFromLine(stat, 0).isEmpty());
+			AwesomeLinkFilter.DiskSearchResult missing = filter.peekTruncatedPathDiskCache(suffix);
+			Assert.assertNotNull("首次查找应保留空结果以防逐行扫盘", missing);
+			Assert.assertEquals(AwesomeLinkFilter.DiskSearchStatus.EXHAUSTED, missing.status());
+			Files.writeString(added, "export const RequestQPSTrend = () => null;\n");
+			Assert.assertTrue("新文件应尚未进入 fileCache", filter.resolveCachedFilesForPath(".../" + suffix).isEmpty());
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(
+					" create mode 100644 " + relative, 0), relative);
+			Thread.sleep(1100);
+			Assert.assertTrue("重试前仍须走磁盘路径", filter.resolveCachedFilesForPath(".../" + suffix).isEmpty());
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(stat, 0), relative);
+		} finally {
+			deleteDiskFixtureFile(added);
+		}
+	}
+
+	/** 退避期内不重复扫盘；失败到期仍受预算约束，预算恢复后可找到新文件。 */
+	public void testFailedDiskMemoRetriesWithinOriginalBudget() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		String suffix = "pages/retry-budget/hit.ts";
+		String stat = " .../" + suffix + " | 2";
+		Path added = Path.of(getProject().getBasePath(), "retry-budget-module", suffix);
+		try {
+			Files.createDirectories(added.getParent());
+			Files.writeString(added, "export {};\n");
+			filter.forceNullDirectoryListing = dir -> dir.getPath().equals(getProject().getBasePath());
+			Assert.assertTrue(filter.extractFileLinksFromLine(stat, 0).isEmpty());
+			AwesomeLinkFilter.DiskSearchResult failed = filter.peekTruncatedPathDiskCache(suffix);
+			Assert.assertNotNull(failed);
+			Assert.assertEquals(AwesomeLinkFilter.DiskSearchStatus.WALK_FAILED, failed.status());
+			AtomicInteger searches = new AtomicInteger();
+			filter.beforeTruncatedPathDiskCachePut = searches::incrementAndGet;
+			filter.forceNullDirectoryListing = null;
+			for (int i = 0; i < 3; i++) {
+				Assert.assertTrue("退避期仍应返回失败结果", filter.extractFileLinksFromLine(stat, 0).isEmpty());
+			}
+			Assert.assertEquals("退避期内不能每行重新搜索", 0, searches.get());
+			expireDiskMemoForTest(suffix);
+			AwesomeLinkFilter.DiskSearchResult expired = filter.peekTruncatedPathDiskCache(suffix);
+			filter.forceRejectDiskSearchBudget = true;
+			Assert.assertTrue(filter.extractFileLinksFromLine(stat, 0).isEmpty());
+			Assert.assertSame("预算拒绝不能写回失败并续期", expired, filter.peekTruncatedPathDiskCache(suffix));
+			Assert.assertEquals(0, searches.get());
+			filter.forceRejectDiskSearchBudget = false;
+			Assert.assertTrue("恢复前仍须走磁盘路径", filter.resolveCachedFilesForPath(".../" + suffix).isEmpty());
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(stat, 0), "retry-budget-module/" + suffix);
+			Assert.assertEquals(1, searches.get());
+		} finally {
+			filter.forceRejectDiskSearchBudget = false;
+			filter.forceNullDirectoryListing = null;
+			filter.beforeTruncatedPathDiskCachePut = null;
+			deleteDiskFixtureFile(added);
+		}
+	}
+
+	/** 到期重试不能使用漏掉新目录的旧枚举，把两个同后缀文件误判成唯一命中。 */
+	public void testExpiredDiskMemoRefreshesDirectoriesBeforeLinking() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		String suffix = "pages/retry-pair/hit.ts";
+		String stat = " .../" + suffix + " | 2";
+		Path seed = Path.of(getProject().getBasePath(), "retry-old/pages/seed.ts");
+		Path first = seed.getParent().resolve("retry-pair/hit.ts");
+		Path second = Path.of(getProject().getBasePath(), "retry-new", suffix);
+		try {
+			Files.createDirectories(seed.getParent());
+			Files.writeString(seed, "export {};\n");
+			Assert.assertTrue(filter.extractFileLinksFromLine(stat, 0).isEmpty());
+			Assert.assertTrue(filter.peekTruncatedPathDiskCache(suffix).complete());
+			Files.createDirectories(first.getParent());
+			Files.createDirectories(second.getParent());
+			Files.writeString(first, "export const a = 1;\n");
+			Files.writeString(second, "export const b = 1;\n");
+			expireDiskMemoForTest(suffix);
+			Assert.assertTrue("两个新文件必须尚未进入缓存", filter.resolveCachedFilesForPath(".../" + suffix).isEmpty());
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(stat, 0);
+			Assert.assertEquals(1, links.size());
+			Assert.assertTrue("双命中必须提供选择列表", links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+			Assert.assertEquals(Set.of(first.toString(), second.toString()),
+					Set.copyOf(((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths()));
+		} finally {
+			deleteDiskFixtureFile(first);
+			deleteDiskFixtureFile(seed);
+			deleteDiskFixtureFile(second);
+		}
+	}
+
+	/** 清理磁盘夹具的空目录，避免共享项目根下的 app 等名称污染后续测试。 */
+	private void deleteDiskFixtureFile(Path file) {
+		Path base = Path.of(getProject().getBasePath());
+		deleteCreatedPathTree(file, Stream.iterate(file.getParent(), dir -> !dir.equals(base), Path::getParent)
+				.toArray(Path[]::new));
+	}
+
+	/** 用已观测结果模拟时间经过，不在预算及并发回归中依赖真实等待。 */
+	private void expireDiskMemoForTest(String suffix) {
+		AwesomeLinkFilter.DiskSearchResult memo = filter.peekTruncatedPathDiskCache(suffix);
+		filter.putTruncatedPathDiskCacheForTest(suffix, new AwesomeLinkFilter.DiskSearchResult(
+				memo.paths(), memo.status(), System.nanoTime()
+				- TimeUnit.MILLISECONDS.toNanos(AwesomeLinkFilter.DISK_SEARCH_RETRY_INTERVAL_MS + 1)));
+	}
+
+	/**
 	 * 磁盘回退找到多个相同后缀时，不得静默取第一个做成单文件链接。
 	 * 文件进 VFS/cache 后走缓存 chooser 也必须不是单链。
 	 */

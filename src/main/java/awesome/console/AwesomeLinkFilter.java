@@ -303,7 +303,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/**
 	 * git --stat 截断路径的磁盘搜索 memo。
 	 * 闭合结果（含「证明没有」的空列表）与不完整退避（超时/触顶/walk 失败）都放入，
-	 * 且必须经世代门闩写入。不可搜索的 suffix 不写入。
+	 * 空结果与不完整结果只短暂复用，避免外部新增文件被旧观测永久遮蔽。
+	 * 必须经世代门闩写入；不可搜索的 suffix 不写入。
 	 */
 	private final Map<String, DiskSearchResult> truncatedPathDiskCache;
 
@@ -423,6 +424,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/** 突发预算的滚动窗口时长（毫秒）：窗口过期后预算重置，允许下一批搜索重新计时 */
 	private static final long DISK_SEARCH_BURST_WINDOW_MS = 1000;
+
+	/** 空结果与不完整结果的退避时间；到期后仍须获取原磁盘搜索预算。 */
+	static final long DISK_SEARCH_RETRY_INTERVAL_MS = 1000;
 
 	/**
 	 * 磁盘 memo 与 firstDir 位置表共用的容量上限。
@@ -1462,9 +1466,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/**
 	 * 磁盘搜索的一次结果。{@code complete()} 仅表示闭合证明，不等于「看见了文件」。
 	 */
-	record DiskSearchResult(List<String> paths, DiskSearchStatus status) {
+	record DiskSearchResult(List<String> paths, DiskSearchStatus status, long searchedAtNanos) {
 		static DiskSearchResult of(@NotNull List<String> paths, @NotNull DiskSearchStatus status) {
-			return new DiskSearchResult(List.copyOf(paths), status);
+			return new DiskSearchResult(List.copyOf(paths), status, System.nanoTime());
 		}
 
 		boolean complete() {
@@ -1496,7 +1500,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return DiskSearchResult.of(Collections.emptyList(), DiskSearchStatus.UNSCANNABLE);
 		}
 		DiskSearchResult cached = truncatedPathDiskCache.get(suffix);
-		if (cached != null) {
+		if (cached != null && (cached.canLink() || System.nanoTime() - cached.searchedAtNanos()
+				< TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_RETRY_INTERVAL_MS))) {
 			return cached;
 		}
 		// 不要用 computeIfAbsent：搜索含磁盘 IO，持桶锁会堵住同一 suffix 的并发查找（issue #16）
@@ -1508,7 +1513,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		long searchStartNanos = System.nanoTime();
 		DiskSearchResult result;
 		try {
-			result = searchProjectDiskForSuffix(suffix);
+			// 到期重试必须重新枚举目录；旧 firstDir 可能漏掉外部新建的同名目录。
+			// 保留过期条目直到新结果覆盖，预算拒绝不续期，也不删除并发线程的新结果。
+			result = searchProjectDiskForSuffix(suffix, cached != null);
 		} finally {
 			// 必须在 finally 冲正：ProgressManager.checkCanceled() 抛出取消异常时
 			// 若不归还预扣名额，突发预算会被永久占满，此后所有磁盘兜底一律降级
@@ -1673,6 +1680,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	@NotNull
 	DiskSearchResult searchProjectDiskForSuffix(@NotNull String suffix) {
+		return searchProjectDiskForSuffix(suffix, false);
+	}
+
+	@NotNull
+	private DiskSearchResult searchProjectDiskForSuffix(@NotNull String suffix, boolean refreshDirectories) {
 		List<File> searchRoots = collectDiskSearchRoots();
 		if (searchRoots.isEmpty()) {
 			return DiskSearchResult.of(Collections.emptyList(), DiskSearchStatus.UNSCANNABLE);
@@ -1693,7 +1705,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 		String remaining = suffix.substring(slash + 1);
 
-		List<String> knownDirs = firstDirLocationsCache.get(firstDir);
+		List<String> knownDirs = refreshDirectories ? null : firstDirLocationsCache.get(firstDir);
 		if (knownDirs != null) {
 			collectFileHitsUnderKnownDirectories(knownDirs, remaining, found, DISK_SEARCH_MAX_HITS);
 			List<String> hits = trimDiskHits(found);
