@@ -15,6 +15,12 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+			<b>0.1337.43</b><br/>
+			<ul>
+				<li>Fixed double-quoted path detection with spaces, UTF-8 octal escapes, and long lines, preventing incorrect links.</li>
+				<li>Relative paths now find unindexed files under known roots and offer a chooser for multiple matches.</li>
+				<li>Disk searches now retry after a short backoff, so stale results no longer hide newly created files or folders.</li>
+			</ul>
 	    	<b>0.1337.42</b><br/>
         	<ul>
         		<li>A path in the console now opens only the file it names. A bare name such as MyClass.java no longer jumps to a same-named file in another folder.</li>

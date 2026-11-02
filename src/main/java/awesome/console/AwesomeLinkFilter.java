@@ -37,6 +37,7 @@ import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.roots.ModuleRootManager;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
+import com.intellij.openapi.vfs.StandardFileSystems;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.VFileCopyEvent;
 import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent;
@@ -53,6 +54,9 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Paths;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
@@ -66,6 +70,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Matcher;
@@ -192,17 +197,15 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
         "['(),.;\\[\\]]"
 	);
 
-	/** 包含空格的文件名正则表达式 */
-	// 定义公共静态final常量，匹配可能包含空格的文件名
-	// 确保不以空格开头或结尾，中间可以包含空格
-	public static final String REGEX_FILE_NAME_WITH_SPACE = String.format("(?! )(?:(?:%s)| )+(?<! )", REGEX_CHAR);
+	/** 引号内保留空白与转义；完整引用由 detectPaths 定界，不能降级匹配内部片段。 */
+	public static final String REGEX_FILE_NAME_WITH_SPACE = "[^\"\\r\\n]*+";
 
 	/** 包含空格的路径正则表达式（用引号包裹） */
 	// 定义公共静态final常量，匹配用双引号包裹的路径（用于处理包含空格的路径）
 	// 捕获组 path1 和 protocol1 用于提取路径和协议
 	public static final String REGEX_PATH_WITH_SPACE = String.format(
-        "\"(?<path1>(?<protocol1>%s)?+(%s)?+((%s|%s)++))\"",
-        REGEX_PROTOCOL, REGEX_DRIVE, REGEX_FILE_NAME_WITH_SPACE, REGEX_SEPARATOR
+        "\"(?<path1>(?<protocol1>%s)?+%s)\"",
+        REGEX_PROTOCOL, REGEX_FILE_NAME_WITH_SPACE
 	);
 
 	/** 路径正则表达式 */
@@ -361,6 +364,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 与 {@link #excludedRoots} 同一次重建刷新，供删除时判断「当初会不会被扫描」。
 	 */
 	private volatile List<String> contentRoots = Collections.emptyList();
+
+	/** 精确路径磁盘检查只使用本机 VFS 根，不能由目录是否存在推断文件系统来源。 */
+	private volatile List<String> localExactRoots = Collections.emptyList();
 
 	/** 文件路径匹配器（线程本地） */
 	// 声明私有final线程本地变量，为每个线程创建独立的文件路径匹配器
@@ -623,6 +629,12 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				logger.error("Error while splitting line (length=" + line.length() + "): " + truncateLineForLog(line), e);
 				return null;
 			}
+			// 文件引用必须按完整保留文本定界，不能在分块处丢掉引号上下文。
+			if (config.searchFiles) {
+				String retained = config.LIMIT_LINE_LENGTH && !config.SPLIT_ON_LIMIT
+						? line.substring(0, Math.min(line.length(), config.LINE_MAX_LENGTH)) : line;
+				results.addAll(extractFileLinksFromLine(retained, startPoint));
+			}
 			
 			// 初始化偏移量，用于跟踪当前处理的块在原始行中的位置
 			int offset = 0;
@@ -630,20 +642,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 遍历所有分割后的块
 			for (int i = 0; i < chunks.size(); i++) {
 				final String chunk = chunks.get(i);
-				
-				// 如果启用了文件搜索，提取文件路径并生成超链接
-				if (config.searchFiles) {
-					try {
-						results.addAll(extractFileLinksFromLine(chunk, startPoint + offset));
-					} catch (Exception e) {
-						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
-						logger.error(String.format(
-							"Error while processing file links in chunk %d/%d (offset=%d, chunkLength=%d): %s",
-							i + 1, chunks.size(), offset, chunk.length(), truncateLineForLog(chunk)
-						), e);
-						// 继续处理其他块，不中断整个过滤流程
-					}
-				}
 				
 				// 如果启用了URL搜索，提取URL并生成超链接
 				if (config.searchUrls) {
@@ -1019,9 +1017,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 					continue;
 				}
 				int sizeBefore = results.size();
-				processCachedFiles(
-						candidate, startPoint, results, shouldRequireExactRelative(candidate.path)
-				);
+				processCachedFiles(candidate, startPoint, results);
 				if (results.size() > sizeBefore) {
 					break;
 				}
@@ -1095,7 +1091,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		String filePath = file.getAbsolutePath();
 		final boolean exists = FileUtils.quickExists(filePath);
 		// 项目内的绝对路径以字面为准：转成相对路径后会对齐到 content root / source root 下的另一个文件
-		final boolean absoluteInProject = !isExternal && isAbsolutePath(matchPath);
+		final boolean absoluteInProject = isAbsolutePath(matchPath) && (!isExternal || match.literalPath);
 		
 		if (exists) {
 			// 只看展开后的 match.path。拼到项目根后是文件即可（Dockerfile 口径）；
@@ -1113,7 +1109,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			return true;
 		}
 		
-		return absoluteInProject;
+		String relative = normalizePathSeparators(matchPath);
+		while (relative.startsWith("./")) relative = relative.substring(2);
+		return absoluteInProject || relative.startsWith("../");
 	}
 
 	/**
@@ -1126,50 +1124,85 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	private void processCachedFiles(
 			final FileLinkMatch match,
 			final int startPoint,
-			final List<ResultItem> results,
-			boolean requireExactRelative
+			final List<ResultItem> results
 	) {
 		// 解析并标准化匹配路径
 		String matchPath = resolveAndNormalizeMatchPath(match.path);
 		// git --stat 的 `.../` 不是真实目录，必须先剥掉再做 endsWith，
 		// 否则会退化成按文件名匹配，index.tsx 这类同名文件会弹出 Choose Target File
-		String suffixPath = suffixPathForCacheMatch(match.path, matchPath);
+		String suffixPath = match.literalPath ? matchPath : suffixPathForCacheMatch(match.path, matchPath);
 
 		// 提取文件名
-		String fileName = extractFileName(suffixPath);
+		String fileName = match.literalPath ? PathUtil.getFileName(suffixPath) : extractFileName(suffixPath);
 
 		// 带目录后缀时先不按 resultLimit 裁剪：正确文件可能排在第 100 个同名文件之后
 		boolean hasDirs = hasDirectoryComponent(suffixPath);
-		CachedCandidates candidates = findCachedCandidates(fileName, !hasDirs);
-		if (candidates.isEmpty()) {
-			// git --stat 会把长路径截成 `.../remaining/file.ts`，字面路径在磁盘上不存在，
-			// 只能靠文件名缓存。git pull 刚写入的新文件此时往往还没进入 VFS/fileCache，
-			// 因此在缓存未命中时回退到磁盘按路径后缀查找。
-			if (!requireExactRelative) {
-				processTruncatedPathOnDisk(match, matchPath, startPoint, results);
-			}
-			return;
-		}
-
-		// 完全限定类名的候选已由包路径精确匹配得出，不能再拿点分名做路径后缀裁决，
-		// 否则 `awesome.console.IntegrationTest` 这类链接会被整体丢弃
+		CachedCandidates candidates = findCachedCandidates(fileName, !hasDirs, !match.literalPath && !hasDirs);
+		// 类名候选已经按包路径裁决，不能再做文件路径比较。
 		if (candidates.resolvedByClassName()) {
-			addHyperlinksForFiles(match, startPoint, results, candidates.files());
+			if (!candidates.isEmpty()) addHyperlinksForFiles(match, startPoint, results, candidates.files());
 			return;
 		}
-
-		// 是否精确由 shouldRequireExactRelative 决定：带目录对齐已知根，截断才走后缀
-		final List<VirtualFile> bestMatchingFiles = findBestMatchingFiles(
-				suffixPath, candidates.files(), requireExactRelative
-		);
+		if (match.literalPath || shouldRequireExactRelative(match.path)) {
+			List<VirtualFile> exact = candidates.isEmpty() ? Collections.emptyList()
+					: findBestMatchingFiles(suffixPath, candidates.files(), true);
+			processExactRelativeFiles(match, suffixPath, exact, startPoint, results);
+			return;
+		}
+		// 剩余只有截断路径：缓存无法确定目标时统一走有预算的磁盘回退。
+		List<VirtualFile> bestMatchingFiles = candidates.isEmpty() ? Collections.emptyList()
+				: findBestMatchingFiles(suffixPath, candidates.files(), false);
 		if (bestMatchingFiles == null || bestMatchingFiles.isEmpty()) {
-			if (!requireExactRelative) {
-				processTruncatedPathOnDisk(match, matchPath, startPoint, results);
+			processTruncatedPathOnDisk(match, matchPath, startPoint, results);
+		} else {
+			addHyperlinksForFiles(match, startPoint, results, bestMatchingFiles);
+		}
+	}
+
+	/** 已知根上的有限 stat 与精确缓存候选合并，VFS 滞后不能漏掉新文件或隐藏歧义。 */
+	private void processExactRelativeFiles(FileLinkMatch match, String relativePath, @Nullable List<VirtualFile> cached,
+			int startPoint, List<ResultItem> results) {
+		Set<String> paths = new LinkedHashSet<>();
+		List<VirtualFile> virtualFiles = new ArrayList<>();
+		if (cached != null) for (VirtualFile file : cached) {
+			// 本机候选一律由当前磁盘重验；内存 VFS 候选保留自身身份。
+			if (!isDiskBackedFile(file) && !isExcludedByProjectIndex(
+					new File(normalizePathSeparators(file.getPath())))) virtualFiles.add(file);
+		}
+		if (!isAbsolutePath(relativePath) && hasDirectoryComponent(relativePath)
+				&& !normalizePathSeparators(match.path).startsWith("../")) {
+			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_TIMEOUT_MS);
+			for (String root : localExactRoots) {
+				ProgressManager.checkCanceled();
+				if (System.nanoTime() > deadline) return; // 未核完全部已知根时不能把部分命中当唯一。
+				File file = new File(root, relativePath).toPath().normalize().toFile();
+				String path = normalizePathSeparators(file.getAbsolutePath());
+				if (path.startsWith(rootPrefix(root)) && !isExcludedByProjectIndex(file)
+						&& !shouldIgnorePath(path) && file.isFile() && staysInsideRoot(file, root)) paths.add(path);
 			}
+		}
+		if (paths.isEmpty()) {
+			if (!virtualFiles.isEmpty()) addHyperlinksForFiles(match, startPoint, results, virtualFiles);
 			return;
 		}
+		List<String> targets = new ArrayList<>(paths);
+		HyperlinkInfo link = paths.size() == 1 && virtualFiles.isEmpty()
+				? HyperlinkUtils.buildFileHyperlinkInfo(project, targets.get(0), match.linkedRow, match.linkedCol)
+				: new PathListHyperlinkInfo(targets, virtualFiles, match.linkedRow, match.linkedCol);
+		addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, link);
+	}
 
-		addHyperlinksForFiles(match, startPoint, results, bestMatchingFiles);
+	/** 根相对的磁盘候选不能通过目录 symlink 指向根外。 */
+	private boolean staysInsideRoot(File file, String root) {
+		try {
+			String canonicalRoot = normalizePathSeparators(new File(root).getCanonicalPath());
+			File canonicalFile = file.getCanonicalFile();
+			return normalizePathSeparators(canonicalFile.getPath()).startsWith(rootPrefix(canonicalRoot))
+					&& !isExcludedByProjectIndex(canonicalFile);
+		} catch (IOException e) {
+			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+			return false;
+		}
 	}
 
 	/**
@@ -1204,6 +1237,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	@NotNull
 	List<FileLinkMatch> gitRenameResolutionCandidates(@NotNull FileLinkMatch match) {
+		if (match.literalPath) return Collections.singletonList(match);
 		List<String> paths = gitRenameCandidatePaths(match.path);
 		if (paths.size() == 1 && paths.get(0).equals(match.path)) {
 			return Collections.singletonList(match);
@@ -1338,7 +1372,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		String suffixPath = suffixPathForCacheMatch(path, resolveAndNormalizeMatchPath(path));
 		String fileName = extractFileName(suffixPath);
 		CachedCandidates candidates = findCachedCandidates(
-				fileName, !hasDirectoryComponent(suffixPath)
+				fileName, !hasDirectoryComponent(suffixPath), true
 		);
 		if (candidates.isEmpty()) {
 			return Collections.emptyList();
@@ -2083,16 +2117,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	private boolean isExcludedByProjectIndex(@NotNull File dir) {
 		List<String> roots = excludedRoots;
-		if (roots.isEmpty()) {
-			return false;
-		}
-		String path = normalizePathSeparators(dir.getAbsolutePath());
-		for (String root : roots) {
-			if (path.equals(root) || path.startsWith(root + "/")) {
-				return true;
-			}
-		}
-		return false;
+		return !roots.isEmpty() && isPathUnderRoots(normalizePathSeparators(dir.getAbsolutePath()), roots);
 	}
 
 	/**
@@ -2136,13 +2161,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * @return 候选集（{@code files} 可能为 null）
 	 */
 	@NotNull
-	private CachedCandidates findCachedCandidates(final String fileName, final boolean applyResultLimit) {
+	private CachedCandidates findCachedCandidates(final String fileName, final boolean applyResultLimit, boolean allowClassName) {
 		List<VirtualFile> matchingFiles;
 		boolean resolvedByClassName = false;
 		cacheReadLock.lock();
 		try {
 			matchingFiles = fileCache.get(fileName);
-			if (null == matchingFiles && config.searchClasses) {
+			if (null == matchingFiles && allowClassName && config.searchClasses) {
 				matchingFiles = findFilesByClassName(fileName);
 				resolvedByClassName = !matchingFiles.isEmpty();
 			}
@@ -2665,6 +2690,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		List<String> newSrcRoots = getSourceRoots();
 		List<String> newExcludedRoots = getExcludedRoots();
 		List<String> newContentRoots = getContentRootPaths();
+		List<String> newLocalExactRoots = getLocalExactRoots();
 		Map<String, List<VirtualFile>> newFileCache = new HashMap<>();
 		Map<String, List<VirtualFile>> newFileBaseCache = new HashMap<>();
 
@@ -2710,6 +2736,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			srcRoots = newSrcRoots;
 			excludedRoots = newExcludedRoots;
 			contentRoots = newContentRoots;
+			localExactRoots = newLocalExactRoots;
 			fileCache.clear();
 			fileCache.putAll(newFileCache);
 			fileBaseCache.clear();
@@ -3317,6 +3344,22 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		return Arrays.stream(contentSourceRoots).map(VirtualFile::getPath).collect(Collectors.toList());
 	}
 
+	/** 与文件缓存同轮收集根来源，磁盘移走根后仍按本机根处理，不能留下旧候选。 */
+	private List<String> getLocalExactRoots() {
+		List<VirtualFile> roots = new ArrayList<>(Arrays.asList(projectRootManager.getContentRoots()));
+		roots.addAll(Arrays.asList(projectRootManager.getContentSourceRoots()));
+		Set<String> paths = new LinkedHashSet<>();
+		for (VirtualFile root : roots) {
+			if (isDiskBackedFile(root)) paths.add(stripTrailingSlashes(normalizePathSeparators(root.getPath())));
+		}
+		return List.copyOf(paths);
+	}
+
+	/** TempFileSystem 也继承 LocalFileSystem；只有 file 协议具有本机磁盘路径身份。 */
+	private static boolean isDiskBackedFile(VirtualFile file) {
+		return StandardFileSystems.FILE_PROTOCOL.equals(file.getFileSystem().getProtocol());
+	}
+
 	/**
 	 * 收集用户在 IDE 中显式标记为 excluded 的目录路径。
 	 * <p>
@@ -3474,17 +3517,113 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		prepareFilter();
 		line = preprocessLine(line);
 
-		final Matcher fileMatcher = this.fileMatcher.get();
-		fileMatcher.reset(line);
-		
-		while (fileMatcher.find()) {
-			FileLinkMatch linkMatch = extractFileLinkMatch(fileMatcher, line);
-			if (linkMatch != null) {
-				results.add(linkMatch);
+		final Matcher fileMatcher = this.fileMatcher.get().reset(line);
+		int cursor = 0;
+		while (cursor < line.length()) {
+			int quote = line.indexOf('"', cursor);
+			int plainEnd = quote < 0 ? line.length() : quote;
+			// 文件候选连续匹配；硬切块会把缺失路径的尾部变成另一根文件。
+			int regionStart = cursor;
+			for (int tokenStart = cursor; tokenStart < plainEnd;) {
+				int tokenEnd = tokenStart;
+				while (tokenEnd < plainEnd && !Character.isWhitespace(line.charAt(tokenEnd))) tokenEnd++;
+				// 普通 token 超过分块上限时整段跳过，既不触发递归正则，也不链尾部碎片。
+				if (tokenEnd - tokenStart > Math.max(1, config.LINE_MAX_LENGTH) && config.LIMIT_LINE_LENGTH) {
+					collectPathMatches(fileMatcher, line, regionStart, tokenStart, results);
+					regionStart = tokenEnd;
+				}
+				tokenStart = tokenEnd < plainEnd ? tokenEnd + 1 : plainEnd;
+			}
+			collectPathMatches(fileMatcher, line, regionStart, plainEnd, results);
+			if (quote < 0) break;
+			fileMatcher.region(quote, line.length());
+			boolean matched = fileMatcher.lookingAt();
+			// 复用协议分组定位实际路径，协议前缀不能遮住 Windows 盘符或 UNC。
+			int pathStart = matched && fileMatcher.end("protocol1") >= 0
+					? fileMatcher.end("protocol1") : quote + 1;
+			int close = findClosingQuote(line, pathStart);
+			if (close < 0) break; // 不完整引用禁止退回内部片段。
+			cursor = close + 1;
+			if (matched && fileMatcher.end("path1") == close) {
+				cursor = fileMatcher.end();
+				FileLinkMatch match = extractFileLinkMatch(fileMatcher, line);
+				if (match != null) results.add(match);
 			}
 		}
 
 		return results;
+	}
+
+	private void collectPathMatches(Matcher matcher, String line, int start, int end, List<FileLinkMatch> results) {
+		if (start >= end) return;
+		matcher.region(start, end);
+		while (matcher.find()) {
+			FileLinkMatch match = extractFileLinkMatch(matcher, line);
+			if (match != null) results.add(match);
+		}
+	}
+
+	/** 线性查找结束引号，转义引号不能提前终止完整文件引用。 */
+	private int findClosingQuote(String line, int start) {
+		// 只有明确盘符或 UNC 才能把引号前的反斜杠认作尾部分隔符；相对引用保持转义上下文。
+		boolean windowsPath = isExplicitWindowsQuotedPath(line, start);
+		for (int i = start; i < line.length(); i++) {
+			char c = line.charAt(i);
+			if (c == '\r' || c == '\n') return -1;
+			if (!windowsPath && c == '\\' && i + 1 < line.length() && (line.charAt(i + 1) == '"' || line.charAt(i + 1) == '\\')) i++;
+			else if (c == '"') return i;
+		}
+		return -1;
+	}
+
+	private static boolean isExplicitWindowsQuotedPath(String text, int start) {
+		if (start < text.length() && text.charAt(start) == '/') start++;
+		if (text.startsWith("\\\\", start)) return true;
+		return start + 2 < text.length() && Character.isLetter(text.charAt(start))
+				&& text.charAt(start + 1) == ':' && isPathSeparatorChar(text.charAt(start + 2));
+	}
+
+	private static boolean isOctalByteEscape(String raw, int start) {
+		return start + 3 < raw.length() && raw.charAt(start) == '\\'
+				&& raw.charAt(start + 1) >= '0' && raw.charAt(start + 1) <= '3'
+				&& raw.charAt(start + 2) >= '0' && raw.charAt(start + 2) <= '7'
+				&& raw.charAt(start + 3) >= '0' && raw.charAt(start + 3) <= '7';
+	}
+
+	/** 引用中的八进制表示 UTF-8 字节；解码失败不得改成另一条路径。 */
+	@Nullable
+	static String decodeQuotedPath(String raw, boolean windowsHost) {
+		boolean explicitWindowsPath = isExplicitWindowsQuotedPath(raw, 0);
+		boolean windowsPath = explicitWindowsPath || windowsHost && raw.indexOf('/') < 0;
+		String path = raw;
+		// 无盘符、无正斜杠时，单个八进制字节也可能是 Windows 数字目录，不能猜测一侧。
+		if (windowsPath && !explicitWindowsPath) {
+			for (int i = 0; i < raw.length(); i++) {
+				if (isOctalByteEscape(raw, i)) return null;
+			}
+		} else if (!windowsPath && raw.indexOf('\\') >= 0) {
+			ByteArrayOutputStream bytes = new ByteArrayOutputStream(raw.length());
+			for (int i = 0; i < raw.length();) {
+				if (raw.charAt(i) != '\\') {
+					int start = i++;
+					while (i < raw.length() && raw.charAt(i) != '\\') i++;
+					bytes.writeBytes(raw.substring(start, i).getBytes(StandardCharsets.UTF_8));
+					continue;
+				}
+				if (!isOctalByteEscape(raw, i)) return null;
+				bytes.write((raw.charAt(i + 1) - '0') * 64 + (raw.charAt(i + 2) - '0') * 8 + raw.charAt(i + 3) - '0');
+				i += 4;
+			}
+			try {
+				path = StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(bytes.toByteArray())).toString();
+			} catch (CharacterCodingException e) {
+				ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
+				return null;
+			}
+		}
+		// Unix 引用中的未知转义或字面反斜杠不能被标准化成另一个目录。
+		if (!windowsPath && path.indexOf('\\') >= 0) return null;
+		return path.isEmpty() || path.indexOf('"') >= 0 || path.chars().anyMatch(c -> c < 32 || c == 127) ? null : path;
 	}
 
 	/**
@@ -3512,6 +3651,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (path == null) {
 			return null; // 非文件协议，忽略
 		}
+		if (fileMatcher.group("path1") != null) {
+			path = decodeQuotedPath(removeDoubleWidthCharMarkers(path), SystemUtils.isWindows());
+			if (path == null) return null;
+		}
 
 		// 处理特殊路径
 		path = normalizePathFormat(path);
@@ -3524,7 +3667,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		FileLinkMatch linkMatch = createFileLinkMatch(fileMatcher, match, path, row, col);
 
 		// 检查是否应该忽略
-		if (shouldIgnore(linkMatch.match) || shouldIgnoreMatch(line, linkMatch)) {
+		if (shouldIgnore(linkMatch.match) || shouldIgnore(normalizePathSeparators(path)) || shouldIgnoreMatch(line, linkMatch)) {
 			return null;
 		}
 
@@ -3561,7 +3704,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				groupRange[0] + offsets[0], // 链接起始位置加上前偏移量
 				groupRange[1] - offsets[1], // 链接结束位置减去后偏移量
 				row, // 行号
-				col // 列号
+				col, // 列号
+				fileMatcher.group("path1") != null
 		);
 	}
 

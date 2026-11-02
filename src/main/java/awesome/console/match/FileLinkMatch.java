@@ -10,6 +10,8 @@ public class FileLinkMatch {
 	
 	/** 纯文件路径（不包含行号、列号等附加信息） */
 	public final String path;
+	/** 双引号明确给出文件身份，禁止类名、截断后缀或重命名展开回退。 */
+	public final boolean literalPath;
 	
 	/** 链接指向的行号（从1开始，0表示未指定） */
 	public final int linkedRow;
@@ -34,11 +36,17 @@ public class FileLinkMatch {
 	 * @param col 链接指向的列号
 	 */
 	public FileLinkMatch(final String match, final String path, final int start, final int end, final int row, final int col) {
+		this(match, path, start, end, row, col, false);
+	}
+
+	public FileLinkMatch(final String match, final String path, final int start, final int end, final int row, final int col,
+			final boolean literalPath) {
 		this.match = match;
 		this.path = path;
 		this.start = start;
 		this.end = end;
 		this.linkedRow = row;
 		this.linkedCol = col;
+		this.literalPath = literalPath;
 	}
 }

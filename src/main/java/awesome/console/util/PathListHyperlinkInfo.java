@@ -7,7 +7,9 @@ import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.jetbrains.annotations.NotNull;
 
@@ -18,12 +20,19 @@ import org.jetbrains.annotations.NotNull;
 public class PathListHyperlinkInfo implements HyperlinkInfo {
 
 	private final List<String> absolutePaths;
+	private final List<VirtualFile> virtualFiles;
 	private final int row;
 	private final int col;
 	private final AtomicBoolean navigateInFlight = new AtomicBoolean();
 
 	public PathListHyperlinkInfo(@NotNull List<String> absolutePaths, int row, int col) {
+		this(absolutePaths, List.of(), row, col);
+	}
+
+	public PathListHyperlinkInfo(@NotNull List<String> absolutePaths, @NotNull List<VirtualFile> virtualFiles,
+			int row, int col) {
 		this.absolutePaths = List.copyOf(absolutePaths);
+		this.virtualFiles = List.copyOf(virtualFiles);
 		this.row = row;
 		this.col = col;
 	}
@@ -38,14 +47,18 @@ public class PathListHyperlinkInfo implements HyperlinkInfo {
 	 */
 	@NotNull
 	public List<VirtualFile> refreshAndCollectVirtualFiles() {
-		List<VirtualFile> files = new ArrayList<>();
+		Map<String, VirtualFile> files = new LinkedHashMap<>();
+		// 非磁盘 VFS 必须保留协议身份，不能用裸路径通过 LocalFileSystem 恢复。
+		for (VirtualFile file : virtualFiles) {
+			if (file.isValid()) files.put(file.getUrl(), file);
+		}
 		for (String path : absolutePaths) {
 			VirtualFile virtualFile = FileUtils.refreshAndFindLocalFile(path);
 			if (virtualFile != null && virtualFile.isValid()) {
-				files.add(virtualFile);
+				files.put(virtualFile.getUrl(), virtualFile);
 			}
 		}
-		return files;
+		return new ArrayList<>(files.values());
 	}
 
 	@Override
@@ -63,13 +76,12 @@ public class PathListHyperlinkInfo implements HyperlinkInfo {
 			} finally {
 				navigateInFlight.set(false);
 			}
-			List<VirtualFile> toShow = files;
 			ApplicationManager.getApplication().invokeLater(() -> {
 				if (project.isDisposed()) {
 					return;
 				}
-				if (toShow.size() >= 2) {
-					HyperlinkUtils.buildMultipleFilesHyperlinkInfo(project, toShow, row, col)
+				if (files.size() >= 2) {
+					HyperlinkUtils.buildMultipleFilesHyperlinkInfo(project, files, row, col)
 							.navigate(project);
 					return;
 				}

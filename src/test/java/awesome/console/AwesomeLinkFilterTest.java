@@ -9,6 +9,7 @@ import static awesome.console.IntegrationTest.getJarFileProtocols;
 import static awesome.console.IntegrationTest.parseTemplate;
 
 import awesome.console.config.AwesomeConsoleConfigListener;
+import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
 import awesome.console.util.PathListHyperlinkInfo;
@@ -24,6 +25,7 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.util.xmlb.XmlSerializerUtil;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.DirectoryNotEmptyException;
@@ -951,15 +953,15 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		assertPathDetection("Path: \"C:\\Program Files (x86)\\Windows NT\" ", "\"C:\\Program Files (x86)\\Windows NT\"");
 		assertPathDetection("Path: \"src/test/resources/中文 空格.txt\" ", "\"src/test/resources/中文 空格.txt\"");
 		assertFilePathDetection("path: \"{file:}src/test/resources/中文 空格.txt\" ", "\"{file:}src/test/resources/中文 空格.txt\"");
-		assertPathDetection("Path: \"  src/test/resources/中文 空格.txt  \" ", "空格.txt");
+		assertPathDetection("Path: \"  src/test/resources/中文 空格.txt  \" ", "\"  src/test/resources/中文 空格.txt  \"");
 		assertPathDetection("Path: \"src/test/resources/中文 空格.txt\":5:4 ", "\"src/test/resources/中文 空格.txt\":5:4", 5, 4);
 		// TODO maybe row:col is enclosed in quotes?
 		// assertPathDetection("Path: \"src/test/resources/中文 空格.txt:5:4\" ", "\"src/test/resources/中文 空格.txt:5:4\"", 5, 4);
 		assertPathDetection("Path: \"src/test/resources/subdir/file1.java\" ", "\"src/test/resources/subdir/file1.java\"");
-		assertPathDetection("Path: \"src/test/  resources/subdir/file1.java\" ", "src/test/", "resources/subdir/file1.java");
-		assertPathDetection("Path: \"src/test/resources/subdir/file1.java \" ", "src/test/resources/subdir/file1.java");
-		assertPathDetection("Path: \"src/test/resources/subdir/ file1.java\" ", "src/test/resources/subdir/", "file1.java");
-		assertPathDetection("Path: \"src/test/resources/subdir /file1.java\" ", "src/test/resources/subdir", "/file1.java");
+		assertPathDetection("Path: \"src/test/  resources/subdir/file1.java\" ", "\"src/test/  resources/subdir/file1.java\"");
+		assertPathDetection("Path: \"src/test/resources/subdir/file1.java \" ", "\"src/test/resources/subdir/file1.java \"");
+		assertPathDetection("Path: \"src/test/resources/subdir/ file1.java\" ", "\"src/test/resources/subdir/ file1.java\"");
+		assertPathDetection("Path: \"src/test/resources/subdir /file1.java\" ", "\"src/test/resources/subdir /file1.java\"");
 	}
 
 
@@ -967,16 +969,12 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	 * 测试未闭合引号的路径
 	 */
 	public void testPathWithUnclosedQuotes() {
-		assertPathDetection("Path: \"src/test/resources/中文 空格.txt", "src/test/resources/中文", "空格.txt");
+		Assert.assertTrue(filter.detectPaths("\"src/test/resources/中文 空格.txt").isEmpty());
 		assertPathDetection("Path: src/test/resources/中文 空格.txt\"", "src/test/resources/中文", "空格.txt");
-		assertPathDetection("Path: \"src/test/resources/中文 空格.txt'", "src/test/resources/中文", "空格.txt");
+		Assert.assertTrue(filter.detectPaths("\"src/test/resources/中文 空格.txt'").isEmpty());
 		assertPathDetection("Path: src/test/resources/中文 空格.txt]", "src/test/resources/中文", "空格.txt");
-		assertPathDetection(
-				"Path: \"src/test/resources/中文 空格.txt   \"src/test/resources/中文 空格.txt\"",
-				"src/test/resources/中文",
-				"空格.txt",
-				"\"src/test/resources/中文 空格.txt\""
-		);
+		assertPathDetection("Path: \"src/test/resources/中文 空格.txt\" \"src/test/resources/另一个文件.txt\"",
+				"\"src/test/resources/中文 空格.txt\"", "\"src/test/resources/另一个文件.txt\"");
 	}
 
 
@@ -1030,15 +1028,24 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				assertPathDetection(desc + line, isDoubleQuote ? line : file);
 			}
 
-			assertPathDetection(desc + start + "awesome.console.IntegrationTest:2" + end, "awesome.console.IntegrationTest:2", 2);
-			assertPathDetection(desc + start + "awesome.console.IntegrationTest:10:" + end, "awesome.console.IntegrationTest:10", 10);
-			assertPathDetection(desc + start + "awesome.console.IntegrationTest:30", "awesome.console.IntegrationTest:30", 30);
-			assertPathDetection(desc + "awesome.console.IntegrationTest:40" + end, "awesome.console.IntegrationTest:40", 40);
-			assertPathDetection(
-					desc + start + "awesome.console.IntegrationTest:45,awesome.console.IntegrationTest:50" + end,
-					"awesome.console.IntegrationTest:45",
-					"awesome.console.IntegrationTest:50"
-			);
+			if (isDoubleQuote) {
+				assertPathDetection(desc + "\"awesome.console.IntegrationTest\":2", "\"awesome.console.IntegrationTest\":2", 2);
+				assertPathDetection(desc + "\"awesome.console.IntegrationTest:10:\"", "\"awesome.console.IntegrationTest:10:\"", 0);
+				Assert.assertTrue(filter.detectPaths("\"awesome.console.IntegrationTest:30").isEmpty());
+				assertPathDetection(desc + "awesome.console.IntegrationTest:40\"", "awesome.console.IntegrationTest:40", 40);
+				assertPathDetection(desc + "\"awesome.console.IntegrationTest:45,awesome.console.IntegrationTest:50\"",
+						"\"awesome.console.IntegrationTest:45,awesome.console.IntegrationTest:50\"");
+			} else {
+				assertPathDetection(desc + start + "awesome.console.IntegrationTest:2" + end, "awesome.console.IntegrationTest:2", 2);
+				assertPathDetection(desc + start + "awesome.console.IntegrationTest:10:" + end, "awesome.console.IntegrationTest:10", 10);
+				assertPathDetection(desc + start + "awesome.console.IntegrationTest:30", "awesome.console.IntegrationTest:30", 30);
+				assertPathDetection(desc + "awesome.console.IntegrationTest:40" + end, "awesome.console.IntegrationTest:40", 40);
+				assertPathDetection(
+						desc + start + "awesome.console.IntegrationTest:45,awesome.console.IntegrationTest:50" + end,
+						"awesome.console.IntegrationTest:45",
+						"awesome.console.IntegrationTest:50"
+				);
+			}
 
 			assertURLDetection(String.format("something %sfile:///tmp%s blabla", start, end), "file:///tmp");
 			final String expected = "{file:}/tmp";
@@ -2019,6 +2026,7 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 				filter.extractFileLinksFromLine("[vite] Internal server error: /abs_vite/main.ts:10:5", 0),
 				"abs_vite/main.ts"
 		);
+		assertApplyFilterHasNoLinks("INFO loaded \"/abs_vite/main.ts\"");
 	}
 
 	/**
@@ -2217,6 +2225,552 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			Assert.assertFalse("预算拒绝未 memo 时，窗口外应能再 walk 到新文件", links.isEmpty());
 		} finally {
 			Files.deleteIfExists(late);
+		}
+	}
+
+	/** 真实 Git 生成的状态、name-status、summary、stat 夹具，验证各操作共用路径解析。 */
+	public void testGenericPathsFromActualGitOutput() throws Exception {
+		Path base = Path.of(getProject().getBasePath());
+		Path modified = base.resolve("src/Modify.ts");
+		Path renamed = base.resolve("src/New.ts");
+		Path added = base.resolve("src/中文.ts");
+		Path homonym = base.resolve("other/src/Old.ts");
+		try {
+			for (Path file : List.of(modified, renamed, added, homonym)) {
+				Files.createDirectories(file.getParent());
+				Files.writeString(file, "export {};\n");
+			}
+			String quoted = "\"src/\\344\\270\\255\\346\\226\\207.ts\"";
+			String[] lines = {"M  src/Modify.ts", "R  src/Delete.ts -> src/New.ts", "D  src/Old.ts", "A  " + quoted,
+					"M\tsrc/Modify.ts", "R100\tsrc/Delete.ts\tsrc/New.ts", "D\tsrc/Old.ts", "A\t" + quoted,
+					" rename src/{Delete.ts => New.ts} (100%)", " delete mode 100644 src/Old.ts", " create mode 100644 " + quoted,
+					" src/Modify.ts | 2 +-", " src/{Delete.ts => New.ts} | 0", " src/Old.ts | 1 -", " " + quoted + " | 1 +",
+					" 4 files changed, 2 insertions(+), 2 deletions(-)"};
+			for (String line : lines) {
+				List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+				if (line.contains("src/Old.ts") || line.contains("files changed")) {
+					Assert.assertTrue("删除文件或统计总计不应成链", links.isEmpty());
+				} else if (line.contains("Modify.ts")) {
+					assertSingleHyperlinkEndsWith(links, "src/Modify.ts");
+				} else if (line.contains("New.ts")) {
+					assertSingleHyperlinkEndsWith(links, "src/New.ts");
+				} else if (line.contains("\\344")) {
+					assertSingleHyperlinkEndsWith(links, "src/中文.ts");
+				}
+			}
+		} finally {
+			for (Path file : List.of(modified, renamed, added, homonym)) deleteDiskFixtureFile(file);
+		}
+	}
+
+	/** 已知 source root 的外部新文件不依赖 VFS，短文件名仍不能猜根。 */
+	public void testGenericNewFileResolvesAgainstKnownSourceRoot() throws Exception {
+		Path rootPath = Path.of(getProject().getBasePath(), "generic-source/src");
+		Files.createDirectories(rootPath);
+		VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(rootPath);
+		Assert.assertNotNull(root);
+		Path actual = Path.of(root.getPath(), "pkg/New.ts");
+		try {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.addSourceRoot(getModule(), root));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			Files.createDirectories(actual.getParent());
+			Files.writeString(actual, "actual\n");
+			Assert.assertTrue(filter.resolveCachedFilesForPath("pkg/New.ts").isEmpty());
+			assertGenericExactLink("INFO loaded pkg/New.ts", "pkg/New.ts", actual);
+			assertGenericExactLink(" create mode 100644 pkg/New.ts", "pkg/New.ts", actual);
+			assertApplyFilterHasNoLinks("INFO loaded New.ts");
+			Files.delete(actual);
+			assertApplyFilterHasNoLinks("INFO loaded pkg/New.ts");
+		} finally {
+			Files.deleteIfExists(actual);
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.removeSourceRoot(getModule(), root));
+		}
+	}
+
+	/** 根相对的新文件查找保持 excluded、symlink 与忽略规则边界。 */
+	public void testGenericKnownRootDiskFallbackHonorsBoundaries() throws Exception {
+		Path rootPath = Path.of(getProject().getBasePath(), "generic-boundary/root");
+		Path excludedPath = rootPath.resolve("excluded");
+		Path outside = Path.of(getProject().getBasePath(), "generic-boundary/outside");
+		Files.createDirectories(excludedPath);
+		Files.createDirectories(outside);
+		VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(rootPath);
+		VirtualFile excluded = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(excludedPath);
+		Assert.assertNotNull(root);
+		Assert.assertNotNull(excluded);
+		Path hidden = excludedPath.resolve("Hidden.ts");
+		Path target = outside.resolve("Escaped.ts");
+		Path symlink = rootPath.resolve("linked");
+		Path alias = rootPath.resolve("alias");
+		Path staleDirectory = rootPath.resolve("stale");
+		Path staleFile = staleDirectory.resolve("Escaped.ts");
+		Files.createDirectories(staleDirectory);
+		Files.writeString(staleFile, "cached\n");
+		Assert.assertNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(staleFile));
+		try {
+			WriteAction.runAndWait(() -> {
+				com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), root);
+				com.intellij.testFramework.PsiTestUtil.addExcludedRoot(getModule(), excluded);
+			});
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			Files.writeString(hidden, "excluded\n");
+			Files.writeString(target, "outside\n");
+			Files.createSymbolicLink(symlink, outside);
+			Files.createSymbolicLink(alias, excludedPath);
+			Files.delete(staleFile);
+			Files.delete(staleDirectory);
+			Files.createSymbolicLink(staleDirectory, outside);
+			assertApplyFilterHasNoLinks("INFO loaded excluded/Hidden.ts");
+			assertApplyFilterHasNoLinks("INFO loaded alias/Hidden.ts");
+			assertApplyFilterHasNoLinks("INFO loaded stale/Escaped.ts");
+			String throughParent = "../" + Path.of(getProject().getBasePath()).getFileName() + "/stale/Escaped.ts";
+			assertApplyFilterHasNoLinks("INFO loaded \"" + throughParent + "\"");
+			assertApplyFilterHasNoLinks("INFO loaded \"./" + throughParent + "\"");
+			assertApplyFilterHasNoLinks("INFO loaded linked/Escaped.ts");
+			assertApplyFilterHasNoLinks("INFO loaded ../outside/Escaped.ts");
+		} finally {
+			Files.deleteIfExists(symlink);
+			Files.deleteIfExists(alias);
+			Files.deleteIfExists(staleDirectory);
+			Files.deleteIfExists(hidden);
+			Files.deleteIfExists(target);
+			WriteAction.runAndWait(() -> {
+				com.intellij.testFramework.PsiTestUtil.removeExcludedRoot(getModule(), excluded);
+				com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), root);
+			});
+		}
+	}
+
+	/** 两个已知根的同路径文件必须提供选择，即使其中一个尚未进入缓存。 */
+	public void testGenericExactRootsCombineCachedAndDiskCandidates() throws Exception {
+		Path firstPath = Path.of(getProject().getBasePath(), "generic-root-a");
+		Path secondPath = Path.of(getProject().getBasePath(), "generic-root-b");
+		Path movedPath = firstPath.resolveSibling("generic-root-a-moved");
+		Files.createDirectories(firstPath.resolve("e2e"));
+		Files.createDirectories(secondPath);
+		Path indexedPath = firstPath.resolve("e2e/New.ts");
+		Files.writeString(indexedPath, "cached\n");
+		VirtualFile first = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(firstPath);
+		VirtualFile second = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(secondPath);
+		Assert.assertNotNull(first);
+		Assert.assertNotNull(second);
+		Path disk = Path.of(second.getPath(), "e2e/New.ts");
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		AwesomeConsoleStorage saved = new AwesomeConsoleStorage();
+		XmlSerializerUtil.copyBean(storage, saved);
+		try {
+			WriteAction.runAndWait(() -> {
+				com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), first);
+				com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), second);
+			});
+			VirtualFile indexed = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(indexedPath);
+			Assert.assertNotNull(indexed);
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			Files.createDirectories(disk.getParent());
+			Files.writeString(disk, "disk\n");
+			Assert.assertEquals(1, filter.resolveCachedFilesForPath("e2e/New.ts").size());
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine("INFO loaded e2e/New.ts", 0);
+			Assert.assertEquals(1, links.size());
+			Assert.assertTrue(links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+			Assert.assertEquals(Set.of(indexed.getPath(), disk.toString()), Set.copyOf(
+					((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths()));
+			storage.useResultLimit = true;
+			storage.setResultLimit(1);
+			links = filter.extractFileLinksFromLine("INFO loaded e2e/New.ts", 0);
+			Assert.assertTrue(links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+			Assert.assertEquals(2, ((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths().size());
+			Files.move(firstPath, movedPath);
+			Assert.assertTrue("未刷新 VFS 时仍保留旧根文件身份", indexed.isValid());
+			assertGenericExactLink("INFO loaded e2e/New.ts", "e2e/New.ts", disk);
+			assertGenericExactLink("INFO loaded \"e2e/New.ts\"", "\"e2e/New.ts\"", disk);
+			assertGenericExactLink("Error in /e2e/New.ts:12:3", "/e2e/New.ts:12:3", disk);
+			assertApplyFilterHasNoLinks("INFO loaded \"/e2e/New.ts\"");
+			Files.delete(disk);
+			assertApplyFilterHasNoLinks("INFO loaded e2e/New.ts");
+		} finally {
+			if (Files.exists(movedPath)) Files.move(movedPath, firstPath);
+			Files.deleteIfExists(disk);
+			Files.deleteIfExists(indexedPath);
+			storage.loadState(saved);
+			WriteAction.runAndWait(() -> {
+				com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), first);
+				com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), second);
+			});
+		}
+	}
+
+	/** 混合内存 VFS 与磁盘新文件时，点击收集仍保持完整候选身份。 */
+	public void testGenericMixedRootsPreserveVirtualFileIdentity() throws Exception {
+		VirtualFile memory = myFixture.addFileToProject("e2e/Mixed.ts", "memory\n").getVirtualFile();
+		Path rootPath = Path.of(getProject().getBasePath(), "generic-mixed-root");
+		Files.createDirectories(rootPath);
+		VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(rootPath);
+		Assert.assertNotNull(root);
+		Path disk = rootPath.resolve("e2e/Mixed.ts");
+		try {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), root));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			Files.createDirectories(disk.getParent());
+			Files.writeString(disk, "disk\n");
+			for (String path : List.of("e2e/Mixed.ts", "\"e2e/Mixed.ts\"")) {
+				List<Filter.ResultItem> links = filter.extractFileLinksFromLine("INFO loaded " + path, 0);
+				Assert.assertEquals(1, links.size());
+				Assert.assertTrue(links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+				List<VirtualFile> targets = ((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).refreshAndCollectVirtualFiles();
+				Assert.assertEquals("点击收集必须保留两种文件系统身份", 2, targets.size());
+				Assert.assertTrue("内存文件不能通过 LocalFileSystem 恢复", targets.contains(memory));
+				Assert.assertTrue(targets.stream().anyMatch(file -> file.getPath().equals(disk.toString())));
+			}
+		} finally {
+			Files.deleteIfExists(disk);
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), root));
+		}
+	}
+
+	/** 普通路径在块边界不能被切成根目录的同名文件。 */
+	public void testGenericUnquotedChunkBoundaryDoesNotInventFile() throws Exception {
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		AwesomeConsoleStorage saved = new AwesomeConsoleStorage();
+		XmlSerializerUtil.copyBean(storage, saved);
+		Path decoy = Path.of(getProject().getBasePath(), "victim.ts");
+		try {
+			storage.LIMIT_LINE_LENGTH = true;
+			storage.SPLIT_ON_LIMIT = true;
+			storage.LINE_MAX_LENGTH = 1024;
+			Files.writeString(decoy, "decoy\n");
+			assertApplyFilterHasNoLinks(" ".repeat(1016) + "missing/victim.ts");
+			assertGenericExactLink(" ".repeat(1024) + "INFO loaded victim.ts", "victim.ts", decoy);
+		} finally {
+			Files.deleteIfExists(decoy);
+			storage.loadState(saved);
+		}
+	}
+
+	/** 引号内未知转义不能变成目录；明确 Windows 盘符路径仍保留分隔符。 */
+	public void testGenericQuotedEscapesKeepPlatformIdentity() throws Exception {
+		Path decoy = Path.of(getProject().getBasePath(), "generic-escape/q.ts");
+		try {
+			Files.createDirectories(decoy.getParent());
+			Files.writeString(decoy, "decoy\n");
+			assertApplyFilterHasNoLinks("INFO loaded \"generic-escape/\\q.ts\"");
+			assertApplyFilterHasNoLinks("INFO loaded \"generic-escape/\\tq.ts\"");
+			assertApplyFilterHasNoLinks("INFO loaded \"generic-escape/\\\\q.ts\"");
+			FileLinkMatch windows = filter.detectPaths("\"C:\\repo\\123.ts\"").get(0);
+			Assert.assertEquals("C:\\repo\\123.ts", windows.path);
+			assertPathDetection("INFO \"C:\\repo\\src\\\" other.ts", "\"C:\\repo\\src\\\"", "other.ts");
+			Assert.assertEquals("src/中.ts", AwesomeLinkFilter.decodeQuotedPath("src/\\344\\270\\255.ts", true));
+			Assert.assertEquals("src\\item.ts", AwesomeLinkFilter.decodeQuotedPath("src\\item.ts", true));
+			Assert.assertEquals("C:\\repo\\123.ts", AwesomeLinkFilter.decodeQuotedPath("C:\\repo\\123.ts", true));
+			Assert.assertNull("单个字节转义也不能猜测为数字目录", AwesomeLinkFilter.decodeQuotedPath("report\\040name.ts", true));
+			Assert.assertNull(AwesomeLinkFilter.decodeQuotedPath("src\\123.ts", true));
+			Assert.assertNull("数字目录与字节转义歧义不能选取一侧", AwesomeLinkFilter.decodeQuotedPath("\\344\\270\\255.ts", true));
+		} finally {
+			deleteDiskFixtureFile(decoy);
+		}
+	}
+
+	/** 转义引号的完整上下文不受主机影响，拒绝引用后不能释放内部文件名。 */
+	public void testGenericQuotedEscapeDoesNotReleaseInteriorFragments() throws Exception {
+		Path decoy = Path.of(getProject().getBasePath(), "victim.ts");
+		Path outside = Path.of(getProject().getBasePath(), "outside.ts");
+		try {
+			Files.writeString(decoy, "decoy\n");
+			Files.writeString(outside, "outside\n");
+			for (String quoted : List.of("\"src/missing\\\" victim.ts\"", "\"missing\\\" victim.ts\"")) {
+				assertApplyFilterHasNoLinks("INFO loaded " + quoted);
+				assertGenericExactLink("INFO loaded " + quoted + " outside.ts", "outside.ts", outside);
+			}
+			assertApplyFilterHasNoLinks("INFO loaded \"src/missing\\\" victim.ts");
+			assertPathDetection("INFO \"C:\\repo\\src\\\" outside.ts", "\"C:\\repo\\src\\\"", "outside.ts");
+		} finally {
+			Files.deleteIfExists(decoy);
+			Files.deleteIfExists(outside);
+		}
+	}
+
+	/** 协议后的 Windows 尾部分隔符不能把结束引号变成转义，后续文件仍独立成链。 */
+	public void testGenericQuotedProtocolKeepsFollowingPath() throws Exception {
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		AwesomeConsoleStorage saved = new AwesomeConsoleStorage();
+		XmlSerializerUtil.copyBean(storage, saved);
+		Path actual = Path.of(getProject().getBasePath(), "outside.ts");
+		try {
+			Files.createDirectories(actual.getParent());
+			Files.writeString(actual, "outside\n");
+			storage.LINE_MAX_LENGTH = 1024;
+			storage.SPLIT_ON_LIMIT = true;
+			for (boolean limit : new boolean[]{false, true}) {
+				storage.LIMIT_LINE_LENGTH = limit;
+				for (boolean urls : new boolean[]{false, true}) {
+					storage.searchUrls = urls;
+					for (String protocol : new String[]{"file:", "file:/", "file://", "file:///", "FILE:", "jar:file:"}) {
+						for (String path : new String[]{"C:\\repo\\", "\\\\server\\share\\"}) {
+							String line = "INFO \"" + protocol + path + "\" outside.ts:12:3";
+							List<FileLinkMatch> matches = filter.detectPaths(line);
+							Assert.assertTrue("协议引用不能吞掉后续路径: " + line,
+									matches.stream().anyMatch(match -> match.path.equals("outside.ts")
+											&& match.linkedRow == 12 && match.linkedCol == 3));
+							Filter.Result result = filter.applyFilter(line, line.length() + 137);
+							Assert.assertNotNull(result);
+							int start = 137 + line.indexOf("outside.ts");
+							List<Filter.ResultItem> links = result.getResultItems().stream()
+									.filter(item -> item.getHighlightStartOffset() == start
+											&& item.getHighlightEndOffset() == 137 + line.length()).toList();
+							Assert.assertEquals("独立文件的高亮必须保留: " + line, 1, links.size());
+							Assert.assertTrue(links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+							Assert.assertEquals(actual.toString(),
+									((SingleFileFileHyperlinkInfo) links.get(0).getHyperlinkInfo()).getFilePath());
+						}
+					}
+				}
+			}
+		} finally {
+			Files.deleteIfExists(actual);
+			storage.loadState(saved);
+		}
+	}
+
+	/** 识别协议后仍需保留相对引用的转义上下文，不能误链内部文件。 */
+	public void testGenericQuotedProtocolDoesNotReleaseInteriorFragments() throws Exception {
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		AwesomeConsoleStorage saved = new AwesomeConsoleStorage();
+		XmlSerializerUtil.copyBean(storage, saved);
+		Path decoy = Path.of(getProject().getBasePath(), "victim.ts");
+		Path outside = Path.of(getProject().getBasePath(), "outside.ts");
+		try {
+			storage.searchUrls = false;
+			Files.createDirectories(outside.getParent());
+			Files.writeString(decoy, "decoy\n");
+			Files.writeString(outside, "outside\n");
+			for (String protocol : new String[]{"file:", "file:/", "jar:file:"}) {
+				String quoted = "\"" + protocol + "missing\\\" victim.ts\"";
+				assertApplyFilterHasNoLinks("INFO loaded " + quoted);
+				assertGenericExactLink("INFO loaded " + quoted + " outside.ts", "outside.ts", outside);
+				assertApplyFilterHasNoLinks("INFO loaded \"" + protocol + "missing\\\" victim.ts");
+			}
+		} finally {
+			Files.deleteIfExists(decoy);
+			Files.deleteIfExists(outside);
+			storage.loadState(saved);
+		}
+	}
+
+	/** 分块保护仍限制超长普通 token 的正则工作，不能触发深层回溯或链其尾部。 */
+	public void testGenericLongLineRetainsBoundedDetection() throws Exception {
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		AwesomeConsoleStorage saved = new AwesomeConsoleStorage();
+		XmlSerializerUtil.copyBean(storage, saved);
+		try {
+			storage.LIMIT_LINE_LENGTH = true;
+			storage.SPLIT_ON_LIMIT = true;
+			storage.LINE_MAX_LENGTH = 1024;
+			long start = System.nanoTime();
+			filter.detectPaths("a".repeat(32768) + ".ts");
+			Assert.assertTrue("重复路径段的长 token 不应进入递归正则", filter.detectPaths("a/".repeat(8192) + ".ts").isEmpty());
+			assertPathDetection(" x" + " ".repeat(32768) + "Error in src/Main.ts:12:3", "src/Main.ts:12:3", 12, 3);
+			Assert.assertTrue("长行检测应保持预算内完成", System.nanoTime() - start < TimeUnit.SECONDS.toNanos(2));
+		} finally {
+			storage.loadState(saved);
+		}
+	}
+
+	/** 各类输出的引号与 UTF-8 字节转义都属于同一条完整路径，不能拆成片段。 */
+	public void testGenericQuotedPathDecodesWithoutProducerDetection() throws Exception {
+		String relative = "generic-quoted/src/中文 name.ts";
+		String quoted = "\"generic-quoted/src/\\344\\270\\255\\346\\226\\207 name.ts\"";
+		Path actual = Path.of(getProject().getBasePath(), relative);
+		Path fragment = Path.of(getProject().getBasePath(), "name.ts");
+		try {
+			Files.createDirectories(actual.getParent());
+			Files.writeString(actual, "actual\n");
+			Files.writeString(fragment, "fragment decoy\n");
+			for (String prefix : new String[]{"INFO loaded ", " create mode 100644 ", "\tmodified:   ", " M ", "M\t"}) {
+				assertGenericExactLink(prefix + quoted, quoted, actual);
+			}
+			assertGenericExactLink("Error in " + quoted + ":12:3", quoted + ":12:3", actual);
+			Files.delete(actual);
+			for (String prefix : new String[]{"INFO loaded ", " delete mode 100644 ", "\tdeleted:    ", " D "}) {
+				assertApplyFilterHasNoLinks(prefix + quoted);
+			}
+		} finally {
+			deleteDiskFixtureFile(actual);
+			Files.deleteIfExists(fragment);
+		}
+	}
+
+	/** 明确引用的文件保持空白和省略号身份，不能展开 rename 或退回类名与后缀。 */
+	public void testGenericQuotedLiteralKeepsFileIdentity() throws Exception {
+		myFixture.addFileToProject("pkg/目标.java", "package pkg; public class 目标 {}\n");
+		myFixture.addFileToProject("other/src/victim.ts", "suffix decoy\n");
+		myFixture.addFileToProject("generic-literal/src/new.ts", "rename decoy\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+		assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine("pkg.目标:12", 0), "pkg/目标.java");
+		for (String path : new String[]{"pkg.目标", "pkg.\\347\\233\\256\\346\\240\\207", ".../src/victim.ts",
+				"generic-literal/src/{old => new}.ts"}) {
+			assertApplyFilterHasNoLinks("INFO loaded \"" + path + "\"");
+			assertApplyFilterHasNoLinks(" M \"" + path + "\"");
+		}
+		Path actual = Path.of(getProject().getBasePath(), "generic-literal/src/ file.ts ");
+		Path fragment = Path.of(getProject().getBasePath(), "file.ts");
+		try {
+			Files.createDirectories(actual.getParent());
+			Files.writeString(actual, "actual\n");
+			Files.writeString(fragment, "decoy\n");
+			String quoted = "\"generic-literal/src/ file.ts \"";
+			assertGenericExactLink("INFO loaded " + quoted, quoted, actual);
+			Files.delete(actual);
+			assertApplyFilterHasNoLinks("INFO loaded " + quoted);
+		} finally {
+			deleteDiskFixtureFile(actual);
+			Files.deleteIfExists(fragment);
+		}
+	}
+
+	/** 不完整或无效引用不得重新解析其中的文件片段。 */
+	public void testGenericInvalidQuotedPathDoesNotLinkFragments() throws Exception {
+		Path fragment = Path.of(getProject().getBasePath(), "name.ts");
+		myFixture.addFileToProject("generic-invalid/src/344/270.ts", "byte decoy\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+		try {
+			Files.writeString(fragment, "fragment decoy\n");
+			for (String path : new String[]{"\"generic-invalid/src/\\344\\270.ts\"", "\"generic-invalid/src/\\377name.ts\"",
+					"\"generic-invalid/src/\\000name.ts\"", "\"generic-invalid/src/missing name.ts", "\"missing name.ts\\\" tail\""}) {
+				assertApplyFilterHasNoLinks("INFO loaded " + path);
+				assertApplyFilterHasNoLinks("\tdeleted:    " + path);
+			}
+		} finally {
+			Files.deleteIfExists(fragment);
+		}
+	}
+
+	/** 分块不能把一个完整引用变成多个文件；截断不完整引用时不得链其中诱饵。 */
+	public void testGenericQuotedPathAcrossChunksKeepsIdentity() throws Exception {
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		AwesomeConsoleStorage saved = new AwesomeConsoleStorage();
+		XmlSerializerUtil.copyBean(storage, saved);
+		String directory = "目".repeat(50);
+		String relative = "generic-long/" + directory + "/" + directory + "/name.ts";
+		String quoted = "\"generic-long/" + "\\347\\233\\256".repeat(50) + "/" + "\\347\\233\\256".repeat(50) + "/name.ts\"";
+		Path actual = Path.of(getProject().getBasePath(), relative);
+		Path fragment = Path.of(getProject().getBasePath(), "name.ts");
+		try {
+			storage.LIMIT_LINE_LENGTH = true;
+			storage.LINE_MAX_LENGTH = 1024;
+			storage.SPLIT_ON_LIMIT = true;
+			Files.createDirectories(actual.getParent());
+			Files.writeString(actual, "actual\n");
+			Files.writeString(fragment, "decoy\n");
+			assertGenericExactLink("INFO loaded " + quoted + ":12:3", quoted + ":12:3", actual);
+			assertGenericExactLink(" M " + quoted, quoted, actual);
+			storage.SPLIT_ON_LIMIT = false;
+			assertApplyFilterHasNoLinks("INFO loaded " + quoted);
+			storage.SPLIT_ON_LIMIT = true;
+			Files.delete(actual);
+			assertApplyFilterHasNoLinks("INFO loaded " + quoted);
+		} finally {
+			deleteDiskFixtureFile(actual);
+			Files.deleteIfExists(fragment);
+			storage.loadState(saved);
+		}
+	}
+
+	private void assertGenericExactLink(String line, String highlighted, Path actual) {
+		Filter.Result result = filter.applyFilter(line, line.length());
+		Assert.assertNotNull(result);
+		List<Filter.ResultItem> links = result.getResultItems();
+		Assert.assertEquals("完整文件身份只应生成一个链接: " + line, 1, links.size());
+		Assert.assertTrue(links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+		Assert.assertEquals(actual.toAbsolutePath().normalize().toString(),
+				((SingleFileFileHyperlinkInfo) links.get(0).getHyperlinkInfo()).getFilePath());
+		assertHyperlinkRange(links.get(0), line, highlighted);
+	}
+
+	/** 完整路径的解析只取决于当前文件，不受日志来源或操作文案影响。 */
+	public void testGenericPathResolutionIgnoresProducerAndOperation() throws Exception {
+		String[] paths = {"generic-resolution/src/Main.ts", "generic-resolution-main.ts"};
+		String[] formats = {"INFO loaded %s", " create mode 100644 %s", " delete mode 100644 %s",
+				"\tnew file:   %s", "\tmodified:   %s", "\tdeleted:    %s", "A  %s", " M %s", " D %s",
+				"?? %s", "M\t%s", "D\t%s", " mode change 100644 => 100755 %s", "M       %s"};
+		for (String relative : paths) {
+			myFixture.addFileToProject("other/" + relative, "decoy\n");
+		}
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+		for (String relative : paths) {
+			Path actual = Path.of(getProject().getBasePath(), relative);
+			try {
+				assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine("other/" + relative, 0), "other/" + relative);
+				for (String format : formats) assertApplyFilterHasNoLinks(String.format(format, relative));
+				Files.createDirectories(actual.getParent());
+				Files.writeString(actual, "export {};\n");
+				Assert.assertTrue("外部新增文件尚未进入索引", filter.resolveCachedFilesForPath(relative).isEmpty());
+				for (String format : formats) {
+					String line = String.format(format, relative);
+					assertGenericExactLink(line, relative, actual);
+				}
+				Files.delete(actual);
+				for (String format : formats) assertApplyFilterHasNoLinks(String.format(format, relative));
+			} finally {
+				deleteDiskFixtureFile(actual);
+			}
+		}
+	}
+
+	/** 普通日志与 Git 输出共用负缓存；退避到期后普通日志也能识别外部新文件。 */
+	public void testGenericLogRecoversFromSharedNegativeDiskMemo() throws Exception {
+		filter.whenCacheReady().get(10, TimeUnit.SECONDS);
+		String suffix = "source/generic-retry/Entry.ts";
+		String line = "INFO loaded .../" + suffix + ":12:3";
+		Path actual = Path.of(getProject().getBasePath(), "generic-module", suffix);
+		try {
+			Files.createDirectories(actual.getParent());
+			Assert.assertTrue(filter.extractFileLinksFromLine(line, 0).isEmpty());
+			assertPathDetection(line, ".../" + suffix + ":12:3", 12, 3);
+			AwesomeLinkFilter.DiskSearchResult missing = filter.peekTruncatedPathDiskCache(suffix);
+			Assert.assertNotNull(missing);
+			Assert.assertTrue(missing.complete());
+			Files.writeString(actual, "export {};\n");
+			Assert.assertTrue(filter.extractFileLinksFromLine(" .../" + suffix + " | 1 +", 0).isEmpty());
+			Assert.assertSame("不同来源的输出必须共用同一观测", missing, filter.peekTruncatedPathDiskCache(suffix));
+			expireDiskMemoForTest(suffix);
+			Assert.assertTrue("恢复前新文件仍未进入索引", filter.resolveCachedFilesForPath(".../" + suffix).isEmpty());
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+			Assert.assertEquals("唯一磁盘命中只应生成一个链接", 1, links.size());
+			assertSingleHyperlinkEndsWith(links, "generic-module/" + suffix);
+			assertHyperlinkRange(links.get(0), line, ".../" + suffix + ":12:3");
+			assertPathDetection(line, ".../" + suffix + ":12:3", 12, 3);
+		} finally {
+			deleteDiskFixtureFile(actual);
+		}
+	}
+
+	/** 与状态输出相似的普通诊断仍应保留行列号、缩进和原始控制台偏移。 */
+	public void testGenericDiagnosticsRetainLocationAndOffsets() throws Exception {
+		Path actual = Path.of(getProject().getBasePath(), "generic-diagnostics/src/Main.ts");
+		String location = "generic-diagnostics/src/Main.ts:12:3";
+		try {
+			Files.createDirectories(actual.getParent());
+			Files.writeString(actual, "export {};\n");
+			for (String format : new String[]{"modified:   %s - syntax error\n", "rename failed: %s\n", "  %s | 1 -\n"}) {
+				String line = String.format(format, location);
+				Filter.Result result = filter.applyFilter(line, line.length() + 137);
+				Assert.assertNotNull(result);
+				List<Filter.ResultItem> links = result.getResultItems();
+				Assert.assertEquals("诊断路径只应生成一个链接", 1, links.size());
+				assertSingleHyperlinkEndsWith(links, "generic-diagnostics/src/Main.ts");
+				int start = 137 + line.indexOf(location);
+				Assert.assertEquals(start, links.get(0).getHighlightStartOffset());
+				Assert.assertEquals(start + location.length(), links.get(0).getHighlightEndOffset());
+				assertPathDetection(line, location, 12, 3);
+			}
+		} finally {
+			deleteDiskFixtureFile(actual);
 		}
 	}
 
