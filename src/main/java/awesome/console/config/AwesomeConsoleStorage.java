@@ -7,12 +7,14 @@ import com.intellij.openapi.components.State;
 import com.intellij.openapi.components.Storage;
 import com.intellij.util.xmlb.XmlSerializerUtil;
 import com.intellij.util.xmlb.annotations.Transient;
+import java.awt.Color;
 import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Awesome Console 配置存储类
@@ -28,6 +30,9 @@ import org.jetbrains.annotations.NotNull;
     }
 )
 public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeConsoleStorage>, AwesomeConsoleDefaults {
+
+    /** 只接受不透明的 #RRGGBB / RRGGBB，避免半透明前景在控制台里消失 */
+    private static final Pattern HYPERLINK_COLOR_PATTERN = Pattern.compile("#?[0-9A-Fa-f]{6}");
 
     /** 是否在达到行长度限制时分割行 */
     public volatile boolean SPLIT_ON_LIMIT = DEFAULT_SPLIT_ON_LIMIT;
@@ -90,8 +95,18 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 是否仅保留超链接下划线效果（不改变颜色） */
     public volatile boolean underlineOnly = DEFAULT_UNDERLINE_ONLY;
 
+    /** 是否使用自定义超链接颜色。关闭时沿用 IDE 配色方案 */
+    public volatile boolean useCustomHyperlinkColor = DEFAULT_USE_CUSTOM_HYPERLINK_COLOR;
+
     /** 文件类型列表（逗号分隔） */
     private volatile String fileTypes;
+
+    /**
+     * 自定义超链接颜色，始终不透明。
+     * 持久化走 getHyperlinkColor / setHyperlinkColor 的 #RRGGBB 文本，链接生成时直接读本字段。
+     */
+    @NotNull
+    private volatile Color hyperlinkColorValue = DEFAULT_HYPERLINK_COLOR;
 
     /**
      * 构造函数，初始化默认文件类型
@@ -203,5 +218,59 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     public void setFileTypes(String fileTypes) {
         this.fileTypeSet = Set.of(fileTypes.toLowerCase().split(","));
         this.fileTypes = fileTypes;
+    }
+
+    /**
+     * 自定义超链接颜色的持久化文本。
+     *
+     * @return #RRGGBB
+     */
+    @NotNull
+    public String getHyperlinkColor() {
+        return String.format("#%06X", hyperlinkColorValue.getRGB() & 0xFFFFFF);
+    }
+
+    /**
+     * 从持久化文本恢复自定义超链接颜色。
+     * 只接受 #RRGGBB / RRGGBB（拒绝三位缩写和带透明度的八位色值）；空值和非法值回落到默认色。
+     *
+     * @param text 颜色文本
+     */
+    public void setHyperlinkColor(@Nullable String text) {
+        String trimmed = text == null ? "" : text.trim();
+        hyperlinkColorValue = HYPERLINK_COLOR_PATTERN.matcher(trimmed).matches()
+                ? new Color(Integer.parseInt(trimmed.substring(trimmed.length() - 6), 16))
+                : DEFAULT_HYPERLINK_COLOR;
+    }
+
+    /**
+     * 自定义超链接颜色，供设置页读写（不序列化，持久化走 getHyperlinkColor）。
+     *
+     * @return 不透明颜色
+     */
+    @NotNull
+    @Transient
+    public Color getHyperlinkColorValue() {
+        return hyperlinkColorValue;
+    }
+
+    /**
+     * 设置自定义超链接颜色。丢弃 alpha；null 回落到默认色。
+     *
+     * @param color 色板颜色
+     */
+    public void setHyperlinkColorValue(@Nullable Color color) {
+        hyperlinkColorValue = color == null ? DEFAULT_HYPERLINK_COLOR : new Color(color.getRGB() & 0xFFFFFF);
+    }
+
+    /**
+     * 当前应绘制的超链接颜色，处于链接生成热路径。
+     * 未启用自定义颜色时返回 null，调用方继续使用 IDE 配色方案。
+     *
+     * @return 自定义颜色，未启用时为 null
+     */
+    @Nullable
+    public Color getEffectiveHyperlinkColor() {
+        return useCustomHyperlinkColor ? hyperlinkColorValue : null;
     }
 }

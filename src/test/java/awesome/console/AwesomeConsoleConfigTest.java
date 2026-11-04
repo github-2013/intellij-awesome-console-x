@@ -10,14 +10,21 @@ import com.intellij.notification.Notification;
 import com.intellij.notification.NotificationType;
 import com.intellij.notification.Notifications;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.editor.markup.EffectType;
+import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
 import java.lang.reflect.Field;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
+import awesome.console.util.HyperlinkUtils;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
+import com.intellij.ui.ColorPanel;
+import com.intellij.util.xmlb.XmlSerializer;
+import org.jdom.Element;
+import java.awt.Color;
 import java.awt.Component;
 import java.util.Collections;
 import java.util.List;
@@ -27,6 +34,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import javax.swing.JFrame;
+import javax.swing.JMenuItem;
 import javax.swing.JPanel;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
@@ -677,6 +685,284 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         }
     }
 
+    /**
+     * 测试自定义超链接颜色的存储：默认关闭、色值归一化、非法值回落到默认色。
+     */
+    public void testHyperlinkColorConfiguration() {
+        boolean originalUse = storage.useCustomHyperlinkColor;
+        String originalColor = storage.getHyperlinkColor();
+        try {
+            assertNull("Disabled custom color must not override the IDE scheme",
+                    new AwesomeConsoleStorage().getEffectiveHyperlinkColor());
+            assertEquals("Default swatch should be #589DF6",
+                    "#589DF6", new AwesomeConsoleStorage().getHyperlinkColor());
+
+            storage.setHyperlinkColor("00ff00");
+            assertEquals("#00FF00", storage.getHyperlinkColor());
+            storage.setHyperlinkColor("  #112233  ");
+            assertEquals("#112233", storage.getHyperlinkColor());
+
+            storage.setHyperlinkColor("not-a-color");
+            assertEquals("Invalid text falls back to the default color",
+                    "#589DF6", storage.getHyperlinkColor());
+            storage.setHyperlinkColor("#abc");
+            assertEquals("3-digit colors are rejected", "#589DF6", storage.getHyperlinkColor());
+            storage.setHyperlinkColor("#11223380");
+            assertEquals("Colors with alpha are rejected", "#589DF6", storage.getHyperlinkColor());
+
+            storage.setHyperlinkColorValue(new Color(0x11, 0x22, 0x33, 0x80));
+            assertEquals("Alpha from the chooser is dropped",
+                    new Color(0x11, 0x22, 0x33), storage.getHyperlinkColorValue());
+            storage.setHyperlinkColorValue(null);
+            assertEquals(AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR, storage.getHyperlinkColorValue());
+
+            storage.useCustomHyperlinkColor = false;
+            storage.setHyperlinkColor("#ABCDEF");
+            assertNull(storage.getEffectiveHyperlinkColor());
+            storage.useCustomHyperlinkColor = true;
+            assertEquals(new Color(0xAB, 0xCD, 0xEF), storage.getEffectiveHyperlinkColor());
+        } finally {
+            storage.useCustomHyperlinkColor = originalUse;
+            storage.setHyperlinkColor(originalColor);
+        }
+    }
+
+    /**
+     * 两种颜色模式：跟随配色方案时色板只读并显示方案色；自定义时可编辑。
+     * Apply 后 UI 与 storage 对齐，来回切换保留上次的自定义色，右键 Restore defaults 回到跟随方案。
+     */
+    public void testApplyHyperlinkColor() throws Exception {
+        boolean originalUse = storage.useCustomHyperlinkColor;
+        String originalColor = storage.getHyperlinkColor();
+        AwesomeConsoleConfig config = new AwesomeConsoleConfig();
+        try {
+            storage.useCustomHyperlinkColor = false;
+            storage.setHyperlinkColorValue(AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR);
+            config.createComponent();
+            Field formField = AwesomeConsoleConfig.class.getDeclaredField("form");
+            formField.setAccessible(true);
+            AwesomeConsoleConfigForm form = (AwesomeConsoleConfigForm) formField.get(config);
+            Color schemeColor = HyperlinkUtils.extractHyperlinkColorFromColorScheme();
+
+            assertFalse("Fresh form matches storage", config.isModified());
+            assertTrue(form.hyperlinkColorSchemeRadioButton.isSelected());
+            assertFalse(form.hyperlinkColorCustomRadioButton.isSelected());
+            assertEquals("Color scheme", form.hyperlinkColorSchemeRadioButton.getText());
+            assertEquals("Custom", form.hyperlinkColorCustomRadioButton.getText());
+            assertTrue("Chooser stays enabled so the color is painted", form.hyperlinkColorChooser.isEnabled());
+            assertFalse("Chooser is read-only while following the color scheme",
+                    isColorPanelEditable(form.hyperlinkColorChooser));
+            assertEquals("Chooser shows the color links actually use",
+                    schemeColor, form.hyperlinkColorChooser.getSelectedColor());
+            assertEquals(AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR, form.resolveCustomHyperlinkColor());
+            assertEquals("Hyperlink color:", form.hyperlinkColorLabel.getText());
+            assertNotNull("Label explains where the color applies", form.hyperlinkColorLabel.getToolTipText());
+            assertNotNull(form.hyperlinkColorSchemeRadioButton.getToolTipText());
+            assertNotNull(form.hyperlinkColorCustomRadioButton.getToolTipText());
+            assertTrue("Read-only chooser still explains itself",
+                    form.hyperlinkColorChooser.getToolTipText().contains("Select Custom"));
+
+            form.hyperlinkColorCustomRadioButton.doClick();
+            assertTrue(form.isCustomHyperlinkColorSelected());
+            assertTrue(isColorPanelEditable(form.hyperlinkColorChooser));
+            assertNotNull("Editable chooser shows the platform hint", form.hyperlinkColorChooser.getToolTipText());
+            assertFalse(form.hyperlinkColorChooser.getToolTipText().contains("Select Custom"));
+            assertEquals("Custom mode starts from the saved custom color",
+                    AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR, form.hyperlinkColorChooser.getSelectedColor());
+            assertTrue(config.isModified());
+            form.hyperlinkColorChooser.setSelectedColor(new Color(0x11, 0x22, 0x33));
+            config.apply();
+            assertTrue(storage.useCustomHyperlinkColor);
+            assertEquals("#112233", storage.getHyperlinkColor());
+            assertFalse("Apply syncs the form so the dialog can close", config.isModified());
+
+            config.reset();
+            assertTrue(form.hyperlinkColorCustomRadioButton.isSelected());
+            assertEquals(new Color(0x11, 0x22, 0x33), form.hyperlinkColorChooser.getSelectedColor());
+
+            form.hyperlinkColorSchemeRadioButton.doClick();
+            assertFalse(isColorPanelEditable(form.hyperlinkColorChooser));
+            assertEquals(schemeColor, form.hyperlinkColorChooser.getSelectedColor());
+            assertEquals(new Color(0x11, 0x22, 0x33), form.resolveCustomHyperlinkColor());
+            config.apply();
+            assertFalse(storage.useCustomHyperlinkColor);
+            assertEquals("Following the scheme keeps the last picked color",
+                    "#112233", storage.getHyperlinkColor());
+            assertFalse(config.isModified());
+
+            form.hyperlinkColorCustomRadioButton.doClick();
+            assertEquals("Switching back restores the last custom color",
+                    new Color(0x11, 0x22, 0x33), form.hyperlinkColorChooser.getSelectedColor());
+            form.hyperlinkColorChooser.setSelectedColor(null);
+            assertTrue(config.isModified());
+            config.apply();
+            assertEquals("#589DF6", storage.getHyperlinkColor());
+            assertEquals(AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR, form.hyperlinkColorChooser.getSelectedColor());
+            assertFalse(config.isModified());
+
+            form.hyperlinkColorChooser.setSelectedColor(new Color(0x44, 0x55, 0x66));
+            config.apply();
+            assertEquals("#445566", storage.getHyperlinkColor());
+            ((JMenuItem) form.hyperlinkColorChooser.getComponentPopupMenu().getComponent(0)).doClick();
+            assertTrue("Restore defaults goes back to the color scheme",
+                    form.hyperlinkColorSchemeRadioButton.isSelected());
+            assertEquals(schemeColor, form.hyperlinkColorChooser.getSelectedColor());
+            assertEquals(AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR, form.resolveCustomHyperlinkColor());
+            assertTrue("Restoring defaults still needs Apply", config.isModified());
+            assertTrue(storage.useCustomHyperlinkColor);
+            config.apply();
+            assertFalse(storage.useCustomHyperlinkColor);
+            assertEquals("#589DF6", storage.getHyperlinkColor());
+            assertFalse(config.isModified());
+        } finally {
+            storage.useCustomHyperlinkColor = originalUse;
+            storage.setHyperlinkColor(originalColor);
+            config.disposeUIResources();
+        }
+    }
+
+    /**
+     * ColorPanel 未公开 editable 状态，只能反射读取 myEditable。
+     */
+    private static boolean isColorPanelEditable(@NotNull ColorPanel colorPanel) throws Exception {
+        Field editableField = ColorPanel.class.getDeclaredField("myEditable");
+        editableField.setAccessible(true);
+        return editableField.getBoolean(colorPanel);
+    }
+
+    /**
+     * 自定义颜色要经 Filter 画到链接上（含已访问样式）；Underline only 同时开启时只改下划线。
+     * 样式合成细节由 testBuildHyperlinkAttributesRespectsSchemeEffect 覆盖，这里只验证 Filter 选对分支并传入了颜色。
+     */
+    public void testCustomHyperlinkColorAppliedToLinks() {
+        boolean originalUse = storage.useCustomHyperlinkColor;
+        String originalColor = storage.getHyperlinkColor();
+        boolean originalUnderline = storage.underlineOnly;
+        boolean originalSearchUrls = storage.searchUrls;
+        Color custom = new Color(0xFF, 0x00, 0xAA);
+        String line = "see https://example.com";
+        try {
+            storage.searchUrls = true;
+            storage.useCustomHyperlinkColor = true;
+            storage.setHyperlinkColorValue(custom);
+            storage.underlineOnly = false;
+
+            List<Filter.ResultItem> links = filter.extractUrlLinksFromLine(line, 0);
+            assertFalse("URL should be linked", links.isEmpty());
+            Filter.ResultItem link = links.get(0);
+            assertEquals(custom, link.getHighlightAttributes().getForegroundColor());
+            assertEquals(custom, link.getFollowedHyperlinkAttributes().getForegroundColor());
+
+            storage.underlineOnly = true;
+            link = filter.extractUrlLinksFromLine(line, 0).get(0);
+            assertNull("Underline only keeps the original text color", link.getHighlightAttributes().getForegroundColor());
+            assertNull(link.getFollowedHyperlinkAttributes().getForegroundColor());
+            assertEquals(custom, link.getHighlightAttributes().getEffectColor());
+            assertEquals(custom, link.getFollowedHyperlinkAttributes().getEffectColor());
+
+            storage.useCustomHyperlinkColor = false;
+            link = filter.extractUrlLinksFromLine(line, 0).get(0);
+            assertFalse("Disabled custom color must not keep the picked color on the underline",
+                    custom.equals(link.getHighlightAttributes().getEffectColor()));
+        } finally {
+            storage.useCustomHyperlinkColor = originalUse;
+            storage.setHyperlinkColor(originalColor);
+            storage.underlineOnly = originalUnderline;
+            storage.searchUrls = originalSearchUrls;
+            filter = new AwesomeLinkFilter(getProject());
+        }
+    }
+
+    /**
+     * 自定义颜色只替换方案已有的颜色，不能凭空加效果，也不能改动方案对象。
+     * 平台 TextAttributes 默认效果类型是 BOXED，不能用 effectType != null 判断是否带下划线。
+     */
+    public void testBuildHyperlinkAttributesRespectsSchemeEffect() {
+        Color custom = new Color(0x12, 0x34, 0x56);
+        Color schemeColor = new Color(0x58, 0x9D, 0xF6);
+
+        // 方案关闭了下划线：只有前景色，没有效果色
+        TextAttributes noUnderline = new TextAttributes();
+        noUnderline.setForegroundColor(schemeColor);
+        assertEquals("Precondition: platform default effect type is not null",
+                EffectType.BOXED, noUnderline.getEffectType());
+        TextAttributes result = HyperlinkUtils.buildHyperlinkAttributes(noUnderline, custom, false);
+        assertNotNull(result);
+        assertEquals(custom, result.getForegroundColor());
+        assertNull("No underline in the scheme means no underline or box with custom color",
+                result.getEffectColor());
+        assertEquals("Scheme object must stay untouched", schemeColor, noUnderline.getForegroundColor());
+
+        // 方案带下划线：下划线换成自定义色，效果类型保持不变
+        TextAttributes underlined = new TextAttributes();
+        underlined.setForegroundColor(schemeColor);
+        underlined.setEffectType(EffectType.LINE_UNDERSCORE);
+        underlined.setEffectColor(schemeColor);
+        result = HyperlinkUtils.buildHyperlinkAttributes(underlined, custom, false);
+        assertNotNull(result);
+        assertNotSame(underlined, result);
+        assertEquals(custom, result.getForegroundColor());
+        assertEquals(custom, result.getEffectColor());
+        assertEquals(EffectType.LINE_UNDERSCORE, result.getEffectType());
+        assertEquals("Scheme effect color must stay untouched", schemeColor, underlined.getEffectColor());
+
+        // 方案缺失：只改文字颜色，不能落到默认的 BOXED
+        result = HyperlinkUtils.buildHyperlinkAttributes(null, custom, false);
+        assertNotNull(result);
+        assertEquals(custom, result.getForegroundColor());
+        assertNull(result.getEffectColor());
+
+        // 未启用自定义颜色：原样返回方案对象
+        assertSame(underlined, HyperlinkUtils.buildHyperlinkAttributes(underlined, null, false));
+        assertNull(HyperlinkUtils.buildHyperlinkAttributes(null, null, false));
+
+        // Underline only：不设前景色，方案没下划线时回落到方案前景色
+        result = HyperlinkUtils.buildHyperlinkAttributes(noUnderline, null, true);
+        assertNotNull(result);
+        assertNull(result.getForegroundColor());
+        assertEquals(EffectType.LINE_UNDERSCORE, result.getEffectType());
+        assertEquals(schemeColor, result.getEffectColor());
+        result = HyperlinkUtils.buildHyperlinkAttributes(null, custom, true);
+        assertNotNull(result);
+        assertNull(result.getForegroundColor());
+        assertEquals(custom, result.getEffectColor());
+    }
+
+    /**
+     * 走真实 XML 序列化：颜色以 #RRGGBB 文本落盘，缓存的 Color 字段不落盘，损坏值读回默认色。
+     */
+    public void testHyperlinkColorXmlRoundTrip() {
+        AwesomeConsoleStorage source = new AwesomeConsoleStorage();
+        source.useCustomHyperlinkColor = true;
+        source.setHyperlinkColor("#445566");
+
+        Element element = XmlSerializer.serialize(source);
+        Element colorOption = findOptionByName(element, "hyperlinkColor");
+        assertNotNull("hyperlinkColor should be serialized", colorOption);
+        assertEquals("#445566", colorOption.getAttributeValue("value"));
+        assertNull("Cached Color field must not be serialized",
+                findOptionByName(element, "hyperlinkColorValue"));
+        assertNull(findOptionByName(element, "effectiveHyperlinkColor"));
+
+        AwesomeConsoleStorage restored = XmlSerializer.deserialize(element, AwesomeConsoleStorage.class);
+        assertTrue(restored.useCustomHyperlinkColor);
+        assertEquals(new Color(0x44, 0x55, 0x66), restored.getEffectiveHyperlinkColor());
+
+        colorOption.setAttribute("value", "not-a-color");
+        AwesomeConsoleStorage corrupted = XmlSerializer.deserialize(element, AwesomeConsoleStorage.class);
+        assertEquals("Corrupted persisted value falls back to the default color",
+                AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR, corrupted.getHyperlinkColorValue());
+    }
+
+    private static Element findOptionByName(@NotNull Element element, @NotNull String name) {
+        for (Element option : element.getChildren("option")) {
+            if (name.equals(option.getAttributeValue("name"))) {
+                return option;
+            }
+        }
+        return null;
+    }
+
     // ========== 九、配置持久化测试 ==========
 
     /**
@@ -693,6 +979,8 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             storage.searchUrls = !backup.searchUrls;
             storage.showNotifications = !backup.showNotifications;
             storage.underlineOnly = !backup.underlineOnly;
+            storage.useCustomHyperlinkColor = !backup.useCustomHyperlinkColor;
+            storage.setHyperlinkColor("#445566");
             
             // 保存状态
             AwesomeConsoleStorage savedState = storage.getState();
@@ -710,6 +998,10 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                 storage.showNotifications, newStorage.showNotifications);
             assertEquals("Underline only should be persisted", 
                 storage.underlineOnly, newStorage.underlineOnly);
+            assertEquals("Custom hyperlink color flag should be persisted",
+                storage.useCustomHyperlinkColor, newStorage.useCustomHyperlinkColor);
+            assertEquals("Hyperlink color should be persisted",
+                storage.getHyperlinkColor(), newStorage.getHyperlinkColor());
             
         } finally {
             // 恢复原始配置

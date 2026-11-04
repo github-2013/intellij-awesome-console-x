@@ -1,5 +1,6 @@
 package awesome.console.config;
 
+import java.awt.Color;
 import java.util.regex.Pattern;
 
 /**
@@ -73,4 +74,13 @@ public interface AwesomeConsoleDefaults {
 
     /** 默认是否仅保留超链接下划线效果（不改变颜色） */
     boolean DEFAULT_UNDERLINE_ONLY = false;
+
+    /** 默认不使用自定义超链接颜色，沿用 IDE 配色方案 */
+    boolean DEFAULT_USE_CUSTOM_HYPERLINK_COLOR = false;
+
+    /**
+     * 自定义超链接颜色的默认色值（#589DF6）。
+     * 跟随配色方案时不生效，仅作为首次切到 Custom 时色板的初始值。
+     */
+    Color DEFAULT_HYPERLINK_COLOR = new Color(0x589DF6);
 }

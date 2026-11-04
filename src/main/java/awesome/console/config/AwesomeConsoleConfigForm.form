@@ -8,7 +8,7 @@
     <properties/>
     <border type="none"/>
     <children>
-      <grid id="1a8bc" layout-manager="GridLayoutManager" row-count="25" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
+      <grid id="1a8bc" layout-manager="GridLayoutManager" row-count="26" column-count="3" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
         <margin top="0" left="0" bottom="0" right="0"/>
         <constraints>
           <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="3" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
@@ -283,15 +283,68 @@
               <text value="Underline only (do not change hyperlink text color)."/>
             </properties>
           </component>
+          <grid id="hyperlinkColorRow" layout-manager="GridLayoutManager" row-count="2" column-count="5" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
+            <margin top="0" left="0" bottom="0" right="0"/>
+            <constraints>
+              <grid row="19" column="0" row-span="1" col-span="3" vsize-policy="3" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+            </constraints>
+            <properties/>
+            <border type="none"/>
+            <children>
+              <component id="hyperlinkColorLabel" class="javax.swing.JLabel" binding="hyperlinkColorLabel" custom-create="true">
+                <constraints>
+                  <grid row="0" column="0" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Hyperlink color:"/>
+                </properties>
+              </component>
+              <component id="hyperlinkColorSchemeRadioButton" class="javax.swing.JRadioButton" binding="hyperlinkColorSchemeRadioButton" custom-create="true">
+                <constraints>
+                  <grid row="0" column="1" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Color scheme"/>
+                </properties>
+              </component>
+              <component id="hyperlinkColorCustomRadioButton" class="javax.swing.JRadioButton" binding="hyperlinkColorCustomRadioButton" custom-create="true">
+                <constraints>
+                  <grid row="0" column="2" row-span="1" col-span="1" vsize-policy="0" hsize-policy="3" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties>
+                  <text value="Custom"/>
+                </properties>
+              </component>
+              <component id="hyperlinkColorChooser" class="com.intellij.ui.ColorPanel" binding="hyperlinkColorChooser" custom-create="true">
+                <constraints>
+                  <grid row="0" column="3" row-span="1" col-span="1" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false">
+                    <preferred-size width="110" height="-1"/>
+                  </grid>
+                </constraints>
+                <properties/>
+              </component>
+              <hspacer id="hyperlinkColorSpacer">
+                <constraints>
+                  <grid row="0" column="4" row-span="1" col-span="1" vsize-policy="1" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+                </constraints>
+              </hspacer>
+              <component id="hyperlinkColorHintLabel" class="javax.swing.JLabel" binding="hyperlinkColorHintLabel" custom-create="true">
+                <constraints>
+                  <grid row="1" column="0" row-span="1" col-span="5" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+                </constraints>
+                <properties/>
+              </component>
+            </children>
+          </grid>
           <component id="separator1" class="javax.swing.JSeparator">
             <constraints>
-              <grid row="19" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+              <grid row="20" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="6" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties/>
           </component>
           <component id="indexLabel" class="javax.swing.JLabel">
             <constraints>
-              <grid row="20" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
+              <grid row="21" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="0" anchor="8" fill="0" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties>
               <font style="1"/>
@@ -300,7 +353,7 @@
           </component>
           <component id="indexStatusLabel" class="javax.swing.JLabel" binding="indexStatusLabel" custom-create="true">
             <constraints>
-              <grid row="21" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
+              <grid row="22" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="7" anchor="8" fill="1" indent="0" use-parent-layout="false">
                 <minimum-size width="0" height="-1"/>
                 <preferred-size width="10" height="-1"/>
               </grid>
@@ -312,7 +365,7 @@
           <grid id="indexProgressPanel" layout-manager="GridLayoutManager" row-count="1" column-count="2" same-size-horizontally="false" same-size-vertically="false" hgap="-1" vgap="-1">
             <margin top="0" left="0" bottom="0" right="0"/>
             <constraints>
-              <grid row="22" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
+              <grid row="23" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="3" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties/>
             <border type="none"/>
@@ -342,7 +395,7 @@
           <grid id="buttonPanel" layout-manager="GridLayoutManager" row-count="1" column-count="4" same-size-horizontally="false" same-size-vertically="false" hgap="5" vgap="-1">
             <margin top="0" left="0" bottom="0" right="0"/>
             <constraints>
-              <grid row="23" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
+              <grid row="24" column="0" row-span="1" col-span="3" vsize-policy="0" hsize-policy="3" anchor="0" fill="1" indent="0" use-parent-layout="false"/>
             </constraints>
             <properties/>
             <border type="none"/>
@@ -380,7 +433,7 @@
           </grid>
           <vspacer id="indexVspacer">
             <constraints>
-              <grid row="24" column="0" row-span="1" col-span="3" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
+              <grid row="25" column="0" row-span="1" col-span="3" vsize-policy="6" hsize-policy="1" anchor="0" fill="2" indent="0" use-parent-layout="false"/>
             </constraints>
           </vspacer>
         </children>

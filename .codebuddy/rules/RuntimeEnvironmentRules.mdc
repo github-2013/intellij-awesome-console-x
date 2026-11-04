@@ -1,0 +1,16 @@
+---
+description: 跨平台 Java 与 Gradle 运行环境选择，避免构建、测试和运行时使用错误 JDK
+alwaysApply: true
+enabled: true
+---
+
+# 运行时环境
+
+- **以项目配置为准**：Java 版本读取 `build.gradle.kts` 的工具链配置（当前 21），Gradle 版本读取 `gradle/wrapper/gradle-wrapper.properties`（当前 8.8），不擅自更改。
+- **按需选择 JDK**：依次检查用户指定路径、`JAVA_HOME`、本机已安装的兼容 JDK。
+- **核验后复用**：首次执行前，用候选目录下的 `java`、`javac` 核实版本。同一会话复用已验证路径，仅在失效或环境变化时重新查找，不盲信默认 Java 或反复全盘搜索。
+- **使用项目 Wrapper**：按操作系统和 Shell 使用 `./gradlew` 或 `.\gradlew.bat`，不使用全局 Gradle。
+- **显式传递环境**：每条 Gradle 命令按当前 Shell 设置 `JAVA_HOME`、`PATH`，并通过 `-Dorg.gradle.java.home` 指向同一已验证的 JDK 21，不依赖上一条命令的环境变量。
+- **区分运行时**：用 `--version` 核对 Gradle 版本和启动 JVM；它不能单独证明 Daemon 或工具链选择正确。存在冲突时核对相关配置和实际任务日志；`runIde` 沿用项目插件的运行时配置。
+- **缺失时停止**：没有符合要求的完整 JDK 时，报告问题并请用户指定或安装，不静默回退到其他版本或未知的 IDE 内置运行时。
+- **不擅自修改环境**：未经用户同意，不安装或升级运行时，不修改全局配置、不将本机路径写入项目配置或删除缓存；不得将环境核验成功当作构建、测试通过。

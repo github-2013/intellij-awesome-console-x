@@ -90,6 +90,8 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		storage.useIgnorePattern = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_PATTERN;
 		storage.useIgnoreStyle = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_STYLE;
 		storage.preserveAnsiColors = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_PRESERVE_ANSI_COLORS;
+		storage.useCustomHyperlinkColor = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_CUSTOM_HYPERLINK_COLOR;
+		storage.setHyperlinkColorValue(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR);
 		
 		// 创建过滤器实例
 		filter = new AwesomeLinkFilter(getProject());

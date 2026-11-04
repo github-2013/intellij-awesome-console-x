@@ -76,6 +76,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.preserveAnsiColorsCheckBox.setSelected(storage.preserveAnsiColors);
 		form.showNotificationsCheckBox.setSelected(storage.showNotifications);
 		form.underlineOnlyCheckBox.setSelected(storage.underlineOnly);
+		form.initHyperlinkColor(storage.useCustomHyperlinkColor, storage.getHyperlinkColorValue());
 	}
 
 	/**
@@ -167,6 +168,8 @@ public class AwesomeConsoleConfig implements Configurable {
 				|| form.preserveAnsiColorsCheckBox.isSelected() != storage.preserveAnsiColors
 				|| form.showNotificationsCheckBox.isSelected() != storage.showNotifications
 				|| form.underlineOnlyCheckBox.isSelected() != storage.underlineOnly
+				|| form.isCustomHyperlinkColorSelected() != storage.useCustomHyperlinkColor
+				|| !Objects.equals(form.resolveCustomHyperlinkColor(), storage.getHyperlinkColorValue())
 				;
 	}
 
@@ -222,6 +225,9 @@ public class AwesomeConsoleConfig implements Configurable {
 		storage.preserveAnsiColors = form.preserveAnsiColorsCheckBox.isSelected();
 		storage.showNotifications = form.showNotificationsCheckBox.isSelected();
 		storage.underlineOnly = form.underlineOnlyCheckBox.isSelected();
+		storage.useCustomHyperlinkColor = form.isCustomHyperlinkColorSelected();
+		storage.setHyperlinkColorValue(form.resolveCustomHyperlinkColor());
+		form.initHyperlinkColor(storage.useCustomHyperlinkColor, storage.getHyperlinkColorValue());
 
 		// 发布配置变更事件（包括需要重建缓存的变更和其他配置变更）
 		if (changeType != null) {
@@ -285,7 +291,9 @@ public class AwesomeConsoleConfig implements Configurable {
 				storage.resolveSymlink != form.resolveSymlinkCheckBox.isSelected() ||
 				storage.preserveAnsiColors != form.preserveAnsiColorsCheckBox.isSelected() ||
 				storage.showNotifications != form.showNotificationsCheckBox.isSelected() ||
-				storage.underlineOnly != form.underlineOnlyCheckBox.isSelected()) {
+				storage.underlineOnly != form.underlineOnlyCheckBox.isSelected() ||
+				storage.useCustomHyperlinkColor != form.isCustomHyperlinkColorSelected() ||
+				!Objects.equals(form.resolveCustomHyperlinkColor(), storage.getHyperlinkColorValue())) {
 			logger.debug("Config change detected: other settings changed (no cache rebuild needed)");
 			return AwesomeConsoleConfigListener.ConfigChangeType.OTHER_CHANGED;
 		}

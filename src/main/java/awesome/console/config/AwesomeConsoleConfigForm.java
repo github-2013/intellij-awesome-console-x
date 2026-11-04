@@ -2,6 +2,7 @@ package awesome.console.config;
 
 import awesome.console.AwesomeLinkFilter;
 import awesome.console.util.ExceptionHandling;
+import awesome.console.util.HyperlinkUtils;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.diagnostic.Logger;
@@ -9,6 +10,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.text.StringUtil;
+import com.intellij.ui.ColorPanel;
 import com.intellij.ui.JBColor;
 
 import java.awt.*;
@@ -25,6 +27,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 @SuppressWarnings("SameParameterValue")
 public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
@@ -50,6 +53,15 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     public JCheckBox preserveAnsiColorsCheckBox;
     public JCheckBox showNotificationsCheckBox;
     public JCheckBox underlineOnlyCheckBox;
+    public JLabel hyperlinkColorLabel;
+    public JRadioButton hyperlinkColorSchemeRadioButton;
+    public JRadioButton hyperlinkColorCustomRadioButton;
+    public ColorPanel hyperlinkColorChooser;
+    public JLabel hyperlinkColorHintLabel;
+    // 跟随配色方案时色板显示方案颜色，用户上次选的自定义色暂存在这里
+    private Color customHyperlinkColor = DEFAULT_HYPERLINK_COLOR;
+    // 色板当前显示的是否为自定义色（而非配色方案颜色）
+    private boolean isChooserShowingCustomColor;
 
     // 索引管理相关字段
     public JLabel indexStatusLabel;
@@ -94,6 +106,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         setupPreserveAnsiColors();
         setupShowNotifications();
         setupUnderlineOnly();
+        setupHyperlinkColor();
         setupIndexManagement();
     }
 
@@ -310,6 +323,107 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     private void setupUnderlineOnly() {
         underlineOnlyCheckBox = initCheckBox(DEFAULT_UNDERLINE_ONLY);
         underlineOnlyCheckBox.setToolTipText("When enabled, hyperlinks will only show underline without changing text color.");
+    }
+
+    /**
+     * 超链接颜色：跟随配色方案或自定义。跟随方案时色板只读并显示方案里的实际颜色，
+     * 自定义时色板可编辑；两种模式来回切换会保留上次选的自定义色。
+     */
+    private void setupHyperlinkColor() {
+        hyperlinkColorLabel = new JLabel();
+        hyperlinkColorLabel.setToolTipText("Color of hyperlinks in the Run/Debug console and the new terminal (the classic terminal ignores link styles).");
+        hyperlinkColorSchemeRadioButton = new JRadioButton();
+        hyperlinkColorSchemeRadioButton.setToolTipText("Follow the hyperlink color of the current IDE color scheme (Editor | Color Scheme | General | Hyperlinks). The swatch shows that color.");
+        hyperlinkColorCustomRadioButton = new JRadioButton();
+        hyperlinkColorCustomRadioButton.setToolTipText("Use the color picked in the swatch. With Underline only, this color is used for the underline and the text color stays unchanged.");
+        ButtonGroup hyperlinkColorModeGroup = new ButtonGroup();
+        hyperlinkColorModeGroup.add(hyperlinkColorSchemeRadioButton);
+        hyperlinkColorModeGroup.add(hyperlinkColorCustomRadioButton);
+        hyperlinkColorSchemeRadioButton.addActionListener(e -> syncHyperlinkColorChooser());
+        hyperlinkColorCustomRadioButton.addActionListener(e -> syncHyperlinkColorChooser());
+
+        hyperlinkColorChooser = new ColorPanel();
+        // ColorPanel 内部文本框铺满整个组件，需继承父组件的右键菜单才能 Restore defaults
+        applyToColorChooserChildren(child -> child.setInheritsPopupMenu(true));
+        // 恢复默认只改表单，需 Apply 才写回 storage
+        ActionListener restoreDefaults = e -> initHyperlinkColor(DEFAULT_USE_CUSTOM_HYPERLINK_COLOR, DEFAULT_HYPERLINK_COLOR);
+        setupRestore(hyperlinkColorSchemeRadioButton, restoreDefaults);
+        setupRestore(hyperlinkColorCustomRadioButton, restoreDefaults);
+        setupRestore(hyperlinkColorChooser, restoreDefaults);
+
+        hyperlinkColorHintLabel = new JLabel("* Applies to new console output after Apply");
+        Font currentFont = hyperlinkColorHintLabel.getFont();
+        hyperlinkColorHintLabel.setFont(currentFont.deriveFont(currentFont.getSize() - 2.0f));
+        hyperlinkColorHintLabel.setForeground(JBColor.GRAY);
+
+        initHyperlinkColor(DEFAULT_USE_CUSTOM_HYPERLINK_COLOR, DEFAULT_HYPERLINK_COLOR);
+    }
+
+    /**
+     * 按单选按钮刷新色板：从自定义切到方案时暂存色板上的自定义色，切回时还原。
+     */
+    private void syncHyperlinkColorChooser() {
+        boolean useCustom = hyperlinkColorCustomRadioButton.isSelected();
+        if (useCustom != isChooserShowingCustomColor) {
+            if (useCustom) {
+                hyperlinkColorChooser.setSelectedColor(customHyperlinkColor);
+            } else {
+                Color pickedColor = hyperlinkColorChooser.getSelectedColor();
+                customHyperlinkColor = pickedColor == null ? DEFAULT_HYPERLINK_COLOR : pickedColor;
+            }
+            isChooserShowingCustomColor = useCustom;
+        }
+        hyperlinkColorChooser.setEditable(useCustom);
+        if (!useCustom) {
+            hyperlinkColorChooser.setSelectedColor(HyperlinkUtils.extractHyperlinkColorFromColorScheme());
+            // 只读时 setEditable / setSelectedColor 都会清空内部文本框的提示，必须最后设置
+            applyToColorChooserChildren(child -> child.setToolTipText(
+                    "Hyperlink color of the current color scheme. Select Custom to pick a color."));
+        }
+    }
+
+    /**
+     * ColorPanel 的提示和右键菜单都取自内部文本框，只能逐个设置其子组件。
+     *
+     * @param action 对每个子组件执行的操作
+     */
+    private void applyToColorChooserChildren(@NotNull Consumer<JComponent> action) {
+        for (Component child : hyperlinkColorChooser.getComponents()) {
+            if (child instanceof JComponent component) {
+                action.accept(component);
+            }
+        }
+    }
+
+    /**
+     * 用已保存的配置回填颜色模式和色板。
+     *
+     * @param useCustom 是否使用自定义颜色
+     * @param customColor 已保存的自定义颜色
+     */
+    public void initHyperlinkColor(boolean useCustom, @NotNull Color customColor) {
+        customHyperlinkColor = customColor;
+        // 标记色板未显示自定义色，交由 sync 统一写色板，且不会把旧色板值暂存回来
+        isChooserShowingCustomColor = false;
+        (useCustom ? hyperlinkColorCustomRadioButton : hyperlinkColorSchemeRadioButton).setSelected(true);
+        syncHyperlinkColorChooser();
+    }
+
+    /**
+     * @return 是否选中了自定义颜色
+     */
+    public boolean isCustomHyperlinkColorSelected() {
+        return hyperlinkColorCustomRadioButton.isSelected();
+    }
+
+    /**
+     * 解析表单里的自定义颜色：自定义模式取色板，跟随方案时取暂存值。
+     *
+     * @return 自定义颜色，色板被清空时为 null
+     */
+    @Nullable
+    public Color resolveCustomHyperlinkColor() {
+        return isChooserShowingCustomColor ? hyperlinkColorChooser.getSelectedColor() : customHyperlinkColor;
     }
 
     /**

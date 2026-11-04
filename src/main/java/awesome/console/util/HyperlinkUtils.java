@@ -7,14 +7,17 @@ import com.intellij.execution.filters.HyperlinkInfoFactory;
 import com.intellij.openapi.editor.LogicalPosition;
 import com.intellij.openapi.editor.colors.CodeInsightColors;
 import com.intellij.openapi.editor.colors.EditorColorsManager;
+import com.intellij.openapi.editor.colors.TextAttributesKey;
 import com.intellij.openapi.editor.markup.EffectType;
 import com.intellij.openapi.editor.markup.TextAttributes;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.util.PathUtil;
+import java.awt.Color;
 import java.util.List;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import org.jetbrains.annotations.VisibleForTesting;
 
 import static awesome.console.util.ExceptionHandling.rethrowIfExceptionMustNotBeLogged;
 
@@ -165,14 +168,15 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 创建超链接样式的文本属性
-     * 
+     * 创建超链接样式的文本属性。
+     * 启用自定义颜色时在配色方案样式上覆盖前景色和下划线色，不改动方案对象本身。
+     *
      * @return 文本属性对象，失败时返回null
      */
     @Nullable
     public static TextAttributes createHyperlinkAttributes() {
         try {
-            return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
+            return attributesFor(CodeInsightColors.HYPERLINK_ATTRIBUTES, false);
         } catch (Exception e) {
             rethrowIfExceptionMustNotBeLogged(e);
             return null;
@@ -180,14 +184,15 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 创建已访问超链接样式的文本属性
-     * 
+     * 创建已访问超链接样式的文本属性。
+     * 自定义颜色对未访问和已访问使用同一色值。
+     *
      * @return 文本属性对象，失败时返回null
      */
     @Nullable
     public static TextAttributes createFollowedHyperlinkAttributes() {
         try {
-            return EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES);
+            return attributesFor(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES, false);
         } catch (Exception e) {
             rethrowIfExceptionMustNotBeLogged(e);
             return null;
@@ -195,24 +200,15 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 创建仅下划线效果的超链接样式（不改变文本颜色）
-     * 
+     * 创建仅下划线效果的超链接样式（不改变文本颜色）。
+     * 自定义颜色只画在下划线上。
+     *
      * @return 仅包含下划线效果的文本属性对象，失败时返回null
      */
     @Nullable
     public static TextAttributes createUnderlineOnlyAttributes() {
         try {
-            TextAttributes attr = new TextAttributes();
-            // 仅设置下划线效果，不设置前景色，保持原有文本颜色
-            attr.setEffectType(EffectType.LINE_UNDERSCORE);
-            // 获取当前配色方案的超链接颜色用于下划线
-            TextAttributes hyperlinkAttr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
-            if (hyperlinkAttr != null && hyperlinkAttr.getEffectColor() != null) {
-                attr.setEffectColor(hyperlinkAttr.getEffectColor());
-            } else if (hyperlinkAttr != null && hyperlinkAttr.getForegroundColor() != null) {
-                attr.setEffectColor(hyperlinkAttr.getForegroundColor());
-            }
-            return attr;
+            return attributesFor(CodeInsightColors.HYPERLINK_ATTRIBUTES, true);
         } catch (Exception e) {
             rethrowIfExceptionMustNotBeLogged(e);
             return null;
@@ -220,27 +216,81 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 创建仅下划线效果的已访问超链接样式（不改变文本颜色）
-     * 
+     * 创建仅下划线效果的已访问超链接样式（不改变文本颜色）。
+     *
      * @return 仅包含下划线效果的文本属性对象，失败时返回null
      */
     @Nullable
     public static TextAttributes createFollowedUnderlineOnlyAttributes() {
         try {
-            TextAttributes attr = new TextAttributes();
-            // 仅设置下划线效果，不设置前景色，保持原有文本颜色
-            attr.setEffectType(EffectType.LINE_UNDERSCORE);
-            // 获取当前配色方案的已访问超链接颜色用于下划线
-            TextAttributes followedAttr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES);
-            if (followedAttr != null && followedAttr.getEffectColor() != null) {
-                attr.setEffectColor(followedAttr.getEffectColor());
-            } else if (followedAttr != null && followedAttr.getForegroundColor() != null) {
-                attr.setEffectColor(followedAttr.getForegroundColor());
-            }
-            return attr;
+            return attributesFor(CodeInsightColors.FOLLOWED_HYPERLINK_ATTRIBUTES, true);
         } catch (Exception e) {
             rethrowIfExceptionMustNotBeLogged(e);
             return null;
         }
+    }
+
+    /**
+     * 按配色方案键生成超链接样式，并按需套上自定义颜色。
+     *
+     * @param key 配色方案中的超链接样式键
+     * @param underlineOnly 为 true 时不设置前景色，只保留下划线
+     * @return 文本属性；配色方案缺失且未自定义颜色时可能返回 null
+     */
+    @Nullable
+    private static TextAttributes attributesFor(@NotNull TextAttributesKey key, boolean underlineOnly) {
+        TextAttributes scheme = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(key);
+        return buildHyperlinkAttributes(scheme, config.getEffectiveHyperlinkColor(), underlineOnly);
+    }
+
+    /**
+     * 读取当前全局配色方案中的超链接颜色，与未自定义时链接实际显示的文字颜色一致。
+     *
+     * @return 前景色，缺失时退回效果色（下划线色）；都没有时返回 null
+     */
+    @Nullable
+    public static Color extractHyperlinkColorFromColorScheme() {
+        TextAttributes scheme = EditorColorsManager.getInstance().getGlobalScheme()
+                .getAttributes(CodeInsightColors.HYPERLINK_ATTRIBUTES);
+        if (scheme == null) {
+            return null;
+        }
+        return scheme.getForegroundColor() != null ? scheme.getForegroundColor() : scheme.getEffectColor();
+    }
+
+    /**
+     * 在配色方案样式上合成超链接样式，不改动方案对象本身。
+     * <p>
+     * 自定义颜色只替换方案已有的颜色：效果色为 null 时平台不绘制任何效果，因此方案没有下划线时也不会凭空加上。
+     * 不能用效果类型判断，平台 {@link TextAttributes} 的默认效果类型是 BOXED 而非 null。
+     *
+     * @param scheme 配色方案中的样式，可为 null
+     * @param custom 自定义颜色，null 表示沿用配色方案
+     * @param underlineOnly 为 true 时不设置前景色，只保留下划线
+     * @return 文本属性；配色方案缺失且未自定义颜色时可能返回 null
+     */
+    @Nullable
+    @VisibleForTesting
+    public static TextAttributes buildHyperlinkAttributes(
+            @Nullable TextAttributes scheme, @Nullable Color custom, boolean underlineOnly) {
+        if (underlineOnly) {
+            Color underlineColor = custom;
+            if (underlineColor == null && scheme != null) {
+                underlineColor = scheme.getEffectColor() != null ? scheme.getEffectColor() : scheme.getForegroundColor();
+            }
+            TextAttributes attr = new TextAttributes();
+            attr.setEffectType(EffectType.LINE_UNDERSCORE);
+            attr.setEffectColor(underlineColor);
+            return attr;
+        }
+        if (custom == null) {
+            return scheme;
+        }
+        TextAttributes attr = scheme == null ? new TextAttributes() : scheme.clone();
+        attr.setForegroundColor(custom);
+        if (attr.getEffectColor() != null) {
+            attr.setEffectColor(custom);
+        }
+        return attr;
     }
 }

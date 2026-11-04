@@ -37,6 +37,7 @@
 | **Resolve Symlinks** | 是否解析符号链接到实际文件路径。开启后，符号链接将被解析为真实路径再进行匹配。兼容 IDEA Resolve Symlinks 插件（实验性） | ❌ 关闭 |
 | **Preserve ANSI color** | 保留控制台输出中的 ANSI 颜色代码和格式化信息。适用于使用现代终端提示符（如 oh-my-posh、starship）的场景，避免 ANSI 转义序列干扰链接匹配 | ❌ 关闭 |
 | **Underline only** | 超链接仅显示下划线效果，不改变文本颜色。适用于希望保持控制台原始颜色方案的用户 | ❌ 关闭 |
+| **Hyperlink color** | 为 Run/Debug Console 与新版 Terminal 中的超链接指定颜色（经典 Terminal 不生效）。**Color scheme** 沿用 IDE 配色方案的超链接颜色，色板只读显示该颜色；**Custom** 使用色板所选颜色（初始为 `#589DF6`），改文字颜色，配色方案带下划线时下划线同色；与 Underline only 同时开启时只改下划线颜色。已访问与未访问链接同色。Apply 后只对之后的输出生效 | Color scheme |
 
 ### File Index Management（文件索引管理）
 
@@ -64,6 +65,7 @@
 #### 🎨 终端美化兼容
 1. 开启 **Preserve ANSI color** 保留终端颜色格式
 2. 开启 **Underline only** 避免超链接颜色覆盖终端主题配色
+3. 需要固定链接颜色时，把 **Hyperlink color** 切到 **Custom**；与 **Underline only** 同时开启时只给下划线上色
 
 ---
 
