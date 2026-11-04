@@ -100,30 +100,45 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/** 定义公共静态final常量 DWC（Double Width Character），JediTerm 使用 U+E000 标记双宽字符的第二部分 */
 	public static final String DWC = "\uE000";
 
-	/** 定义公共静态final常量，用于匹配文件路径后的行号和列号（如 :10 或 :10:5）*/
+	/** 定义公共静态final常量，用于匹配文件路径后的行号和列号（如 :10、:10:5、#L10C5、line 10 column 5）*/
 	public static final String REGEX_ROW_COL = String.format(
-        // 整体模式：可选的行号和列号部分，不区分大小写
-        "(?i:\\s*+(?:%s)%s(?:%s%s%s)?)?",
+        // 整体模式：可选的行号和列号部分（及可选的 #L 范围后缀与右词边界），不区分大小写
+        // 右边界：数字后不能紧跟单词字符；仅 line/column 自然语言格式额外拒绝小数（如 "line 24.5s"），
+        // 冒号格式保留 "file.go:10.5,12.3"（Go 覆盖率）这类行号后跟 ".数字" 的写法
+        "(?i:(?:%s)%s(?:(?:%s)%s(?:\\s*[)\\]])?)?%s(?!\\w|\\.\\d(?<=(?:line|col(?:umn)?)\\s{0,10}:?\\s{0,10}\\d{1,20}\\.\\d)))?",
         // start of the row - 行号开始的各种格式
         // 使用 RegexUtils.join 连接多种可能的行号起始格式
         RegexUtils.join(
-            // 格式1：冒号或逗号后跟 "line"（如 ":line 10"）
-            "[:,]\\s*line",
-            // 格式2：单引号后跟 "line:"（如 "'line:10"）
-            "'\\s*line:",
-            // 格式3：冒号后可选方括号（如 ":10" 或 ":[10"）
-            ":(?:\\s*\\[)?",
-            // 格式4：左括号后跟数字（如 "(10)" 或 "(10:5)"）
-            "\\((?=\\s*\\d+\\s*(?:[:,]\\s*\\d+)?\\s*\\))"
+            // 格式1：冒号或逗号后跟可选 "on" 及 "line"（如 ":line 10"、", line 10"、", on line 10"、": line: 10"）
+            "\\s*+[:,]\\s*(?:on\\s+)?line\\s*:?",
+            // 格式2：单引号后跟可选 "on" 及 "line"（如 "'line:10"、"' line: 14"、"' line 14"、"' on line 14"）
+            "\\s*+'\\s*(?:on\\s+)?line\\s*:?",
+            // 格式3：双引号闭合或字母开头扩展名后跟空白与 "line"（如 "\"a b.py\" line 10"、"script.sh line 10"）
+            "(?<=\"|\\.[A-Za-z][A-Za-z0-9]{0,9})\\s++line\\s*:?",
+            // 格式4：冒号后可选方括号（如 ":10" 或 ":[10"）
+            "\\s*+:(?:\\s*\\[)?",
+            // 格式5：左括号后跟数字（如 "(10)"、"(10:5)"）或扩展名/引号后跟 "(line 10, column 5)"
+            "\\s*+\\((?=\\s*\\d+\\s*(?:[:,]\\s*(?:col(?:umn)?\\s*:?\\s*)?\\d+)?\\s*\\))",
+            "(?<=\"|\\.[A-Za-z][A-Za-z0-9]{0,9})\\s*+\\(\\s*line\\s*:?(?=\\s*\\d+\\s*(?:(?:[:,]\\s*(?:col(?:umn)?\\s*:?\\s*)?|\\s+col(?:umn)?\\s*:?\\s*)\\d+)?\\s*\\))",
+            // 格式6：GitHub / Markdown 锚点式行号（紧贴路径，如 "#L10"、"#L10C5"、"#L10-L20"）
+            "#L(?=\\d)"
         ),
-        // row - 捕获行号（一个或多个数字）
-        "\\s*(?<row>\\d+)",
-        // start of the col - 列号开始的格式（冒号或逗号，可选 "col" 或 "column"）
-        "\\s*[:,](?:\\s*col(?:umn)?)?",
-        // col - 捕获列号（一个或多个数字）
-        "\\s*(?<col>\\d+)",
-        // end of the col - 列号结束的可选右括号或右方括号
-        "(?:\\s*[)\\]])?"
+        // row - 捕获行号（占有量词防止 "24ms" 回退成 "2"）
+        "\\s*(?<row>\\d++)",
+        // start of the col - 列号开始的格式（冒号后可选 "col/column"、括号/方括号内逗号、冒号行号后紧贴的逗号、显式 "col/column"、或 #L 后的 C）
+        RegexUtils.join(
+            "\\s*:(?:\\s*col(?:umn)?\\s*:?)?",
+            "\\s*,\\s*col(?:umn)?\\s*:?",
+            "(?<=\\(\\s{0,10}(?:line\\s{0,10}:?\\s{0,10})?\\d{1,20}|:\\s{0,10}\\[\\s{0,10}\\d{1,20})\\s*,",
+            // 冒号行号后无空白紧贴逗号与数字（如 "foo.c:10,5"），与 ", 5 errors" 这类统计文本区分
+            "(?<=:\\s{0,10}\\d{1,20}),(?=\\d)",
+            "\\s++col(?:umn)?\\s*:?",
+            "(?<=#L\\d{1,20})C(?=\\d)"
+        ),
+        // col - 捕获列号（占有量词）
+        "\\s*(?<col>\\d++)",
+        // end of the row/range - 单行号括号闭合（如 "(line 10)"）或 #L 行范围后缀（如 "#L10-L20"、"#L10C5-L20C8"）
+        "(?:(?<=\\(\\s{0,10}(?:line\\s{0,10}:?\\s{0,10})?\\d{1,20})\\s*\\)|(?<=#L\\d{1,20}(?:C\\d{1,20})?)-L?\\d++(?:C\\d++)?)?"
 	);
 
 	/**
@@ -179,6 +194,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	// 使用后向断言确保点号前面是行首或非字母字符
 	public static final String REGEX_DOTS_PATH = "(?<=^|[^A-Za-z])\\.+";
 
+	/** 括号内行列号片段（如 "(10)"、"(10,5)"、"(line 10, column 5)"），供文件名停止模式复用 */
+	private static final String REGEX_PAREN_ROW_COL =
+			"\\(\\s*(?i:line\\s*:?\\s*)?\\d+(?:\\s*[:,]?\\s*(?i:col(?:umn)?\\s*:?\\s*)?\\d+)?\\s*\\)";
+
 	/** 文件名正则表达式 */
 	// 定义公共静态final常量，匹配文件名（不包含路径分隔符）
 	// 排除特定的停止模式（如括号中的行号、驱动器号等）
@@ -186,7 +205,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
         "((?!%s)(?:%s))+(?<!%s)",
         // stop with
         RegexUtils.join(
-            "\\(\\d+(?:,\\d+)?\\)",
+            // 紧跟扩展名的括号行号总是停止（如 "Foo.java(10).bar"、"Program.cs(10,5)"）
+            "(?<=\\.[A-Za-z][A-Za-z0-9]{0,9})" + REGEX_PAREN_ROW_COL,
+            // 其余括号数字仅在右侧为边界时停止，保留 "file(1).ts"、"app_(2)_dir" 这类文件名
+            REGEX_PAREN_ROW_COL + "(?!\\w|\\.\\S)",
+            "(?i:#L\\d+(?:C\\d+)?(?:-L?\\d+(?:C\\d+)?)?)(?!\\w|\\.\\S)",
             "\\(\\S+\\.(java|kts?):\\d+\\)",
             "[,;]\\w+[/\\\\:]",
             // drive or protocol
@@ -262,6 +285,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/** 只包含字母的匹配模式 */
 	private static final Pattern ONLY_LETTERS_PATTERN = Pattern.compile("^[A-Za-z]+$");
+
+	/** file:// URL 尾部的 #L 行列号锚点模式（如 #L10、#L10C5、#L10-L20） */
+	private static final Pattern FILE_URL_LINE_ANCHOR_PATTERN = Pattern.compile(
+			"(?i)#L(?<row>\\d+)(?:C(?<col>\\d+))?(?:-L?\\d+(?:C\\d+)?)?$"
+	);
 
 	/**
 	 * Matches a structurally-valid Windows path: optional drive-letter prefix
@@ -643,10 +671,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			for (int i = 0; i < chunks.size(); i++) {
 				final String chunk = chunks.get(i);
 				
-				// 如果启用了URL搜索，提取URL并生成超链接
+				// 如果启用了URL搜索，提取URL并生成超链接（跳过与已识别文件超链接区间重叠的重复项）
 				if (config.searchUrls) {
 					try {
-						results.addAll(extractUrlLinksFromLine(chunk, startPoint + offset));
+						for (ResultItem urlItem : extractUrlLinksFromLine(chunk, startPoint + offset)) {
+							if (!hasOverlappingRangeItem(results, urlItem)) {
+								results.add(urlItem);
+							}
+						}
 					} catch (Exception e) {
 						ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 						logger.error(String.format(
@@ -885,14 +917,41 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
             if (null != file && !FileUtils.quickExists(file)) {
                 continue;
             }
+			if (null != file) {
+				Matcher anchorMatcher = FILE_URL_LINE_ANCHOR_PATTERN.matcher(normalizedUrl);
+				if (anchorMatcher.find()) {
+					int row = IntegerUtil.parseInt(anchorMatcher.group("row")).orElse(0);
+					int col = IntegerUtil.parseInt(anchorMatcher.group("col")).orElse(0);
+					addHyperlinkToResults(
+							results,
+							startPoint + match.start,
+							startPoint + match.end,
+							HyperlinkUtils.buildFileHyperlinkInfo(project, file, row, col)
+					);
+					continue;
+				}
+			}
 		    addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, new OpenUrlHyperlinkInfo(normalizedUrl));
 	    }
 	    return results;
 	}
 
 	/**
+	 * 检查结果列表中是否已有与候选项高亮区间重叠的条目，用于避免文件通道与 URL 通道对同一文本重复成链
+	 */
+	private static boolean hasOverlappingRangeItem(@NotNull List<ResultItem> existing, @NotNull ResultItem candidate) {
+		for (ResultItem item : existing) {
+			if (item.getHighlightStartOffset() < candidate.getHighlightEndOffset()
+					&& candidate.getHighlightStartOffset() < item.getHighlightEndOffset()) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * 从URL中提取文件路径
-	 * 处理 file:// 协议的 URL，将其转换为本地文件路径
+	 * 处理 file:// 协议的 URL，将其转换为本地文件路径（自动剥离尾部 #L 行号锚点并规范化 Windows /C:/ 路径）
 	 * 同时也处理已经是绝对路径的情况
 	 *
 	 * @param url URL字符串，可能是 file:// 协议或绝对路径
@@ -902,16 +961,24 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	public String getFileFromUrl(@NotNull final String url) {
 		// 如果 URL 已经是绝对路径，直接返回
 		if (isAbsolutePath(url)) {
-			return url;
+			return normalizePathFormat(stripFileUrlLineAnchor(url));
 		}
 		// 定义 file:// 协议前缀
 		final String fileUrl = "file://";
 		// 如果 URL 以 file:// 开头，移除协议前缀并返回路径
 		if (url.startsWith(fileUrl)) {
-			return url.substring(fileUrl.length());
+			return normalizePathFormat(stripFileUrlLineAnchor(url.substring(fileUrl.length())));
 		}
 		// 如果不是文件 URL，返回 null
 		return null;
+	}
+
+	/**
+	 * 剥离文件 URL 尾部的 #L 行列号锚点（如 #L42、#L42C5、#L42-L50）
+	 */
+	@NotNull
+	private static String stripFileUrlLineAnchor(@NotNull final String filePath) {
+		return FILE_URL_LINE_ANCHOR_PATTERN.matcher(filePath).replaceFirst("");
 	}
 
 	/**
@@ -3459,14 +3526,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 		// 遍历所有成对字符
 		for (final String pair : pairs) {
+			final char startChar = pair.charAt(0);
+			final char endChar = pair.charAt(1);
 			// 提取开始字符
-			final String start = String.valueOf(pair.charAt(0));
+			final String start = String.valueOf(startChar);
 			// 提取结束字符
-			final String end = String.valueOf(pair.charAt(1));
+			final String end = String.valueOf(endChar);
 			// 如果字符串以开始字符开头
 			if (s.startsWith(start)) {
-				// 如果也以结束字符结尾，则完全被包围
-				if (s.endsWith(end)) {
+				// 如果也以结束字符结尾，且内部开闭符号配平（避免 "(dir/file(1)" 误剥离属于文件名的右括号）
+				if (s.endsWith(end) && (startChar == endChar || isPairBalanced(s.substring(1, s.length() - 1), startChar, endChar))) {
 					// 设置左右偏移量均为 1
 					offsets[0] = 1;
 					offsets[1] = 1;
@@ -3481,8 +3550,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				// e.g. file 'build.gradle' line: 14
 				// 行号和列号在边界外，不认为被包围
 				return false;
-			} else if (s.endsWith(end) && !s.substring(0, s.length() - 1).contains(start)) {
-				// 如果以结束字符结尾且内容不包含开始字符，则只有结束包围
+			} else if (s.endsWith(end) && (startChar == endChar
+					? !s.substring(0, s.length() - 1).contains(start)
+					: hasUnbalancedClosingChar(s, startChar, endChar))) {
+				// 如果以结束字符结尾且右包围符多余（如 "(see dir/file(1).ts)"），则只有结束包围
 				offsets[0] = 0;
 				offsets[1] = 1;
 				return true;
@@ -3490,6 +3561,44 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 		// 没有被任何成对字符包围
 		return false;
+	}
+
+	/**
+	 * 检查字符串中的开闭符号（如括号、方括号）是否配平
+	 */
+	private static boolean isPairBalanced(@NotNull final String s, final char openChar, final char closeChar) {
+		int balance = 0;
+		for (int i = 0; i < s.length(); i++) {
+			char c = s.charAt(i);
+			if (c == openChar) {
+				balance++;
+			} else if (c == closeChar) {
+				balance--;
+				if (balance < 0) {
+					return false;
+				}
+			}
+		}
+		return balance == 0;
+	}
+
+	/**
+	 * 检查字符串末尾的闭合符号（如 ')' 或 ']'）是否缺少与之配对的开启符号
+	 */
+	private static boolean hasUnbalancedClosingChar(@NotNull final String s, final char openChar, final char closeChar) {
+		if (s.isEmpty() || s.charAt(s.length() - 1) != closeChar) {
+			return false;
+		}
+		int unmatchedOpens = 0;
+		for (int i = 0; i < s.length() - 1; i++) {
+			char c = s.charAt(i);
+			if (c == openChar) {
+				unmatchedOpens++;
+			} else if (c == closeChar && unmatchedOpens > 0) {
+				unmatchedOpens--;
+			}
+		}
+		return unmatchedOpens == 0;
 	}
 
 	/**
@@ -3854,27 +3963,29 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 初始化结束偏移量，用于调整URL在原文本中的结束位置
 			int endOffset = 0;
 
-			// 遍历常见的包围符号（括号和单引号），处理URL被这些符号包围的情况
-			for (final String surrounding : new String[]{"()", "''"}) {
-				// 获取包围符号的起始字符
-				final String start = "" + surrounding.charAt(0);
-				// 获取包围符号的结束字符
-				final String end = "" + surrounding.charAt(1);
-				// 检查URL是否以起始符号开头
-				if (match.startsWith(start)) {
-					// 设置起始偏移量为1，表示需要跳过起始符号
-					startOffset = 1;
-					// 从匹配字符串中移除起始符号
-					match = match.substring(1);
-					// 检查URL是否以结束符号结尾
-					if (match.endsWith(end)) {
-						// 设置结束偏移量为1，表示需要排除结束符号
-						endOffset = 1;
-						// 从匹配字符串中移除结束符号
-						match = match.substring(0, match.length() - 1);
-					}
+			// 处理单引号或左括号起始包围（URL_PATTERN 字符集不含单引号，右侧单引号不会进入匹配，无需剥离）
+			if (match.startsWith("'") || match.startsWith("(")) {
+				startOffset = 1;
+				match = match.substring(1);
+			}
+
+			// 循环剥离句末标点符号（. , ;、非查询/锚点的末尾 ?）与未配平的外层右括号 ')'
+			while (match.length() > 1) {
+				char last = match.charAt(match.length() - 1);
+				if (last == ')' && hasUnbalancedClosingChar(match, '(', ')')) {
+					endOffset++;
+					match = match.substring(0, match.length() - 1);
+				} else if (last == '.' || last == ',' || last == ';') {
+					endOffset++;
+					match = match.substring(0, match.length() - 1);
+				} else if (last == '?' && match.indexOf('?') == match.length() - 1 && match.indexOf('#') < 0) {
+					endOffset++;
+					match = match.substring(0, match.length() - 1);
+				} else {
+					break;
 				}
 			}
+
 			// 将处理后的URL链接匹配结果添加到结果列表中，包含URL文本和调整后的位置信息
 			results.add(new URLLinkMatch(match, urlMatcher.start() + startOffset, urlMatcher.end() - endOffset));
 		}

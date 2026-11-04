@@ -231,6 +231,8 @@ E/AndroidRuntime: FATAL EXCEPTION: main
 | 完全限定类名（如 `com.example.MyClass:42`） | source root 下的包路径，需开启 **Match Java-like Classes** |
 | Git `--stat` 截断路径（如 `.../hooks/useChat.ts`） | 字面路径本身不完整，按路径段后缀匹配，多个命中弹出选择列表；缓存未命中时在预算内查找磁盘，查找不完整时不成链 |
 
+支持多种行列号后缀格式：`:10:5`、`:[10,5]`、`(10,5)`、`(line 10, column 5)`、`: line 10 column 5`、`, on line 10`、`'file' line 10`、`file.sh line 10`，以及 GitHub / Markdown 锚点式 `#L10`、`#L10C5`、`#L10-L20`（含 `file:///path#L10C5`）。URL 与路径周围的外层括号会自动按配平规则剥离，保留链接内部的配平括号（如 Wikipedia 词条），并剥离 URL 句末标点（`.`、`,`、`;` 以及非查询/锚点的末尾 `?`）。
+
 未引用的 `.../` 截断路径也可出现在普通日志中，查找规则相同。磁盘查找的空结果与未完成结果会短暂退避，约 1 秒后允许再次查找，仍受原有搜索预算限制；这避免外部新文件尚未进入索引时被旧观测永久遮蔽。已有控制台行是否重新过滤取决于 IDE。
 
 带目录的完整相对路径除缓存外，也会在已知 content/source roots 上直接检查磁盘文件，使外部新文件尚未进入 VFS 时仍能成链；多个根都存在同一路径时提供选择。该检查不递归扫描，尊重 excluded roots，不通过目录 symlink 查找根外文件。项目根的精确目标优先，纯文件名仍只对应项目根。

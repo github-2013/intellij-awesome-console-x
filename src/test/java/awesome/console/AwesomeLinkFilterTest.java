@@ -7404,4 +7404,169 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		List<FileLinkMatch> results = filter.detectPaths(dataUriLine);
 		assertNotNull("Detection should return non-null", results);
 	}
+
+	// ==================== VS Code 借鉴特性测试：#L 锚点、自然语言行列号、括号配平 ====================
+
+	/**
+	 * 测试 GitHub / Markdown 风格的 #L 行列号锚点（#L10、#L10C5、#L10-L20 及 file://...#L10）
+	 */
+	public void testHashLineAndColumnAnchorSyntax() throws Exception {
+		// 正向：单行号、行列号、小写、行号范围、引号路径、括号包围
+		assertPathDetection("Check src/App.tsx#L42 for details", "src/App.tsx#L42", 42, 0);
+		assertPathDetection("Check src/App.tsx#L42C10 for details", "src/App.tsx#L42C10", 42, 10);
+		assertPathDetection("Check src/App.tsx#l42c10 for details", "src/App.tsx#l42c10", 42, 10);
+		assertPathDetection("Range src/App.tsx#L42-L50 here", "src/App.tsx#L42-L50", 42, 0);
+		assertPathDetection("Range src/App.tsx#L42-50 here", "src/App.tsx#L42-50", 42, 0);
+		assertPathDetection("Range src/App.tsx#L42C5-L50C12 here", "src/App.tsx#L42C5-L50C12", 42, 5);
+		assertPathDetection("Quoted \"src/test/resources/中文 空格.txt\"#L15C4 here", "\"src/test/resources/中文 空格.txt\"#L15C4", 15, 4);
+		assertPathDetection("In parens (src/App.tsx#L42C10):", "src/App.tsx#L42C10", 42, 10);
+		assertPathDetection("Question See src/App.tsx#L42?", "src/App.tsx#L42", 42, 0);
+
+		// 反向：路径与 #L 之间有空格时，#L42 不属于路径行号；非 #L 数字的普通锚点不解析为行号
+		assertPathDetection("Updated src/App.tsx #L42", "src/App.tsx", 0, 0);
+		FileLinkMatch sectionMatch = assertPathDetection("See docs/README.md#section", "docs/README.md#section").get(0);
+		Assert.assertEquals("普通 #section 锚点不应解析出非零行号", 0, sectionMatch.linkedRow);
+
+		// Windows file:///C:/...#L10 路径规范化验证
+		Assert.assertEquals(
+				"Windows file:///C:/ 应剥离前导斜杠与 #L 锚点",
+				"C:/Users/dev/App.java",
+				filter.getFileFromUrl("file:///C:/Users/dev/App.java#L10C5")
+		);
+
+		// file:// URL 携带 #L 行列号锚点时，存在的文件应生成带行列号的 SingleFileFileHyperlinkInfo，且 applyFilter 不产生重复项
+		Path tempFile = Files.createTempFile("awesome-hash-url-", ".java");
+		try {
+			String fileUriWithAnchor = "file://" + tempFile.toAbsolutePath().toString().replace('\\', '/') + "#L24C8";
+			List<Filter.ResultItem> urlItems = filter.extractUrlLinksFromLine("See " + fileUriWithAnchor, 0);
+			Assert.assertEquals("存在的文件 file://#L24C8 应生成超链接", 1, urlItems.size());
+			Assert.assertTrue(
+					"带 #L 行列号的 file:// 链接应生成文件超链接以支持跳转行列",
+					urlItems.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo
+			);
+
+			// applyFilter 整体入口不应因文件通道与 URL 通道同时命中而产生两条同区间链接
+			String fullLine = "See " + fileUriWithAnchor;
+			Filter.Result fullResult = filter.applyFilter(fullLine, fullLine.length());
+			Assert.assertNotNull(fullResult);
+			Assert.assertEquals("applyFilter 应去重同区间链接", 1, fullResult.getResultItems().size());
+
+			// #L0 或超大行号溢出时仍应生成 SingleFileFileHyperlinkInfo 在 IDE 打开，而非退回外部浏览器
+			String zeroAnchorUri = "file://" + tempFile.toAbsolutePath().toString().replace('\\', '/') + "#L0";
+			List<Filter.ResultItem> zeroItems = filter.extractUrlLinksFromLine("See " + zeroAnchorUri, 0);
+			Assert.assertEquals(1, zeroItems.size());
+			Assert.assertTrue(zeroItems.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+
+			// 反向：不存在的 file://#L24 不应成链
+			List<Filter.ResultItem> missingItems = filter.extractUrlLinksFromLine(
+					"See file:///nonexistent/path/missing_anchor_file.java#L24", 0
+			);
+			Assert.assertTrue("不存在的文件 file://#L24 不应成链", missingItems.isEmpty());
+		} finally {
+			Files.deleteIfExists(tempFile);
+		}
+	}
+
+	/**
+	 * 测试扩充的自然语言行列号变体（空白后跟 line、单双引号后跟 line、括号内 line/column、无逗号 column）
+	 */
+	public void testNaturalLanguageRowAndColumnVariants() {
+		// 正向：带扩展名文件后空白跟 line / column
+		assertPathDetection("Syntax error in script.sh line 24: unexpected EOF", "script.sh line 24", 24, 0);
+		assertPathDetection("Error in src/main.py: line 42 column 8", "src/main.py: line 42 column 8", 42, 8);
+		assertPathDetection("Error in src/main.py, on line 42, col 5", "src/main.py, on line 42, col 5", 42, 5);
+		assertPathDetection("Error in 'build.gradle' line 14", "'build.gradle' line 14", 14, 0);
+		assertPathDetection("Error in 'build.gradle' on line 14, column 3", "'build.gradle' on line 14, column 3", 14, 3);
+		assertPathDetection("File \"src/test/resources/中文 空格.txt\" line 18 column 3", "\"src/test/resources/中文 空格.txt\" line 18 column 3", 18, 3);
+		assertPathDetection("Location: src/api/service.ts(line 29, column 50)", "src/api/service.ts(line 29, column 50)", 29, 50);
+		assertPathDetection("Location: src/api/service.ts(line 29)", "src/api/service.ts(line 29)", 29, 0);
+
+		// 反向 1：普通英文单词后跟 on line 42 不应把普通单词与行号拼成路径
+		List<FileLinkMatch> matches = filter.detectPaths("Error on line 42 in src/main.py");
+		Assert.assertTrue(
+				"不应把普通单词 Error 与 on line 42 拼成带行号匹配",
+				matches.stream().noneMatch(m -> m.match.contains("Error on line"))
+		);
+		// 反向 2：版本号 1.5 的纯数字小数部分不应被当成文件扩展名吞入 line 3
+		List<FileLinkMatch> versionMatches = filter.detectPaths("version 1.5 line 3 has errors");
+		Assert.assertTrue(
+				"纯数字小数 1.5 不应与 line 3 拼成带行号路径",
+				versionMatches.stream().noneMatch(m -> m.match.contains("1.5 line"))
+		);
+		// 反向 3：无扩展名普通标识符后接 (line 10) 不应识别为带行号路径
+		List<FileLinkMatch> callMatches = filter.detectPaths("call print(line 10) in console");
+		Assert.assertTrue(
+				"函数调用 print(line 10) 不应解析出行号",
+				callMatches.stream().noneMatch(m -> m.linkedRow == 10)
+		);
+		// 反向 4：数字后紧贴字母/Unicode/小数（如 24ms、24毫秒、24.5）不应截断解析为第 24 行
+		assertPathDetection("Executed script.sh line 24ms elapsed", "script.sh", 0, 0);
+		assertPathDetection("Executed script.sh line 24毫秒 elapsed", "script.sh", 0, 0);
+		assertPathDetection("Executed script.sh line 24.5s elapsed", "script.sh", 0, 0);
+		// 反向 5：行号后跟普通数字或逗号统计（无 col/column）不应误判为列号
+		assertPathDetection("HTTP log src/main.py:42 200 OK", "src/main.py:42", 42, 0);
+		assertPathDetection("Summary: src/main.py, on line 10, 5 errors found", "src/main.py, on line 10", 10, 0);
+		assertPathDetection("Summary: src/main.py:42, 5 errors found", "src/main.py:42", 42, 0);
+
+		// 正向：冒号行号后紧贴逗号列号（GCC/Clang 风格 file:row,col）
+		assertPathDetection("foo.c:10,5: error: expected ';'", "foo.c:10,5", 10, 5);
+		assertPathDetection("src/main.ts:10,5", "src/main.ts:10,5", 10, 5);
+		// 正向：冒号行号后跟 ".数字"（Go 覆盖率 file.go:10.5,12.3）仍保留行号
+		assertPathDetection("cover src/app/main.go:10.5,12.3 1 0", "src/app/main.go:10", 10, 0);
+		// 正向：紧跟扩展名的括号行号后接 ".xxx" 时，仍按 "文件(行号)" 解析
+		assertPathDetection("Check Foo.java(10).bar", "Foo.java(10)", 10, 0);
+		// 反向：无扩展名文件名中的 (1) 仍属于文件名本身
+		assertPathDetection("Saved src/report(1).pdf", "src/report(1).pdf", 0, 0);
+	}
+
+	/**
+	 * 测试 URL 与路径的括号配平及句末标点符号剥离
+	 */
+	public void testBalancedParenthesesAndTrailingPunctuationStripping() {
+		// 正向：Markdown 链接中包含配平括号（如 Wikipedia 词条）
+		assertURLDetection(
+				"See [Parenthesis](https://en.wikipedia.org/wiki/Parenthesis_(disambiguation)) for info",
+				"https://en.wikipedia.org/wiki/Parenthesis_(disambiguation)"
+		);
+		// 正向：括号短语末尾的 URL（左括号不在 URL 开头）
+		assertURLDetection(
+				"(see https://example.com/docs/guide)",
+				"https://example.com/docs/guide"
+		);
+		// 正向：未闭合左括号 + URL 内部自带配平括号，不应误删属于 URL 内部的右括号
+		assertURLDetection(
+				"(https://en.wikipedia.org/wiki/Parenthesis_(disambiguation)",
+				"https://en.wikipedia.org/wiki/Parenthesis_(disambiguation)"
+		);
+		// 正向：URL 中间出现未配平右括号、但末尾是配平括号时，末尾配平括号应保留
+		assertURLDetection(
+				"Check https://example.com/a)b_(c) here",
+				"https://example.com/a)b_(c)"
+		);
+		// 正向：句末标点剥离（. , ; ?）及与单引号、括号的组合
+		assertURLDetection("Visit https://example.com/docs.", "https://example.com/docs");
+		assertURLDetection("Visit 'https://example.com/docs'.", "https://example.com/docs");
+		assertURLDetection("Is it https://example.com/docs?", "https://example.com/docs");
+		assertURLDetection("Check (https://example.com/docs).", "https://example.com/docs");
+		assertURLDetection(
+				"Read [Wiki](https://en.wikipedia.org/wiki/Parenthesis_(disambiguation)).",
+				"https://en.wikipedia.org/wiki/Parenthesis_(disambiguation)"
+		);
+
+		// 反向：URL 自身合法的尾部 ! 或查询参数中的 ? 不应被误剥离
+		assertURLDetection(
+				"See https://en.wikipedia.org/wiki/Yahoo! now",
+				"https://en.wikipedia.org/wiki/Yahoo!"
+		);
+		assertURLDetection(
+				"Query https://example.com/search?q=why? now",
+				"https://example.com/search?q=why?"
+		);
+
+		// 正向：文件路径本身含配平括号且位于外层括号短语末尾
+		assertPathDetection("(see src/app_(v2)_dir/file(1).ts)", "src/app_(v2)_dir/file(1).ts");
+		// 反向：文件路径内部含配平括号时不应被拆断，完整外层括号包裹应正常剥离外层括号
+		assertPathDetection("Modified src/app_(v2)_dir/file(1).ts", "src/app_(v2)_dir/file(1).ts");
+		assertPathDetection("(src/app_(v2)_dir/file(1).ts)", "src/app_(v2)_dir/file(1).ts");
+	}
 }
