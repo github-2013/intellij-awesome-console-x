@@ -51,9 +51,6 @@ public interface AwesomeConsoleDefaults {
             Pattern.UNICODE_CHARACTER_CLASS
     );
 
-    /** 默认是否对被忽略的链接应用特殊样式 */
-    boolean DEFAULT_USE_IGNORE_STYLE = false;
-
     /** 默认是否修复选择目标文件的行为 */
     boolean DEFAULT_FIX_CHOOSE_TARGET_FILE = true;
 

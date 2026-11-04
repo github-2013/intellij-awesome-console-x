@@ -26,7 +26,6 @@
 | **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当一个引用命中多个文件时（同一相对路径出现在多个 content root / source root 下、类名在多个 source root 下命中、`.../` 截断路径命中多个文件），限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
 | **Ignore matches** | 使用正则表达式排除特定匹配项。匹配到的内容将不会生成超链接。适用于过滤 `node_modules`、相对路径符号等误匹配。此选项依赖于"Match file paths"开启 | ✅ 开启 |
 | **Ignore matches（正则表达式）** | 忽略模式的正则表达式内容。支持标准 Java 正则语法和 Unicode 字符类 | `^("?)[./\\]+\1$\|^node_modules/` |
-| **Use ignore style** | 对被忽略的匹配项套用特殊样式，避免被其他插件再做成超链接。终端（Terminal）中不支持此功能（实验性） | ❌ 关闭 |
 
 ### Advanced Settings（高级设置）
 
@@ -60,7 +59,6 @@
 #### 🎯 精确匹配优化
 1. 开启 **Ignore matches** 并自定义正则表达式，排除常见误匹配
 2. 开启 **Non-text file types** 并根据项目需要添加文件扩展名
-3. 开启 **Use ignore style** 防止其他插件生成错误的超链接
 
 #### 🎨 终端美化兼容
 1. 开启 **Preserve ANSI color** 保留终端颜色格式

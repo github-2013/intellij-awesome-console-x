@@ -9,7 +9,6 @@ import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.project.ProjectManagerListener;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.psi.search.GlobalSearchScope;
-import com.intellij.terminal.TerminalExecutionConsole;
 import com.intellij.openapi.diagnostic.Logger;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -72,26 +71,14 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 	@Override
 	// 定义公共方法getDefaultFilters，接收控制台视图、项目和全局搜索范围参数，返回非空的Filter数组
 	public Filter @NotNull [] getDefaultFilters(@NotNull final ConsoleView consoleView, @NotNull final Project project, @NotNull final GlobalSearchScope globalSearchScope) {
-		// 声明布尔变量isTerminal并初始化为false，用于标识是否为终端环境
-		boolean isTerminal = false;
-		// 使用try-catch块捕获可能的异常
-		try {
-			// TerminalExecutionConsole is used in JBTerminalWidget
-			// 判断控制台视图是否为TerminalExecutionConsole的实例，以确定是否为终端环境
-			isTerminal = consoleView instanceof TerminalExecutionConsole;
-		} catch (Exception ignored) {
-			rethrowIfExceptionMustNotBeLogged(ignored);
-			// 捕获业务异常并忽略，保持isTerminal为false
-		}
-		// 调用重载的getDefaultFilters方法，传入项目和终端标识，返回过滤器数组
-		return getDefaultFilters(project, isTerminal);
+		return getDefaultFilters(project);
 	}
 
 	/**
 	 * 为指定项目获取默认过滤器
 	 * 
 	 * @param project 项目实例
-	 * @return Filter数组
+	 * @return Filter数组；项目已 dispose 时返回空数组
 	 */
 	// 使用@NotNull注解标记返回值不为空
 	@NotNull
@@ -99,31 +86,10 @@ public class AwesomeLinkFilterProvider extends ConsoleDependentFilterProvider {
 	@Override
 	// 定义公共方法getDefaultFilters，接收项目参数，返回非空的Filter数组
 	public Filter @NotNull [] getDefaultFilters(@NotNull final Project project) {
-		// 调用重载的getDefaultFilters方法，传入项目和true（默认为终端环境），返回过滤器数组
-		return getDefaultFilters(project, true);
-	}
-
-	/**
-	 * 为指定项目获取默认过滤器，并指定是否为终端环境
-	 * 
-	 * @param project 项目实例
-	 * @param isTerminal 是否为终端环境
-	 * @return Filter数组
-	 */
-	// 使用@NotNull注解标记返回值不为空
-	@NotNull
-	// 定义公共方法getDefaultFilters，接收项目和终端标识参数，返回Filter数组
-	public Filter[] getDefaultFilters(@NotNull final Project project, final boolean isTerminal) {
-		// TODO Hack: In the Terminal, Filter only belongs to one thread, but in ConsoleView,
-		//     Filter will run in multiple threads, so set the default value of isTerminal to
-		//     false. There's no better way determine whether a Filter is running in the Terminal,
-		//     even if it's not a good way. Since Filter is cached as a singleton, everything has
-		//     become more complicated.
 		Filter[] filters = getOrCreateFilters(project);
 		if (filters == null) {
 			return new Filter[0];
 		}
-		((AwesomeLinkFilter) filters[0]).isTerminal.set(isTerminal);
 		return filters;
 	}
 

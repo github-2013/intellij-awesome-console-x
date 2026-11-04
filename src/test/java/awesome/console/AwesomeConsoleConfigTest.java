@@ -60,6 +60,9 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
     public void setUp() throws Exception {
         super.setUp();
         storage = AwesomeConsoleStorage.getInstance();
+        // 配置存储是应用级单例，前序用例（包括其它测试类）未恢复的改动会串到这里。
+        // loadState 与持久化走同一套属性拷贝，新增配置项无需同步修改此处。
+        storage.loadState(new AwesomeConsoleStorage());
         filter = new AwesomeLinkFilter(getProject());
     }
 
@@ -297,7 +300,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         // 保存原始配置
         boolean originalUseIgnorePattern = storage.useIgnorePattern;
         String originalIgnorePattern = storage.getIgnorePatternText();
-        boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
         
         try {
             // 测试默认值
@@ -305,8 +307,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
                 AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_PATTERN);
             assertNotNull("Default ignore pattern should not be null", 
                 AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
-            assertFalse("Ignore style should be disabled by default", 
-                AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_STYLE);
             
             // 测试启用/禁用忽略模式
             storage.useIgnorePattern = true;
@@ -349,13 +349,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             assertTrue("Should match build/", custom.matcher("build/output").find());
             assertTrue("Should match dist/", custom.matcher("dist/app.js").find());
             
-            // 测试忽略样式
-            storage.useIgnoreStyle = true;
-            assertTrue("Ignore style should be enabled", storage.useIgnoreStyle);
-            
-            storage.useIgnoreStyle = false;
-            assertFalse("Ignore style should be disabled", storage.useIgnoreStyle);
-            
             // 边界测试：包含Unicode字符的模式
             String unicodePattern = "^[\\u4e00-\\u9fa5]+$|^测试$";
             try {
@@ -382,7 +375,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             // 恢复原始配置
             storage.useIgnorePattern = originalUseIgnorePattern;
             storage.setIgnorePatternText(originalIgnorePattern);
-            storage.useIgnoreStyle = originalUseIgnoreStyle;
             // 重新创建过滤器以恢复原始配置
             filter = new AwesomeLinkFilter(getProject());
         }
@@ -1481,48 +1473,6 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
      * 测试自定义文件匹配模式的功能验证
      * 验证自定义正则表达式能够正确匹配指定格式的路径
      */
-
-    /**
-     * 测试忽略样式配置的功能验证
-     * 验证忽略样式能够为被忽略的匹配创建占位符
-     */
-    public void testIgnoreStyleFunctionality() {
-        // 保存原始配置
-        boolean originalUseIgnorePattern = storage.useIgnorePattern;
-        String originalIgnorePattern = storage.getIgnorePatternText();
-        boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
-        
-        try {
-            // 测试禁用忽略样式
-            storage.useIgnorePattern = true;
-            storage.setIgnorePatternText("^(dev|test)$");
-            storage.useIgnoreStyle = false;
-            filter = new AwesomeLinkFilter(getProject());
-            
-            // 被忽略的内容不会创建占位符
-            assertPathNoMatches("dev");
-            assertPathNoMatches("test");
-            
-            // 测试启用忽略样式
-            storage.useIgnoreStyle = true;
-            filter = new AwesomeLinkFilter(getProject());
-            
-            // 启用忽略样式后，被忽略的内容会创建灰色占位符
-            // 注意：占位符的创建在 extractFileLinksFromLine 中进行
-            // 这里我们验证配置生效，具体的占位符创建需要在实际使用中测试
-            List<FileLinkMatch> results = filter.detectPaths("Command: dev");
-            assertNotNull("Should handle ignore style", results);
-            
-            // 注意：忽略样式在终端环境(JediTerm)中不工作
-            // 因为JediTerm不使用highlightAttributes参数
-            
-        } finally {
-            storage.useIgnorePattern = originalUseIgnorePattern;
-            storage.setIgnorePatternText(originalIgnorePattern);
-            storage.useIgnoreStyle = originalUseIgnoreStyle;
-            filter = new AwesomeLinkFilter(getProject());
-        }
-    }
 
     /**
      * 测试文件类型配置的功能验证

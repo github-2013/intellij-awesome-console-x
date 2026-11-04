@@ -70,28 +70,16 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 
 	/**
 	 * 测试初始化方法
-	 * 在每个测试方法执行前创建新的过滤器实例
-	 * 并显式设置默认配置参数，确保测试环境的一致性
+	 * 在每个测试方法执行前把全部持久化配置恢复为默认值，再创建新的过滤器实例，
+	 * 确保用例之间不因配置残留而互相影响
 	 */
 	@Override
     public void setUp() throws Exception {
 		super.setUp();
 		
-		// 获取配置存储实例并显式设置默认参数
-		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
-		
-		// 显式启用搜索功能（确保文件路径、URL和类名搜索都开启）
-		storage.searchFiles = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_FILES;
-		storage.searchUrls = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_URLS;
-		storage.searchClasses = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_SEARCH_CLASSES;
-		
-		// 显式设置其他关键配置
-		storage.useResultLimit = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_RESULT_LIMIT;
-		storage.useIgnorePattern = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_PATTERN;
-		storage.useIgnoreStyle = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_IGNORE_STYLE;
-		storage.preserveAnsiColors = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_PRESERVE_ANSI_COLORS;
-		storage.useCustomHyperlinkColor = awesome.console.config.AwesomeConsoleDefaults.DEFAULT_USE_CUSTOM_HYPERLINK_COLOR;
-		storage.setHyperlinkColorValue(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_HYPERLINK_COLOR);
+		// 配置存储是应用级单例，前序用例（包括其它测试类）未恢复的改动会串到这里。
+		// loadState 与持久化走同一套属性拷贝，新增配置项无需同步修改此处。
+		AwesomeConsoleStorage.getInstance().loadState(new AwesomeConsoleStorage());
 		
 		// 创建过滤器实例
 		filter = new AwesomeLinkFilter(getProject());
@@ -4671,39 +4659,31 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * 测试忽略样式功能（USE_IGNORE_STYLE）
-	 * 验证当启用忽略样式时，被忽略的匹配项会创建空的超链接占位符
-	 * 这个功能用于防止其他插件在被忽略的位置生成错误的超链接
+	 * 测试忽略模式过滤命令词
+	 * 验证被忽略的命令词不进入 detectPaths 结果，同时包含这些词的真实文件路径仍能被识别
 	 */
-	public void testIgnoreStyleFeature() {
-		System.out.println("Test ignore style feature:");
+	public void testIgnorePatternSkipsCommandWordsButKeepsRealPaths() {
+		System.out.println("Test ignore pattern skips command words:");
 		
 		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
 		
 		// 保存原始配置
 		boolean originalUseIgnorePattern = storage.useIgnorePattern;
 		String originalIgnorePattern = storage.getIgnorePatternText();
-		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
 		
 		try {
-			// 启用忽略模式和忽略样式
 			storage.useIgnorePattern = true;
-			storage.useIgnoreStyle = true;
-			storage.setIgnorePatternText("^(dev|test|build)$|^node_modules/");
+			storage.setIgnorePatternText("^(dev|test|build)$");
 			
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 			
-			// 测试被忽略的命令参数
-			// 注意：这些匹配项会被忽略，但会创建空的超链接占位符
-			// 由于我们测试的是过滤器行为，这里主要验证配置生效
-			System.out.println("Testing ignored patterns with ignore style enabled:");
-			System.out.println("Command: dev");
-			System.out.println("Command: test");
-			System.out.println("Command: build");
-			System.out.println("Path: node_modules/package");
+			// 被忽略的命令词不进入 detectPaths 结果（未忽略时会被认出，见 testCorrectedDefaultIgnorePattern）
+			assertPathNoMatches("Command: ", "dev");
+			assertPathNoMatches("Command: ", "test");
+			assertPathNoMatches("Command: ", "build");
 			
-			// 验证真正的文件路径仍然能被识别
+			// 包含命令词的真实文件路径仍然能被识别
 			assertPathDetection(
 				"Error in src/dev/index.js:10",
 				"src/dev/index.js:10"
@@ -4714,17 +4694,6 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 				"./test.config.js"
 			);
 			
-			// 测试禁用忽略样式的情况
-			storage.useIgnoreStyle = false;
-			filter = new AwesomeLinkFilter(getProject());
-			
-			System.out.println("Testing with ignore style disabled:");
-			// 被忽略的匹配项不会创建任何超链接（包括占位符）
-			assertPathNoMatches("Command: ", "dev");
-			assertPathNoMatches("Command: ", "test");
-			assertPathNoMatches("Command: ", "build");
-			
-			// 验证真正的文件路径仍然能被识别
 			assertPathDetection(
 				"Error in src/main.java:20",
 				"src/main.java:20"
@@ -4733,40 +4702,39 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
-			storage.useIgnoreStyle = originalUseIgnoreStyle;
 			// 重新创建过滤器以恢复原始配置
 			filter = new AwesomeLinkFilter(getProject());
 		}
 	}
 
 	/**
-	 * 测试忽略样式与其他插件的兼容性
-	 * 验证忽略样式功能可以防止其他插件生成错误的超链接
-	 * 例如：防止 GrCompilationErrorsFilterProvider 将 "/ gzip" 识别为路径
+	 * 测试忽略模式过滤斜杠单词与相对路径符号
+	 * 验证被忽略的片段不成链，正常的绝对/相对路径仍能被识别
 	 */
-	public void testIgnoreStylePreventIncorrectHyperlinks() {
-		System.out.println("Test ignore style prevents incorrect hyperlinks from other plugins:");
+	public void testIgnorePatternSkipsSlashWordsAndRelativeSymbols() {
+		System.out.println("Test ignore pattern skips slash words and relative symbols:");
 		
 		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
 		
 		// 保存原始配置
 		boolean originalUseIgnorePattern = storage.useIgnorePattern;
 		String originalIgnorePattern = storage.getIgnorePatternText();
-		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
 		
 		try {
-			// 启用忽略模式和忽略样式
+			// 对照：未启用忽略时，斜杠单词会被识别为路径，保证下面的反向断言不是空转
+			storage.useIgnorePattern = false;
+			filter = new AwesomeLinkFilter(getProject());
+			assertPathDetection("/gzip", "/gzip");
+			
 			storage.useIgnorePattern = true;
-			storage.useIgnoreStyle = true;
-			// 设置忽略模式：忽略以斜杠开头的单个单词（如 "/ gzip"）
+			// 设置忽略模式：忽略以斜杠开头的单个单词（如 "/gzip"）
 			storage.setIgnorePatternText("^/[a-z]+$");
 			
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 			
-			// 测试场景：vite-plugin-compression 的输出
-			// "/ gzip" 应该被忽略，但会创建空的超链接占位符
-			System.out.println("Use ignore style to prevent this ( / gzip from vite-plugin-compression ) to be highlighted by other plugins");
+			// 被忽略的斜杠单词不进入 detectPaths 结果
+			assertPathNoMatches("Path: ", "/gzip");
 			
 			// 验证正常的路径仍然能被识别
 			assertPathDetection(
@@ -4803,89 +4771,33 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
-			storage.useIgnoreStyle = originalUseIgnoreStyle;
 			// 重新创建过滤器以恢复原始配置
 			filter = new AwesomeLinkFilter(getProject());
 		}
 	}
 
 	/**
-	 * 测试忽略样式在Terminal中的行为
-	 * 验证忽略样式功能在Terminal中不生效（因为JediTerm不支持highlightAttributes）
-	 * 注意：这个测试主要是文档性质的，实际的Terminal检测需要在运行时环境中进行
+	 * 测试默认忽略模式
+	 * 验证相对路径符号与 node_modules 片段不成链，带文件名的路径仍能被识别
 	 */
-	public void testIgnoreStyleNotSupportedInTerminal() {
-		System.out.println("Test ignore style is not supported in Terminal:");
+	public void testDefaultIgnorePatternSkipsRelativeSymbolsAndNodeModules() {
+		System.out.println("Test default ignore pattern skips relative symbols and node_modules:");
 		
 		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
 		
 		// 保存原始配置
 		boolean originalUseIgnorePattern = storage.useIgnorePattern;
 		String originalIgnorePattern = storage.getIgnorePatternText();
-		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
-		
-		try {
-			// 启用忽略模式和忽略样式
-			storage.useIgnorePattern = true;
-			storage.useIgnoreStyle = true;
-			storage.setIgnorePatternText("^(dev|test)$");
-			
-			// 重新创建过滤器以应用新配置
-			filter = new AwesomeLinkFilter(getProject());
-			
-			// 注意：在Terminal中，即使启用了useIgnoreStyle，
-			// 被忽略的匹配项也不会创建空的超链接占位符
-			// 因为JediTerm不使用highlightAttributes参数
-			// 这是预期行为，在代码中有明确的注释说明
-			
-			System.out.println("In Terminal, ignore style feature is not supported");
-			System.out.println("Ignored patterns will simply not be highlighted");
-			
-			// 验证配置已正确设置
-			assertTrue("useIgnoreStyle should be enabled", storage.useIgnoreStyle);
-			assertTrue("useIgnorePattern should be enabled", storage.useIgnorePattern);
-			
-			// 验证正常的文件路径仍然能被识别
-			assertPathDetection(
-				"Error in src/main.java:10",
-				"src/main.java:10"
-			);
-			
-		} finally {
-			// 恢复原始配置
-			storage.useIgnorePattern = originalUseIgnorePattern;
-			storage.setIgnorePatternText(originalIgnorePattern);
-			storage.useIgnoreStyle = originalUseIgnoreStyle;
-			// 重新创建过滤器以恢复原始配置
-			filter = new AwesomeLinkFilter(getProject());
-		}
-	}
-
-	/**
-	 * 测试忽略样式与默认忽略模式的组合
-	 * 验证使用默认的忽略模式时，忽略样式功能正常工作
-	 */
-	public void testIgnoreStyleWithDefaultIgnorePattern() {
-		System.out.println("Test ignore style with default ignore pattern:");
-		
-		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
-		
-		// 保存原始配置
-		boolean originalUseIgnorePattern = storage.useIgnorePattern;
-		String originalIgnorePattern = storage.getIgnorePatternText();
-		boolean originalUseIgnoreStyle = storage.useIgnoreStyle;
 		
 		try {
 			// 使用默认的忽略模式
 			storage.useIgnorePattern = true;
-			storage.useIgnoreStyle = true;
 			storage.setIgnorePatternText(awesome.console.config.AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
 			
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 
 			// 默认忽略模式: ^(\"?)[./\\\\]+\\1$|^node_modules/
-			System.out.println("Testing default ignore pattern with ignore style:");
 		
 			// 测试相对路径符号被忽略（匹配 ^(\"?)[./\\\\]+\\1$ 部分）
 			assertPathNoMatches("Path: ", "./");
@@ -4912,7 +4824,6 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 恢复原始配置
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
-			storage.useIgnoreStyle = originalUseIgnoreStyle;
 			// 重新创建过滤器以恢复原始配置
 			filter = new AwesomeLinkFilter(getProject());
 		}

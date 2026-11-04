@@ -1,5 +1,6 @@
 package awesome.console.config;
 
+import awesome.console.util.ExceptionHandling;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.components.PersistentStateComponent;
 import com.intellij.openapi.components.RoamingType;
@@ -62,9 +63,6 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     @NotNull
     @Transient
     public volatile Pattern ignorePattern = DEFAULT_IGNORE_PATTERN;
-
-    /** 是否对被忽略的链接应用特殊样式 */
-    public volatile boolean useIgnoreStyle = DEFAULT_USE_IGNORE_STYLE;
 
     /** 是否修复选择目标文件的行为 */
     public volatile boolean fixChooseTargetFile = DEFAULT_FIX_CHOOSE_TARGET_FILE;
@@ -194,6 +192,7 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
                 this.ignorePattern = Pattern.compile(ignorePatternText, Pattern.UNICODE_CHARACTER_CLASS);
                 this.ignorePatternText = ignorePatternText;
             } catch (PatternSyntaxException e) {
+                ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
                 this.ignorePattern = DEFAULT_IGNORE_PATTERN;
                 this.ignorePatternText = DEFAULT_IGNORE_PATTERN_TEXT;
             }

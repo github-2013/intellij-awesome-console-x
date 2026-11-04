@@ -570,11 +570,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/** 测试注入：匹配的目录 listFiles 视为失败。生产为 null。 */
 	volatile Predicate<File> forceNullDirectoryListing;
 
-	/** 是否为终端环境（线程本地） */
-	// 声明公共final线程本地变量，标记当前线程是否在终端环境中运行
-	// 终端和控制台视图的行为有所不同，需要区别处理，默认为 false
-	public final ThreadLocal<Boolean> isTerminal = ThreadLocal.withInitial(() -> false);
-
 	/** MessageBus 连接，用于订阅项目级别事件（DumbMode、VFS） */
 	// 声明私有volatile成员变量，存储 Project 级别的 MessageBus 连接引用
 	// 使用 volatile 确保多线程可见性，在 dispose() 时需要断开连接
@@ -1057,7 +1052,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 3. 对于不存在的文件，尝试在项目缓存中查找匹配的文件
 	 * 4. 支持完全限定类名的识别（如 com.example.MyClass）
 	 * 5. 应用忽略模式过滤不需要的路径
-	 * 6. 为忽略的路径添加占位符超链接（如果配置了忽略样式）
 	 *
 	 * @param line 要处理的行
 	 * @param startPoint 该行在整个控制台输出中的起始位置
@@ -1068,9 +1062,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		final List<FileLinkMatch> matches = detectPaths(line);
 
 		for(final FileLinkMatch match: matches) {
-			// 处理被忽略的匹配项
 			if (shouldIgnore(match.match)) {
-				processIgnoredMatch(match, startPoint, results);
 				continue;
 			}
 
@@ -1116,26 +1108,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 		
 		results.add(new Result(start, end, linkInfo, hyperlinkAttributes, followedHyperlinkAttributes));
-	}
-
-	/**
-	 * 处理被忽略的匹配项，添加占位符超链接（如果配置了忽略样式）
-	 *
-	 * @param match 文件链接匹配项
-	 * @param startPoint 起始位置
-	 * @param results 结果列表
-	 */
-	private void processIgnoredMatch(final FileLinkMatch match, final int startPoint, final List<ResultItem> results) {
-		// TODO: 终端中不支持此功能，因为 JediTerm 不使用 highlightAttributes 参数
-		// 参考: https://github.com/JetBrains/jediterm/blob/78b143010fc53456f2d16eb67572ed23b4a99543/core/src/com/jediterm/terminal/model/hyperlinks/TextProcessing.java#L67-L68
-		if (config.useIgnoreStyle && Boolean.FALSE.equals(isTerminal.get())) {
-			HyperlinkInfo linkInfo = __ -> {};
-			TextAttributes attributes = HyperlinkUtils.createIgnoreStyle();
-			results.add(new Result(
-					startPoint + match.start, startPoint + match.end,
-					linkInfo, attributes, attributes
-			));
-		}
 	}
 
 	/**
@@ -4490,7 +4462,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			urlMatcher.remove();
 			stackTraceElementMatcher.remove();
 			ignoreMatcher.remove();
-			isTerminal.remove();
 		} catch (Exception e) {
 			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			logger.warn(String.format("project[%s]: Error while cleaning up ThreadLocal variables", project.getName()), e);

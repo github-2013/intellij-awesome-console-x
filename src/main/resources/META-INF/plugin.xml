@@ -17,9 +17,12 @@
 		<p>
 			<b>0.1337.43</b><br/>
 			<ul>
-				<li>Fixed double-quoted path detection with spaces, UTF-8 octal escapes, and long lines, preventing incorrect links.</li>
-				<li>Relative paths now find unindexed files under known roots and offer a chooser for multiple matches.</li>
-				<li>Disk searches now retry after a short backoff, so stale results no longer hide newly created files or folders.</li>
+				<li>Quoted paths keep spaces and UTF-8 escapes, including on long lines. A broken quote no longer links an inner fragment.</li>
+				<li>A relative path under a known root opens a file that is not indexed yet. Several matches open a chooser.</li>
+				<li>A disk search that finds nothing retries shortly, so a new file is not stuck as missing.</li>
+				<li>#L10, #L10C5, and wording such as "line 10, column 5" jump to that line. Extra brackets and trailing punctuation stay off the link.</li>
+				<li>Hyperlink color can follow the IDE scheme or a color you pick. Underline only still colors only the underline.</li>
+				<li>Removed the Use ignore style setting.</li>
 			</ul>
 	    	<b>0.1337.42</b><br/>
         	<ul>

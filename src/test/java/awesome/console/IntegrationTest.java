@@ -180,10 +180,6 @@ public class IntegrationTest {
 		System.out.println("Illegal char: " + yellow("\u0021file1.java"));  // 感叹号
 		System.out.println("Illegal char: " + yellow("\u007ffile1.java"));  // DEL字符
 
-		// 测试特殊场景：防止误识别（vite-plugin-compression的输出）
-		System.out.print(yellow("Use ignore style to prevent this ( ") + red("/ gzip") + yellow(" from vite-plugin-compression ) to be highlighted by GrCompilationErrorsFilterProvider: "));
-		System.out.println("291.23kb / gzip: 44.09kb");
-
 		// 测试各种错误输出格式
 		file = TEST_DIR_WINDOWS + "\\file1.java";
 		System.out.printf("╭─[%s:19:2]\n", file);  // 带方括号的格式

@@ -66,7 +66,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.maxLengthSpinner.setValue(storage.LINE_MAX_LENGTH);
 		form.maxLengthSpinner.setEnabled(storage.LIMIT_LINE_LENGTH);
 
-		form.initIgnorePattern(storage.useIgnorePattern, storage.getIgnorePatternText(), storage.useIgnoreStyle);
+		form.initIgnorePattern(storage.useIgnorePattern, storage.getIgnorePatternText());
 
 		form.fixChooseTargetFileCheckBox.setSelected(storage.fixChooseTargetFile);
 
@@ -160,7 +160,6 @@ public class AwesomeConsoleConfig implements Configurable {
 				|| !Objects.equals(form.limitResultSpinner.getValue(), storage.getResultLimit())
 				|| form.ignorePatternCheckBox.isSelected() != storage.useIgnorePattern
 				|| !form.ignorePatternTextField.getText().trim().equals(storage.getIgnorePatternText())
-				|| form.ignoreStyleCheckBox.isSelected() != storage.useIgnoreStyle
 				|| form.fixChooseTargetFileCheckBox.isSelected() != storage.fixChooseTargetFile
 				|| form.fileTypesCheckBox.isSelected() != storage.useFileTypes
 				|| !form.fileTypesTextField.getText().trim().equals(storage.getFileTypes())
@@ -213,7 +212,6 @@ public class AwesomeConsoleConfig implements Configurable {
 		storage.useIgnorePattern = useIgnorePattern;
 		storage.setIgnorePatternText(ignorePatternText);
 		form.ignorePatternTextField.setText(storage.getIgnorePatternText());
-		storage.useIgnoreStyle = form.ignoreStyleCheckBox.isSelected();
 
 		storage.fixChooseTargetFile = form.fixChooseTargetFileCheckBox.isSelected();
 
@@ -286,7 +284,6 @@ public class AwesomeConsoleConfig implements Configurable {
 				storage.searchUrls != form.searchForURLsCheckBox.isSelected() ||
 				storage.useResultLimit != form.limitResultCheckBox.isSelected() ||
 				!Objects.equals(form.limitResultSpinner.getValue(), storage.getResultLimit()) ||
-				storage.useIgnoreStyle != form.ignoreStyleCheckBox.isSelected() ||
 				storage.fixChooseTargetFile != form.fixChooseTargetFileCheckBox.isSelected() ||
 				storage.resolveSymlink != form.resolveSymlinkCheckBox.isSelected() ||
 				storage.preserveAnsiColors != form.preserveAnsiColorsCheckBox.isSelected() ||

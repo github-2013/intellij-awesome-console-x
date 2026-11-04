@@ -152,22 +152,6 @@ public class HyperlinkUtils {
     }
 
     /**
-     * 创建忽略样式的文本属性
-     * 
-     * @return 文本属性对象，失败时返回null
-     */
-    public static TextAttributes createIgnoreStyle() {
-        try {
-            TextAttributes attr = EditorColorsManager.getInstance().getGlobalScheme().getAttributes(CodeInsightColors.INACTIVE_HYPERLINK_ATTRIBUTES).clone();
-            attr.setEffectType(EffectType.SEARCH_MATCH);
-            return attr;
-        } catch (Exception e) {
-            rethrowIfExceptionMustNotBeLogged(e);
-            return null;
-        }
-    }
-
-    /**
      * 创建超链接样式的文本属性。
      * 启用自定义颜色时在配色方案样式上覆盖前景色和下划线色，不改动方案对象本身。
      *
