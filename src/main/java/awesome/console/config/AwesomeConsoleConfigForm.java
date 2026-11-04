@@ -10,6 +10,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.project.ProjectManager;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.ui.ColorPanel;
+import com.intellij.ui.Gray;
 import com.intellij.ui.JBColor;
 
 import java.awt.*;
@@ -325,7 +326,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         hyperlinkColorSchemeRadioButton.addActionListener(e -> syncHyperlinkColorChooser());
         hyperlinkColorCustomRadioButton.addActionListener(e -> syncHyperlinkColorChooser());
 
-        hyperlinkColorChooser = new ColorPanel();
+        hyperlinkColorChooser = new WhiteTextColorPanel();
         // ColorPanel 内部文本框铺满整个组件，需继承父组件的右键菜单才能 Restore defaults
         applyToColorChooserChildren(child -> child.setInheritsPopupMenu(true));
         // 恢复默认只改表单，需 Apply 才写回 storage
@@ -374,6 +375,45 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         for (Component child : hyperlinkColorChooser.getComponents()) {
             if (child instanceof JComponent component) {
                 action.accept(component);
+            }
+        }
+    }
+
+    /**
+     * 色板文字固定为白色的 ColorPanel。
+     * <p>
+     * 平台 ColorPanel 按色板亮度算出一个灰色作为文字色（只读时用 disabledTextColor），
+     * 在中等亮度的色板上几乎看不清。父类每次刷新色板都会重算文字色，
+     * 所以在所有触发刷新的公开方法之后统一改回白色。
+     */
+    private static final class WhiteTextColorPanel extends ColorPanel {
+        // 色板背景是所选颜色本身，与 IDE 主题无关，文字色不需要随主题切换
+        private static final Color SWATCH_TEXT_COLOR = Gray._255;
+
+        @Override
+        public void setSelectedColor(@Nullable Color color) {
+            super.setSelectedColor(color);
+            applyWhiteTextColor();
+        }
+
+        @Override
+        public void setEditable(boolean editable) {
+            super.setEditable(editable);
+            applyWhiteTextColor();
+        }
+
+        @Override
+        public void setEnabled(boolean enabled) {
+            super.setEnabled(enabled);
+            applyWhiteTextColor();
+        }
+
+        private void applyWhiteTextColor() {
+            for (Component child : getComponents()) {
+                if (child instanceof JTextComponent textComponent) {
+                    textComponent.setForeground(SWATCH_TEXT_COLOR);
+                    textComponent.setDisabledTextColor(SWATCH_TEXT_COLOR);
+                }
             }
         }
     }
