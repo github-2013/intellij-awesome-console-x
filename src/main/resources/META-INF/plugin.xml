@@ -15,6 +15,10 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+			<b>0.1337.44</b><br/>
+			<ul>
+				<li>Errors and UI freezes caused by the plugin can now be reported to JetBrains Marketplace from the IDE error dialog.</li>
+			</ul>
 			<b>0.1337.43</b><br/>
 			<ul>
 				<li>Quoted paths keep spaces and UTF-8 escapes, including on long lines. A broken quote no longer links an inner fragment.</li>
@@ -364,5 +368,6 @@
 			serviceImplementation="awesome.console.config.AwesomeConsoleStorage"
 		/>
 		<notificationGroup displayType="BALLOON" id="Awesome Console X" />
+		<errorHandler implementation="com.intellij.diagnostic.JetBrainsMarketplaceErrorReportSubmitter"/>
 	</extensions>
 </idea-plugin>
