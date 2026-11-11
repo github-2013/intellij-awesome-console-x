@@ -53,6 +53,9 @@ public class AwesomeConsoleStorage implements PersistentStateComponent<AwesomeCo
     /** 是否搜索类名（支持完全限定类名） */
     public volatile boolean searchClasses = DEFAULT_SEARCH_CLASSES;
 
+    /** 是否把含 package.json 的目录当作相对路径的解析根 */
+    public volatile boolean resolvePackageRoots = DEFAULT_RESOLVE_PACKAGE_ROOTS;
+
 	/** 是否限制搜索结果数量 */
 	public volatile boolean useResultLimit = DEFAULT_USE_RESULT_LIMIT;
 

@@ -9,6 +9,7 @@ import static awesome.console.IntegrationTest.getJarFileProtocols;
 import static awesome.console.IntegrationTest.parseTemplate;
 
 import awesome.console.config.AwesomeConsoleConfigListener;
+import awesome.console.config.AwesomeConsoleDefaults;
 import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.match.FileLinkMatch;
 import awesome.console.match.URLLinkMatch;
@@ -1935,6 +1936,214 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 		);
 		Assert.assertFalse("写出完整相对路径的 --stat 应成链", exactStatLinks.isEmpty());
 		assertSingleHyperlinkEndsWith(exactStatLinks, "src/e2e/dashboard/server.js");
+	}
+
+	/**
+	 * monorepo 包内运行的 tsc 输出包相对路径：含 package.json 的目录视为已知根。
+	 * 无 package.json 的目录、包根下的更短后缀、纯文件名仍不成链。
+	 */
+	public void testPackageRelativePathResolvesAgainstPackageRoot() throws Exception {
+		myFixture.addFileToProject("modules/ui/widgets/package.json", "{}\n");
+		myFixture.addFileToProject("modules/ui/widgets/src/panels/header/title-bar.tsx", "export {};\n");
+		myFixture.addFileToProject("tools/scripts/src/run-task.ts", "export {};\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String line = "src/panels/header/title-bar.tsx:10:37 - error TS2307: Cannot find module './x.js'.";
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+		Assert.assertEquals(1, links.size());
+		assertSingleHyperlinkEndsWith(links, "modules/ui/widgets/src/panels/header/title-bar.tsx");
+		assertHyperlinkRange(links.get(0), line, "src/panels/header/title-bar.tsx:10:37");
+
+		Assert.assertTrue("无 package.json 的目录不是包根",
+				filter.extractFileLinksFromLine("src/run-task.ts:1:1 - error TS1005: ';' expected.", 0).isEmpty());
+		Assert.assertTrue("包根下也必须精确对齐，不得后缀回退",
+				filter.extractFileLinksFromLine("Error in panels/header/title-bar.tsx:10:37", 0).isEmpty());
+		Assert.assertTrue("纯文件名仍只对齐项目根",
+				filter.extractFileLinksFromLine("Error in title-bar.tsx:10:37", 0).isEmpty());
+	}
+
+	/** 多个包同路径命中给出选择列表，不静默取第一个；node_modules 下的依赖包不是包根。 */
+	public void testPackageRootsOfferChooserAndSkipNodeModules() throws Exception {
+		myFixture.addFileToProject("packages/web/package.json", "{}\n");
+		myFixture.addFileToProject("packages/web/src/lib/format.ts", "export {};\n");
+		myFixture.addFileToProject("packages/web/src/lib/util.ts", "export {};\n");
+		myFixture.addFileToProject("packages/web/node_modules/dep/package.json", "{}\n");
+		myFixture.addFileToProject("packages/web/node_modules/dep/src/lib/util.ts", "export {};\n");
+		myFixture.addFileToProject("packages/api/package.json", "{}\n");
+		myFixture.addFileToProject("packages/api/src/lib/format.ts", "export {};\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertEquals(2, filter.resolveCachedFilesForPath("src/lib/format.ts").size());
+		List<Filter.ResultItem> ambiguous = filter.extractFileLinksFromLine("src/lib/format.ts:3:1 - error TS2304", 0);
+		Assert.assertEquals(1, ambiguous.size());
+		Assert.assertFalse("多包命中不得静默链到其中一个",
+				ambiguous.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+
+		Assert.assertEquals("依赖包文件已进缓存（canary）", 1,
+				filter.resolveCachedFilesForPath("packages/web/node_modules/dep/src/lib/util.ts").size());
+		assertSingleHyperlinkEndsWith(
+				filter.extractFileLinksFromLine("src/lib/util.ts:3:1 - error TS2304", 0),
+				"packages/web/src/lib/util.ts");
+	}
+
+	/** 项目根上存在的目标优先，包根只在项目根缺失时补位，不把既有单链变成 chooser。 */
+	public void testProjectRootTargetWinsOverPackageRoot() throws Exception {
+		myFixture.addFileToProject("packages/app/package.json", "{}\n");
+		myFixture.addFileToProject("packages/app/pkg-priority/main.ts", "export {};\n");
+		Path atRoot = Path.of(getProject().getBasePath(), "pkg-priority/main.ts");
+		try {
+			Files.createDirectories(atRoot.getParent());
+			Files.writeString(atRoot, "export {};\n");
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+			assertGenericExactLink("pkg-priority/main.ts:1:1 - error TS1005", "pkg-priority/main.ts:1:1", atRoot);
+		} finally {
+			deleteDiskFixtureFile(atRoot);
+		}
+	}
+
+	/** 本机包根候选按当前磁盘重验：双包命中给选择列表，删除后不再成链。 */
+	public void testPackageRootDiskCandidatesAreRevalidated() throws Exception {
+		Path rootPath = Path.of(getProject().getBasePath(), "pkg-monorepo");
+		Path web = rootPath.resolve("packages/web");
+		Path api = rootPath.resolve("packages/api");
+		Path webOnly = web.resolve("src/app/WebOnly.tsx");
+		Path webMain = web.resolve("src/app/Main.tsx");
+		Path apiMain = api.resolve("src/app/Main.tsx");
+		List<Path> files = List.of(webOnly, webMain, web.resolve("package.json"), apiMain, api.resolve("package.json"));
+		for (Path file : files) {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, "{}\n");
+		}
+		VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(rootPath);
+		Assert.assertNotNull(root);
+		try {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), root));
+			for (Path file : files) Assert.assertNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(file));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			String line = "src/app/WebOnly.tsx:10:37 - error TS2307: Cannot find module './x.js'.";
+			assertGenericExactLink(line, "src/app/WebOnly.tsx:10:37", webOnly);
+
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine("src/app/Main.tsx:1:1 - error TS1005", 0);
+			Assert.assertEquals(1, links.size());
+			Assert.assertTrue("双包命中必须提供选择列表", links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+			Assert.assertEquals(Set.of(webMain.toString(), apiMain.toString()),
+					Set.copyOf(((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths()));
+
+			Files.delete(webOnly);
+			assertApplyFilterHasNoLinks(line);
+			assertApplyFilterHasNoLinks(" delete mode 100644 src/app/WebOnly.tsx");
+		} finally {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), root));
+			for (Path file : files) deleteDiskFixtureFile(file);
+		}
+	}
+
+	/**
+	 * 包内 tsc 打印的 {@code ../} 路径按包根解析：兄弟包落到同一文件时单链，
+	 * 不同层级的包落到不同文件时给选择列表；不存在的目标与仅后缀相符的路径不成链。
+	 */
+	public void testParentRelativePathResolvesFromPackageRoots() throws Exception {
+		myFixture.addFileToProject("modules/ui/widgets/package.json", "{}\n");
+		myFixture.addFileToProject("modules/ui/widgets/src/inputs/search-box.tsx", "export {};\n");
+		myFixture.addFileToProject("modules/ui/gallery/package.json", "{}\n");
+		myFixture.addFileToProject("modules/core/schema/package.json", "{}\n");
+		myFixture.addFileToProject("modules/core/schema/src/types/field.ts", "export {};\n");
+		myFixture.addFileToProject("modules/ui/shared/util.ts", "export {};\n");
+		myFixture.addFileToProject("modules/core/shared/util.ts", "export {};\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String sibling = "@demo/gallery:dev: ../widgets/src/inputs/search-box.tsx:34:7 - error TS2322";
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(sibling, 0);
+		Assert.assertEquals(1, links.size());
+		assertSingleHyperlinkEndsWith(links, "modules/ui/widgets/src/inputs/search-box.tsx");
+		assertHyperlinkRange(links.get(0), sibling, "../widgets/src/inputs/search-box.tsx:34:7");
+
+		String cousin = "@demo/gallery:dev:   ../../core/schema/src/types/field.ts:43:5";
+		links = filter.extractFileLinksFromLine(cousin, 0);
+		Assert.assertEquals(1, links.size());
+		assertSingleHyperlinkEndsWith(links, "modules/core/schema/src/types/field.ts");
+		assertHyperlinkRange(links.get(0), cousin, "../../core/schema/src/types/field.ts:43:5");
+
+		links = filter.extractFileLinksFromLine("../shared/util.ts:1:1 - error TS2304", 0);
+		Assert.assertEquals(1, links.size());
+		Assert.assertFalse("不同层级的包落到不同文件时不得静默取第一个",
+				links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+
+		Assert.assertTrue("目标不存在时不成链",
+				filter.extractFileLinksFromLine("../widgets/src/inputs/missing.tsx:1:1 - error", 0).isEmpty());
+		Assert.assertTrue("../ 路径不得按后缀回退",
+				filter.extractFileLinksFromLine("../inputs/search-box.tsx:1:1 - error", 0).isEmpty());
+	}
+
+	/** 关闭包根解析后包相对与 ../ 路径都不成链；重新开启立即生效，无需重建索引。 */
+	public void testPackageRootResolutionCanBeDisabled() throws Exception {
+		myFixture.addFileToProject("modules/ui/widgets/package.json", "{}\n");
+		myFixture.addFileToProject("modules/ui/widgets/src/inputs/search-box.tsx", "export {};\n");
+		myFixture.addFileToProject("modules/ui/gallery/package.json", "{}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String packageRelative = "src/inputs/search-box.tsx:3:1 - error TS2304";
+		String parentRelative = "@demo/gallery:dev: ../widgets/src/inputs/search-box.tsx:3:1 - error TS2304";
+		String target = "modules/ui/widgets/src/inputs/search-box.tsx";
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		try {
+			storage.resolvePackageRoots = false;
+			Assert.assertTrue(filter.resolveCachedFilesForPath("src/inputs/search-box.tsx").isEmpty());
+			Assert.assertTrue(filter.extractFileLinksFromLine(packageRelative, 0).isEmpty());
+			Assert.assertTrue(filter.extractFileLinksFromLine(parentRelative, 0).isEmpty());
+
+			storage.resolvePackageRoots = true;
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(packageRelative, 0), target);
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(parentRelative, 0), target);
+		} finally {
+			storage.resolvePackageRoots = AwesomeConsoleDefaults.DEFAULT_RESOLVE_PACKAGE_ROOTS;
+		}
+	}
+
+	/** 本机 ../ 包相对候选按当前磁盘重验，删除后不再成链，也不经目录 symlink 逃出 content root。 */
+	public void testParentRelativeDiskCandidatesAreRevalidated() throws Exception {
+		Path rootPath = Path.of(getProject().getBasePath(), "pkg-parent-monorepo");
+		Path outside = Path.of(getProject().getBasePath(), "pkg-parent-outside");
+		Path api = rootPath.resolve("packages/api/src/Api.ts");
+		Path escaped = outside.resolve("Escaped.ts");
+		Path link = rootPath.resolve("packages/linked");
+		List<Path> files = List.of(api, rootPath.resolve("packages/api/package.json"),
+				rootPath.resolve("packages/web/package.json"), escaped);
+		for (Path file : files) {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, "{}\n");
+		}
+		Files.createSymbolicLink(link, outside);
+		VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(rootPath);
+		Assert.assertNotNull(root);
+		try {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), root));
+			for (Path file : List.of(api, link.resolve("Escaped.ts"))) {
+				Assert.assertNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(file));
+			}
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			String line = "@scope/web:dev: ../api/src/Api.ts:2:3 - error TS2322";
+			assertGenericExactLink(line, "../api/src/Api.ts:2:3", api);
+			Assert.assertEquals("symlink 下的文件已进缓存（canary）", 1,
+					filter.resolveCachedFilesForPath("packages/linked/Escaped.ts").size());
+			assertApplyFilterHasNoLinks("@scope/web:dev: ../linked/Escaped.ts:1:1 - error");
+
+			Files.delete(api);
+			assertApplyFilterHasNoLinks(line);
+		} finally {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), root));
+			Files.deleteIfExists(link);
+			for (Path file : files) deleteDiskFixtureFile(file);
+		}
 	}
 
 	/**

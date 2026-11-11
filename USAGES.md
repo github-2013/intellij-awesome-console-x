@@ -23,7 +23,8 @@
 | **Match URLs** | 是否匹配控制台输出中的 URL 链接，支持 `http(s)`、`ftp`、`file`、JetBrains IDE URL 等协议。关闭后控制台中的 URL 将不再生成可点击的超链接 | ✅ 开启 |
 | **Match file paths** | 是否匹配控制台输出中的文件路径。支持 Unix/Windows 路径、相对/绝对路径、带行列号的路径等多种格式。关闭后文件路径将不再生成超链接 | ✅ 开启 |
 | **Match Java-like Classes** | 是否匹配 Java 风格的完全限定类名（如 `com.example.MyClass`）。关闭后日志中的完全限定类名（如 `%C:%L` 输出的 `com.example.MyClass:42`）将不再生成可点击的超链接。此选项依赖于"Match file paths"开启 | ✅ 开启 |
-| **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当一个引用命中多个文件时（同一相对路径出现在多个 content root / source root 下、类名在多个 source root 下命中、`.../` 截断路径命中多个文件），限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
+| **Resolve paths relative to package.json modules** | 面向 monorepo：把每个含 `package.json` 的目录（`node_modules` 内除外）当作相对路径的解析根，使 tsc、eslint、vitest 在包内运行时输出的包相对路径与指向兄弟包的 `../` 路径成链。项目根下存在的目标仍优先，多个包命中时弹出选择列表，规则见[路径解析规则](#路径解析规则)。关闭后恢复为只对齐项目根、content root、source root。切换后立即生效，无需重建索引。此选项依赖于"Match file paths"开启 | ✅ 开启 |
+| **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当一个引用命中多个文件时（同一相对路径出现在多个 content root / source root / 包根下、类名在多个 source root 下命中、`.../` 截断路径命中多个文件），限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
 | **Ignore matches** | 使用正则表达式排除特定匹配项。匹配到的内容将不会生成超链接。适用于过滤 `node_modules`、相对路径符号等误匹配。此选项依赖于"Match file paths"开启 | ✅ 开启 |
 | **Ignore matches（正则表达式）** | 忽略模式的正则表达式内容。支持标准 Java 正则语法和 Unicode 字符类 | `^("?)[./\\]+\1$\|^node_modules/` |
 
@@ -226,7 +227,8 @@ E/AndroidRuntime: FATAL EXCEPTION: main
 | 输出形态 | 对齐到哪里 |
 |----------|------------|
 | 绝对路径 | 存在就打开该文件；在项目内但不存在的不成链；在项目外且不存在的 Unix 绝对路径（如 Vite 的 `/src/main.ts`），去掉开头的 `/` 后按相对路径处理 |
-| 带目录的相对路径（如 `src/index.ts`） | 先看项目根下是否存在；不存在再对齐 content root、source root，必须完全一致；多个根下都有时弹出选择列表 |
+| 带目录的相对路径（如 `src/index.ts`） | 先看项目根下是否存在；不存在再对齐 content root、source root、包根（含 `package.json` 的目录，`node_modules` 内除外；需开启 **Resolve paths relative to package.json modules**），必须完全一致；多个根下都有时弹出选择列表 |
+| `../` 开头的相对路径（如 `../widgets/src/index.ts`） | 先看相对项目根是否存在；不存在且开启 **Resolve paths relative to package.json modules** 时，从每个包根出发解析，只认解析后与已索引文件完全一致的目标，不按后缀匹配；兄弟包落到同一文件时直接成链，落到多个文件时弹出选择列表 |
 | 纯文件名（如 `package.json`、`./package.json`） | 只对应项目根下的文件 |
 | 完全限定类名（如 `com.example.MyClass:42`） | source root 下的包路径，需开启 **Match Java-like Classes** |
 | Git `--stat` 截断路径（如 `.../hooks/useChat.ts`） | 字面路径本身不完整，按路径段后缀匹配，多个命中弹出选择列表；缓存未命中时在预算内查找磁盘，查找不完整时不成链 |
@@ -235,8 +237,8 @@ E/AndroidRuntime: FATAL EXCEPTION: main
 
 未引用的 `.../` 截断路径也可出现在普通日志中，查找规则相同。磁盘查找的空结果与未完成结果会短暂退避，约 1 秒后允许再次查找，仍受原有搜索预算限制；这避免外部新文件尚未进入索引时被旧观测永久遮蔽。已有控制台行是否重新过滤取决于 IDE。
 
-带目录的完整相对路径除缓存外，也会在已知 content/source roots 上直接检查磁盘文件，使外部新文件尚未进入 VFS 时仍能成链；多个根都存在同一路径时提供选择。该检查不递归扫描，尊重 excluded roots，不通过目录 symlink 查找根外文件。项目根的精确目标优先，纯文件名仍只对应项目根。
+带目录的完整相对路径除缓存外，也会在已知 content/source roots 上直接检查磁盘文件，使外部新文件尚未进入 VFS 时仍能成链；多个根都存在同一路径时提供选择。该检查不递归扫描，尊重 excluded roots，不通过目录 symlink 查找根外文件。项目根的精确目标优先，纯文件名仍只对应项目根。包根只重验缓存里已有的候选，不逐个包检查磁盘，因此包内刚新建、尚未进入 VFS 的文件要等索引追上。
 
-因此，工具在子目录（如 monorepo 的子包）里运行时：输出带目录的相对路径，只有该子目录是 content root 或 source root 才会成链；输出纯文件名（包括 `./main.go` 这种写法），始终只对应项目根。
+因此，工具在子目录（如 monorepo 的子包）里运行时：输出带目录的相对路径，该子目录含 `package.json`（如 tsc、eslint、vitest 在包内运行，且开启了上述设置），或是 content root / source root 时成链；指向其它包的 `../` 路径只在该子目录含 `package.json` 时成链；其它子目录不成链。输出纯文件名（包括 `./main.go` 这种写法），始终只对应项目根。
 
 
