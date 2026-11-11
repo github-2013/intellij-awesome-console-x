@@ -443,6 +443,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/** 磁盘定位的安全超时（毫秒）。主路径只遍历目录名，超时仅防止异常大仓库卡住终端 */
 	private static final int DISK_SEARCH_TIMEOUT_MS = 100;
 
+	/** 含该文件的目录视为包根：monorepo 包内运行的 tsc / eslint / vitest 输出包相对路径 */
+	private static final String PACKAGE_MANIFEST_NAME = "package.json";
+
 	/** 磁盘定位的命中上限；触达后视为不完整搜索，结果不得写入缓存、不得上链 */
 	static final int DISK_SEARCH_MAX_HITS = 5;
 
@@ -1143,14 +1146,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			);
 			addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
 			return true;
-		} else if (isExternal && !isUnixAbsolutePath(matchPath)) {
-			// 外部相对路径无法正确解析，跳过
-			return true;
 		}
-		
+
 		String relative = normalizePathSeparators(matchPath);
 		while (relative.startsWith("./")) relative = relative.substring(2);
-		return absoluteInProject || relative.startsWith("../");
+		if (relative.startsWith("../")) {
+			// 项目根上不存在的 ../ 路径：工作目录未知，只按包根解析，不进缓存后缀匹配
+			processParentRelativeFromPackageRoots(match, relative, startPoint, results);
+			return true;
+		}
+		// 外部相对路径无法正确解析，跳过
+		return absoluteInProject || (isExternal && !isUnixAbsolutePath(matchPath));
 	}
 
 	/**
@@ -1211,15 +1217,61 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (!isAbsolutePath(relativePath) && hasDirectoryComponent(relativePath)
 				&& !normalizePathSeparators(match.path).startsWith("../")) {
 			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_TIMEOUT_MS);
-			for (String root : localExactRoots) {
+			List<String> roots = new ArrayList<>(localExactRoots);
+			roots.addAll(packageRootsOfCandidates(cached, relativePath));
+			for (String root : roots) {
 				ProgressManager.checkCanceled();
 				if (System.nanoTime() > deadline) return; // 未核完全部已知根时不能把部分命中当唯一。
-				File file = new File(root, relativePath).toPath().normalize().toFile();
-				String path = normalizePathSeparators(file.getAbsolutePath());
-				if (path.startsWith(rootPrefix(root)) && !isExcludedByProjectIndex(file)
-						&& !shouldIgnorePath(path) && file.isFile() && staysInsideRoot(file, root)) paths.add(path);
+				addVerifiedDiskPath(paths, new File(root, relativePath).toPath().normalize().toFile(), root);
 			}
 		}
+		addExactLink(match, paths, virtualFiles, startPoint, results);
+	}
+
+	/**
+	 * 包内工具打印的 {@code ../} 路径，如 tsc 在 gallery 包内输出兄弟包路径 {@code ../widgets/src/x.tsx}。
+	 * 工作目录未知：按每个包根解析并标准化，兄弟包落到同一文件时自然合并，仍有多个目标时给 chooser。
+	 * 目标必须是缓存里的已有文件，本机文件再按包含它的已知根做磁盘重验；不做后缀匹配。
+	 */
+	private void processParentRelativeFromPackageRoots(FileLinkMatch match, String relativePath, int startPoint,
+			List<ResultItem> results) {
+		Set<String> targets = new HashSet<>();
+		for (String root : packageRoots()) {
+			targets.add(normalizePathSeparators(new File(root, relativePath).toPath().normalize().toString()));
+		}
+		if (targets.isEmpty()) return;
+		CachedCandidates candidates = findCachedCandidates(PathUtil.getFileName(relativePath), false, false);
+		if (candidates.isEmpty()) return;
+		Set<String> paths = new LinkedHashSet<>();
+		List<VirtualFile> virtualFiles = new ArrayList<>();
+		for (VirtualFile file : candidates.files()) {
+			String path = normalizePathSeparators(file.getPath());
+			if (!targets.contains(path)) continue;
+			if (!isDiskBackedFile(file)) {
+				if (!isExcludedByProjectIndex(new File(path))) virtualFiles.add(file);
+				continue;
+			}
+			ProgressManager.checkCanceled();
+			for (String root : localExactRoots) {
+				if (path.startsWith(rootPrefix(root))) {
+					addVerifiedDiskPath(paths, new File(path), root);
+					break;
+				}
+			}
+		}
+		addExactLink(match, paths, virtualFiles, startPoint, results);
+	}
+
+	/** 本机候选按当前磁盘重验：位于 root 内、未排除或忽略、是文件，且不经目录 symlink 逃出 root。 */
+	private void addVerifiedDiskPath(Set<String> paths, File file, String root) {
+		String path = normalizePathSeparators(file.getAbsolutePath());
+		if (path.startsWith(rootPrefix(root)) && !isExcludedByProjectIndex(file)
+				&& !shouldIgnorePath(path) && file.isFile() && staysInsideRoot(file, root)) paths.add(path);
+	}
+
+	/** 磁盘确认的路径与内存 VFS 候选合并成链：唯一时单链，否则 chooser。 */
+	private void addExactLink(FileLinkMatch match, Set<String> paths, List<VirtualFile> virtualFiles, int startPoint,
+			List<ResultItem> results) {
 		if (paths.isEmpty()) {
 			if (!virtualFiles.isEmpty()) addHyperlinksForFiles(match, startPoint, results, virtualFiles);
 			return;
@@ -1242,6 +1294,28 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			ExceptionHandling.rethrowIfExceptionMustNotBeLogged(e);
 			return false;
 		}
+	}
+
+	/**
+	 * 本机缓存候选经包根精确命中时的那些包根，交给已知根同一套磁盘重验。
+	 * 包根可能上百个，不逐根 stat；代价是包内尚未进缓存的新文件要等 VFS 增量。
+	 */
+	@NotNull
+	private List<String> packageRootsOfCandidates(@Nullable List<VirtualFile> cached, @NotNull String relativePath) {
+		if (cached == null || cached.isEmpty()) {
+			return Collections.emptyList();
+		}
+		String suffix = "/" + stripLeadingDotSegments(normalizePathSeparators(relativePath));
+		Set<String> packageRoots = packageRoots();
+		List<String> knownRoots = localExactRoots;
+		Set<String> roots = new LinkedHashSet<>();
+		for (VirtualFile file : cached) {
+			String path = normalizePathSeparators(file.getPath());
+			if (!isDiskBackedFile(file) || !path.endsWith(suffix)) continue;
+			String root = path.substring(0, path.length() - suffix.length());
+			if (packageRoots.contains(root) && !knownRoots.contains(root)) roots.add(root);
+		}
+		return List.copyOf(roots);
 	}
 
 	/**
@@ -2277,7 +2351,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 只看候选路径，不看所在行的 Git 文案、直方图或 {@code +}/{@code -}。
 	 * <p>
 	 * {@code .../} 截断的字面路径不完整，仍走后缀和磁盘查找。
-	 * 其余路径一律精确：带目录对齐项目根 / content root / source root，
+	 * 其余路径一律精确：带目录对齐项目根 / content root / source root / 包根，
 	 * 纯文件名只对齐项目根。
 	 */
 	boolean shouldRequireExactRelative(@NotNull String candidatePath) {
@@ -2286,7 +2360,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 引用路径必须恰好等于文件相对某一已知根的路径。
-	 * 带目录：项目 basePath、content roots、source roots。
+	 * 带目录：项目 basePath、content roots、source roots、包根（{@link #packageRoots()}）。
 	 * 纯文件名只相对项目根。{@code package.json} 指仓库根上那一个，
 	 * 普通日志和 Git 摘要都不搜子目录同名文件。
 	 */
@@ -2321,10 +2395,40 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		Set<String> roots = new HashSet<>();
 		addNormalizedRoots(roots, contentRoots);
 		addNormalizedRoots(roots, srcRoots);
+		roots.addAll(packageRoots());
 		for (String root : roots) {
 			targets.add(rootPrefix(root) + relativePath);
 		}
 		return targets;
+	}
+
+	/**
+	 * monorepo 包根：缓存里每个 {@code package.json} 所在目录，不含 node_modules 下的依赖包。
+	 * 与 content root 同等对待，多个包同路径命中时由调用方给出 chooser。
+	 * 直接读 fileCache，VFS 增量新增或删除的包无需等全量重建；开关关闭时为空，解析口径与引入包根前一致。
+	 */
+	@NotNull
+	private Set<String> packageRoots() {
+		Set<String> roots = new HashSet<>();
+		if (!config.resolvePackageRoots) {
+			return roots;
+		}
+		cacheReadLock.lock();
+		try {
+			List<VirtualFile> manifests = fileCache.get(PACKAGE_MANIFEST_NAME);
+			if (manifests == null) {
+				return roots;
+			}
+			for (VirtualFile manifest : manifests) {
+				VirtualFile dir = manifest.isValid() ? manifest.getParent() : null;
+				if (dir == null) continue;
+				String path = stripTrailingSlashes(normalizePathSeparators(dir.getPath()));
+				if (!("/" + getRelativePath(path) + "/").contains("/node_modules/")) roots.add(path);
+			}
+		} finally {
+			cacheReadLock.unlock();
+		}
+		return roots;
 	}
 
 	@NotNull
