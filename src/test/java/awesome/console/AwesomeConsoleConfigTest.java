@@ -2,6 +2,7 @@ package awesome.console;
 
 import awesome.console.config.AwesomeConsoleConfig;
 import awesome.console.config.AwesomeConsoleConfigForm;
+import awesome.console.config.AwesomeConsoleConfigListener;
 import awesome.console.config.AwesomeConsoleDefaults;
 import awesome.console.config.AwesomeConsoleStorage;
 import awesome.console.config.IndexManagementService;
@@ -809,6 +810,51 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
         } finally {
             storage.useCustomHyperlinkColor = originalUse;
             storage.setHyperlinkColor(originalColor);
+            config.disposeUIResources();
+        }
+    }
+
+    /**
+     * 包根解析开关：默认开启，随 Match file paths 置灰；Apply 写回 storage，
+     * 只发 OTHER_CHANGED（包根直接读缓存，不需要重建索引）。
+     */
+    public void testApplyResolvePackageRoots() throws Exception {
+        boolean originalFiles = storage.searchFiles;
+        boolean originalPackageRoots = storage.resolvePackageRoots;
+        List<AwesomeConsoleConfigListener.ConfigChangeType> changes = new CopyOnWriteArrayList<>();
+        ApplicationManager.getApplication().getMessageBus().connect(getTestRootDisposable())
+                .subscribe(AwesomeConsoleConfigListener.TOPIC, changes::add);
+        AwesomeConsoleConfig config = new AwesomeConsoleConfig();
+        try {
+            assertTrue("默认开启", new AwesomeConsoleStorage().resolvePackageRoots);
+            storage.searchFiles = true;
+            storage.resolvePackageRoots = true;
+            config.createComponent();
+            Field formField = AwesomeConsoleConfig.class.getDeclaredField("form");
+            formField.setAccessible(true);
+            AwesomeConsoleConfigForm form = (AwesomeConsoleConfigForm) formField.get(config);
+
+            assertFalse("Fresh form matches storage", config.isModified());
+            assertEquals("Resolve paths relative to package.json modules.", form.resolvePackageRootsCheckBox.getText());
+            assertTrue(form.resolvePackageRootsCheckBox.getToolTipText().startsWith("For monorepos:"));
+            assertTrue(form.resolvePackageRootsCheckBox.isSelected());
+            assertTrue(form.resolvePackageRootsCheckBox.isEnabled());
+
+            form.resolvePackageRootsCheckBox.doClick();
+            assertTrue(config.isModified());
+            config.apply();
+            assertFalse(storage.resolvePackageRoots);
+            assertFalse(config.isModified());
+            assertEquals(List.of(AwesomeConsoleConfigListener.ConfigChangeType.OTHER_CHANGED), changes);
+
+            form.searchForFilesCheckBox.doClick();
+            assertFalse("关闭 Match file paths 时置灰", form.resolvePackageRootsCheckBox.isEnabled());
+            config.reset();
+            assertTrue("reset 从 storage 回读", form.resolvePackageRootsCheckBox.isEnabled());
+            assertFalse(form.resolvePackageRootsCheckBox.isSelected());
+        } finally {
+            storage.searchFiles = originalFiles;
+            storage.resolvePackageRoots = originalPackageRoots;
             config.disposeUIResources();
         }
     }

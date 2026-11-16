@@ -30,6 +30,9 @@ public interface AwesomeConsoleDefaults {
     /** 默认是否搜索类名（支持完全限定类名） */
     boolean DEFAULT_SEARCH_CLASSES = true;
 
+    /** 默认是否把含 package.json 的目录当作相对路径的解析根（monorepo 包内工具输出） */
+    boolean DEFAULT_RESOLVE_PACKAGE_ROOTS = true;
+
     /** 默认是否限制搜索结果数量 */
     boolean DEFAULT_USE_RESULT_LIMIT = true;
 

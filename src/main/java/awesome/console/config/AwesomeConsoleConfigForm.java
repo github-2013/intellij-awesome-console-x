@@ -40,6 +40,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
     public JCheckBox searchForURLsCheckBox;
     public JCheckBox searchForFilesCheckBox;
     public JCheckBox searchForClassesCheckBox;
+    public JCheckBox resolvePackageRootsCheckBox;
 	public JCheckBox limitResultCheckBox;
 	public JSpinner limitResultSpinner;
 	public JCheckBox ignorePatternCheckBox;
@@ -239,6 +240,8 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         searchForFilesCheckBox.setToolTipText("Uncheck if you do not want file paths parsed from the console.");
         searchForClassesCheckBox = initCheckBox(DEFAULT_SEARCH_CLASSES);
         searchForClassesCheckBox.setToolTipText("Uncheck if you do not want classes parsed from the console.");
+        resolvePackageRootsCheckBox = initCheckBox(DEFAULT_RESOLVE_PACKAGE_ROOTS);
+        resolvePackageRootsCheckBox.setToolTipText("Resolve relative paths from every directory that contains a package.json. Paths under the project root take priority, and excluded dirs are skipped.");
 
         limitResultCheckBox = initCheckBox(DEFAULT_USE_RESULT_LIMIT);
 		limitResultCheckBox.setToolTipText("Limit the maximum number of search results to improve performance when multiple files match.");
@@ -246,13 +249,15 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
 		limitResultSpinner.setModel(new SpinnerNumberModel(DEFAULT_RESULT_LIMIT, DEFAULT_MIN_RESULT_LIMIT, Integer.MAX_VALUE, 10));
 		limitResultSpinner.setToolTipText("Maximum number of matching files to return for each hyperlink.");
 
-		bindCheckBoxAndComponents(searchForFilesCheckBox, searchForClassesCheckBox, limitResultCheckBox);
+		bindCheckBoxAndComponents(searchForFilesCheckBox, searchForClassesCheckBox, resolvePackageRootsCheckBox,
+				limitResultCheckBox);
 		bindComponentToCheckBoxes(limitResultSpinner, searchForFilesCheckBox, limitResultCheckBox);
     }
 
-	public void initMatchFiles(boolean enableFiles, boolean enableClasses) {
+	public void initMatchFiles(boolean enableFiles, boolean enableClasses, boolean enablePackageRoots) {
 		setupCheckBox(searchForFilesCheckBox, enableFiles);
 		setupCheckBox(searchForClassesCheckBox, enableClasses);
+		setupCheckBox(resolvePackageRootsCheckBox, enablePackageRoots);
 	}
 
     public void initLimitResult(boolean enabled, int value) {

@@ -60,7 +60,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		form.matchLinesLongerThanCheckBox.setSelected(storage.SPLIT_ON_LIMIT);
 
 		form.searchForURLsCheckBox.setSelected(storage.searchUrls);
-		form.initMatchFiles(storage.searchFiles, storage.searchClasses);
+		form.initMatchFiles(storage.searchFiles, storage.searchClasses, storage.resolvePackageRoots);
 		form.initLimitResult(storage.useResultLimit, storage.getResultLimit());
 
 		form.maxLengthSpinner.setValue(storage.LINE_MAX_LENGTH);
@@ -156,6 +156,7 @@ public class AwesomeConsoleConfig implements Configurable {
 				|| form.searchForURLsCheckBox.isSelected() != storage.searchUrls
 				|| form.searchForFilesCheckBox.isSelected() != storage.searchFiles
 			|| form.searchForClassesCheckBox.isSelected() != storage.searchClasses
+				|| form.resolvePackageRootsCheckBox.isSelected() != storage.resolvePackageRoots
 				|| form.limitResultCheckBox.isSelected() != storage.useResultLimit
 				|| !Objects.equals(form.limitResultSpinner.getValue(), storage.getResultLimit())
 				|| form.ignorePatternCheckBox.isSelected() != storage.useIgnorePattern
@@ -205,6 +206,7 @@ public class AwesomeConsoleConfig implements Configurable {
 		storage.searchUrls = form.searchForURLsCheckBox.isSelected();
 		storage.searchFiles = form.searchForFilesCheckBox.isSelected();
 		storage.searchClasses = form.searchForClassesCheckBox.isSelected();
+		storage.resolvePackageRoots = form.resolvePackageRootsCheckBox.isSelected();
 
 		storage.useResultLimit = form.limitResultCheckBox.isSelected();
 		storage.setResultLimit((int) form.limitResultSpinner.getValue());
@@ -282,6 +284,7 @@ public class AwesomeConsoleConfig implements Configurable {
 				!Objects.equals(form.maxLengthSpinner.getValue(), storage.LINE_MAX_LENGTH) ||
 				storage.SPLIT_ON_LIMIT != form.matchLinesLongerThanCheckBox.isSelected() ||
 				storage.searchUrls != form.searchForURLsCheckBox.isSelected() ||
+				storage.resolvePackageRoots != form.resolvePackageRootsCheckBox.isSelected() ||
 				storage.useResultLimit != form.limitResultCheckBox.isSelected() ||
 				!Objects.equals(form.limitResultSpinner.getValue(), storage.getResultLimit()) ||
 				storage.fixChooseTargetFile != form.fixChooseTargetFileCheckBox.isSelected() ||
