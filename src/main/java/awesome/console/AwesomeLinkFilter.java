@@ -277,11 +277,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	// 用于识别并跳过堆栈跟踪行，因为 IntelliJ 的 ExceptionFilter 已经处理了这些行
 	public static final Pattern STACK_TRACE_ELEMENT_PATTERN = Pattern.compile("^[\\w|\\s]*at\\s+(.+)\\.(.+)\\((.+\\.(java|kts?)):(\\d+)\\)");
 
-	/** 只包含点号的匹配模式 */
-	private static final Pattern ONLY_DOTS_PATTERN = Pattern.compile("^\\.+$");
-
-	/** 只包含反斜杠的匹配模式 */
-	private static final Pattern ONLY_BACKSLASHES_PATTERN = Pattern.compile("^\\\\+$");
+	/**
+	 * 只由相对路径符号（. / \）组成、可带一对双引号的匹配，如 .、..、./、../、.\、//、"./"。
+	 * 原为默认 Ignore 正则的第一段；放在代码里始终生效，关闭或替换 Ignore 正则也不会把它们链到项目根或父目录。
+	 */
+	private static final Pattern RELATIVE_PATH_SYMBOLS_PATTERN = Pattern.compile("^(\"?)[./\\\\]+\\1$");
 
 	/** 只包含字母的匹配模式 */
 	private static final Pattern ONLY_LETTERS_PATTERN = Pattern.compile("^[A-Za-z]+$");
@@ -395,6 +395,12 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/** 精确路径磁盘检查只使用本机 VFS 根，不能由目录是否存在推断文件系统来源。 */
 	private volatile List<String> localExactRoots = Collections.emptyList();
+
+	/**
+	 * 包根快照（不可变），由 {@link #collectPackageRoots()} 在读锁内惰性重算。
+	 * 全量 swap、清空缓存、增量增删 package.json 时在写锁内置空；读锁与写锁互斥，因此不会把过期结果写回。
+	 */
+	private volatile Set<String> packageRootsSnapshot;
 
 	/** 文件路径匹配器（线程本地） */
 	// 声明私有final线程本地变量，为每个线程创建独立的文件路径匹配器
@@ -1180,15 +1186,17 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		// 提取文件名
 		String fileName = match.literalPath ? PathUtil.getFileName(suffixPath) : extractFileName(suffixPath);
 
-		// 带目录后缀时先不按 resultLimit 裁剪：正确文件可能排在第 100 个同名文件之后
+		// 带目录后缀或需精确对齐时先不按 resultLimit 裁剪：正确文件可能排在第 100 个同名文件之后
 		boolean hasDirs = hasDirectoryComponent(suffixPath);
-		CachedCandidates candidates = findCachedCandidates(fileName, !hasDirs, !match.literalPath && !hasDirs);
+		boolean requireExact = match.literalPath || shouldRequireExactRelative(match.path);
+		CachedCandidates candidates = findCachedCandidates(fileName, !hasDirs && !requireExact,
+				!match.literalPath && !hasDirs);
 		// 类名候选已经按包路径裁决，不能再做文件路径比较。
 		if (candidates.resolvedByClassName()) {
 			if (!candidates.isEmpty()) addHyperlinksForFiles(match, startPoint, results, candidates.files());
 			return;
 		}
-		if (match.literalPath || shouldRequireExactRelative(match.path)) {
+		if (requireExact) {
 			List<VirtualFile> exact = candidates.isEmpty() ? Collections.emptyList()
 					: findBestMatchingFiles(suffixPath, candidates.files(), true);
 			processExactRelativeFiles(match, suffixPath, exact, startPoint, results);
@@ -1217,9 +1225,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		if (!isAbsolutePath(relativePath) && hasDirectoryComponent(relativePath)
 				&& !normalizePathSeparators(match.path).startsWith("../")) {
 			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_TIMEOUT_MS);
+			int chooserLimit = calculateChooserLimit();
 			List<String> roots = new ArrayList<>(localExactRoots);
-			roots.addAll(packageRootsOfCandidates(cached, relativePath));
+			roots.addAll(findPackageRootsOfCandidates(cached, relativePath));
 			for (String root : roots) {
+				// 磁盘命中已超过 chooser 上限：再核只会被截掉，提前结束，避免包根过多拖到超时而整条不成链。
+				// 只按磁盘命中计数，内存候选不能挤掉排在前面的磁盘目标；用 > 保留"超出上限"的信息。
+				if (paths.size() > chooserLimit) break;
 				ProgressManager.checkCanceled();
 				if (System.nanoTime() > deadline) return; // 未核完全部已知根时不能把部分命中当唯一。
 				addVerifiedDiskPath(paths, new File(root, relativePath).toPath().normalize().toFile(), root);
@@ -1235,16 +1247,21 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	private void processParentRelativeFromPackageRoots(FileLinkMatch match, String relativePath, int startPoint,
 			List<ResultItem> results) {
-		Set<String> targets = new HashSet<>();
-		for (String root : packageRoots()) {
-			targets.add(normalizePathSeparators(new File(root, relativePath).toPath().normalize().toString()));
-		}
-		if (targets.isEmpty()) return;
+		Set<String> packageRoots = collectPackageRoots();
+		if (packageRoots.isEmpty()) return;
+		// 先查同名候选：没有候选时不必对每个包根做路径标准化
 		CachedCandidates candidates = findCachedCandidates(PathUtil.getFileName(relativePath), false, false);
 		if (candidates.isEmpty()) return;
+		Set<String> targets = new HashSet<>();
+		for (String root : packageRoots) {
+			targets.add(normalizePathSeparators(new File(root, relativePath).toPath().normalize().toString()));
+		}
 		Set<String> paths = new LinkedHashSet<>();
 		List<VirtualFile> virtualFiles = new ArrayList<>();
+		int chooserLimit = calculateChooserLimit();
 		for (VirtualFile file : candidates.files()) {
+			// 同 processExactRelativeFiles：只按磁盘命中计数
+			if (paths.size() > chooserLimit) break;
 			String path = normalizePathSeparators(file.getPath());
 			if (!targets.contains(path)) continue;
 			if (!isDiskBackedFile(file)) {
@@ -1269,18 +1286,42 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				&& !shouldIgnorePath(path) && file.isFile() && staysInsideRoot(file, root)) paths.add(path);
 	}
 
-	/** 磁盘确认的路径与内存 VFS 候选合并成链：唯一时单链，否则 chooser。 */
+	/**
+	 * 磁盘确认的路径与内存 VFS 候选合并成链：唯一时单链，否则 chooser。
+	 * chooser 与 {@link #addHyperlinksForFiles} 同样遵守 result limit，磁盘路径在前、内存候选补足。
+	 */
 	private void addExactLink(FileLinkMatch match, Set<String> paths, List<VirtualFile> virtualFiles, int startPoint,
 			List<ResultItem> results) {
 		if (paths.isEmpty()) {
 			if (!virtualFiles.isEmpty()) addHyperlinksForFiles(match, startPoint, results, virtualFiles);
 			return;
 		}
-		List<String> targets = new ArrayList<>(paths);
-		HyperlinkInfo link = paths.size() == 1 && virtualFiles.isEmpty()
-				? HyperlinkUtils.buildFileHyperlinkInfo(project, targets.get(0), match.linkedRow, match.linkedCol)
-				: new PathListHyperlinkInfo(targets, virtualFiles, match.linkedRow, match.linkedCol);
+		if (paths.size() == 1 && virtualFiles.isEmpty()) {
+			HyperlinkInfo link = HyperlinkUtils.buildFileHyperlinkInfo(
+					project, paths.iterator().next(), match.linkedRow, match.linkedCol);
+			addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, link);
+			return;
+		}
+		int chooserLimit = calculateChooserLimit();
+		if (!canOfferChooser(chooserLimit)) return;
+		List<String> targets = paths.stream().limit(chooserLimit).collect(Collectors.toList());
+		int remaining = chooserLimit - targets.size();
+		List<VirtualFile> memoryFiles = virtualFiles.size() > remaining ? virtualFiles.subList(0, remaining) : virtualFiles;
+		HyperlinkInfo link = new PathListHyperlinkInfo(targets, memoryFiles, match.linkedRow, match.linkedCol);
 		addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, link);
+	}
+
+	/** 多命中时 chooser 最多列出的候选数；未开启 result limit 时不限。 */
+	private int calculateChooserLimit() {
+		return config.useResultLimit ? config.getResultLimit() : Integer.MAX_VALUE;
+	}
+
+	/**
+	 * 上限小于 2 时列不出歧义：多命中一律不成链，不能截成 1 项悄悄打开第一个（误链比漏链更严重）。
+	 * 所有多命中成链点（缓存、精确根、截断路径磁盘查找）共用这一口径。
+	 */
+	private static boolean canOfferChooser(int chooserLimit) {
+		return chooserLimit >= 2;
 	}
 
 	/** 根相对的磁盘候选不能通过目录 symlink 指向根外。 */
@@ -1301,19 +1342,18 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 包根可能上百个，不逐根 stat；代价是包内尚未进缓存的新文件要等 VFS 增量。
 	 */
 	@NotNull
-	private List<String> packageRootsOfCandidates(@Nullable List<VirtualFile> cached, @NotNull String relativePath) {
+	private List<String> findPackageRootsOfCandidates(@Nullable List<VirtualFile> cached, @NotNull String relativePath) {
 		if (cached == null || cached.isEmpty()) {
 			return Collections.emptyList();
 		}
 		String suffix = "/" + stripLeadingDotSegments(normalizePathSeparators(relativePath));
-		Set<String> packageRoots = packageRoots();
+		Set<String> packageRoots = collectPackageRoots();
 		List<String> knownRoots = localExactRoots;
 		Set<String> roots = new LinkedHashSet<>();
 		for (VirtualFile file : cached) {
-			String path = normalizePathSeparators(file.getPath());
-			if (!isDiskBackedFile(file) || !path.endsWith(suffix)) continue;
-			String root = path.substring(0, path.length() - suffix.length());
-			if (packageRoots.contains(root) && !knownRoots.contains(root)) roots.add(root);
+			if (!isDiskBackedFile(file)) continue;
+			String root = findPackageRootOfPath(normalizePathSeparators(file.getPath()), suffix, packageRoots);
+			if (root != null && !knownRoots.contains(root)) roots.add(root);
 		}
 		return List.copyOf(roots);
 	}
@@ -1334,10 +1374,11 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
 			return;
 		}
-		List<VirtualFile> filesForLink = files;
-		if (config.useResultLimit && filesForLink.size() > config.getResultLimit()) {
-			filesForLink = filesForLink.subList(0, config.getResultLimit());
+		int chooserLimit = calculateChooserLimit();
+		if (!canOfferChooser(chooserLimit)) {
+			return;
 		}
+		List<VirtualFile> filesForLink = files.size() > chooserLimit ? files.subList(0, chooserLimit) : files;
 		final HyperlinkInfo linkInfo = HyperlinkUtils.buildMultipleFilesHyperlinkInfo(
 				project, filesForLink, match.linkedRow, match.linkedCol
 		);
@@ -1485,7 +1526,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		String suffixPath = suffixPathForCacheMatch(path, resolveAndNormalizeMatchPath(path));
 		String fileName = extractFileName(suffixPath);
 		CachedCandidates candidates = findCachedCandidates(
-				fileName, !hasDirectoryComponent(suffixPath), true
+				fileName, !hasDirectoryComponent(suffixPath) && !shouldRequireExactRelative(path), true
 		);
 		if (candidates.isEmpty()) {
 			return Collections.emptyList();
@@ -1586,6 +1627,13 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			);
 			addHyperlinkToResults(results, startPoint + match.start, startPoint + match.end, linkInfo);
 			return true;
+		}
+		int chooserLimit = calculateChooserLimit();
+		if (!canOfferChooser(chooserLimit)) {
+			return false;
+		}
+		if (absolutePaths.size() > chooserLimit) {
+			absolutePaths = absolutePaths.subList(0, chooserLimit);
 		}
 		// 多命中身份是绝对路径：不在 applyFilter/读锁里同步兑 VFS，避免滞后时整段放弃。
 		addHyperlinkToResults(
@@ -2270,7 +2318,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 在缓存中查找候选文件，并保留候选的来源语义。
 	 *
 	 * @param fileName 文件名或完全限定类名
-	 * @param applyResultLimit 为 true 时按配置截断结果
+	 * @param applyResultLimit 为 true 时按配置截断到上限 + 1：多留一个，成链时才能分辨"恰好 N 个"与"超出上限"，
+	 *                         上限为 1 时不会把多命中误当唯一
 	 * @return 候选集（{@code files} 可能为 null）
 	 */
 	@NotNull
@@ -2289,7 +2338,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 				matchingFiles = matchingFiles.stream()
 						.filter(VirtualFile::isValid)  // 惰性验证：过滤已失效的文件
 						.filter(f -> !shouldIgnoreFile(f))  // 使用统一的忽略检查方法
-						.limit(applyResultLimit && config.useResultLimit ? config.getResultLimit() : matchingFiles.size())
+						.limit(applyResultLimit && config.useResultLimit ? config.getResultLimit() + 1L : Long.MAX_VALUE)
 						.collect(Collectors.toList());
 			}
 		} finally {
@@ -2360,7 +2409,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 
 	/**
 	 * 引用路径必须恰好等于文件相对某一已知根的路径。
-	 * 带目录：项目 basePath、content roots、source roots、包根（{@link #packageRoots()}）。
+	 * 带目录：项目 basePath、content roots、source roots、包根（{@link #collectPackageRoots()}）。
 	 * 纯文件名只相对项目根。{@code package.json} 指仓库根上那一个，
 	 * 普通日志和 Git 摘要都不搜子目录同名文件。
 	 */
@@ -2370,9 +2419,26 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			@NotNull List<VirtualFile> matchingFiles
 	) {
 		Set<String> targets = exactRelativeTargets(relativePath);
+		// 包根可能上百个：按候选反查所属包根，而不是为每个包根拼一条目标路径
+		Set<String> packageRoots = relativePath.contains("/") ? collectPackageRoots() : Collections.emptySet();
+		String suffix = "/" + relativePath;
 		return matchingFiles.stream()
-				.filter(file -> targets.contains(normalizePathSeparators(file.getPath())))
+				.filter(file -> {
+					String path = normalizePathSeparators(file.getPath());
+					return targets.contains(path) || findPackageRootOfPath(path, suffix, packageRoots) != null;
+				})
 				.collect(Collectors.toList());
+	}
+
+	/** {@code path} 恰为某个包根下的 {@code suffix}（以 / 开头）时返回该包根，否则返回 null。 */
+	@Nullable
+	private static String findPackageRootOfPath(@NotNull String path, @NotNull String suffix,
+			@NotNull Set<String> packageRoots) {
+		if (packageRoots.isEmpty() || !path.endsWith(suffix)) {
+			return null;
+		}
+		String root = path.substring(0, path.length() - suffix.length());
+		return packageRoots.contains(root) ? root : null;
 	}
 
 	@NotNull
@@ -2395,7 +2461,6 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		Set<String> roots = new HashSet<>();
 		addNormalizedRoots(roots, contentRoots);
 		addNormalizedRoots(roots, srcRoots);
-		roots.addAll(packageRoots());
 		for (String root : roots) {
 			targets.add(rootPrefix(root) + relativePath);
 		}
@@ -2405,30 +2470,46 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	/**
 	 * monorepo 包根：缓存里每个 {@code package.json} 所在目录，不含 node_modules 下的依赖包。
 	 * 与 content root 同等对待，多个包同路径命中时由调用方给出 chooser。
-	 * 直接读 fileCache，VFS 增量新增或删除的包无需等全量重建；开关关闭时为空，解析口径与引入包根前一致。
+	 * 结果取自 fileCache 快照，VFS 增量新增或删除的包会置空快照，无需等全量重建；
+	 * 开关关闭时为空，解析口径与引入包根前一致。
 	 */
 	@NotNull
-	private Set<String> packageRoots() {
-		Set<String> roots = new HashSet<>();
+	private Set<String> collectPackageRoots() {
 		if (!config.resolvePackageRoots) {
-			return roots;
+			return Collections.emptySet();
+		}
+		Set<String> snapshot = packageRootsSnapshot;
+		if (snapshot != null) {
+			return snapshot;
 		}
 		cacheReadLock.lock();
 		try {
-			List<VirtualFile> manifests = fileCache.get(PACKAGE_MANIFEST_NAME);
-			if (manifests == null) {
-				return roots;
+			snapshot = packageRootsSnapshot;
+			if (snapshot == null) {
+				snapshot = buildPackageRootsFromCache();
+				packageRootsSnapshot = snapshot;
 			}
-			for (VirtualFile manifest : manifests) {
-				VirtualFile dir = manifest.isValid() ? manifest.getParent() : null;
-				if (dir == null) continue;
-				String path = stripTrailingSlashes(normalizePathSeparators(dir.getPath()));
-				if (!("/" + getRelativePath(path) + "/").contains("/node_modules/")) roots.add(path);
-			}
+			return snapshot;
 		} finally {
 			cacheReadLock.unlock();
 		}
-		return roots;
+	}
+
+	/** 调用方须持有 cacheReadLock；manifest 失效的目录跳过，删除事件到达后快照会重算。 */
+	@NotNull
+	private Set<String> buildPackageRootsFromCache() {
+		List<VirtualFile> manifests = fileCache.get(PACKAGE_MANIFEST_NAME);
+		if (manifests == null) {
+			return Collections.emptySet();
+		}
+		Set<String> roots = new HashSet<>();
+		for (VirtualFile manifest : manifests) {
+			VirtualFile dir = manifest.isValid() ? manifest.getParent() : null;
+			if (dir == null) continue;
+			String path = stripTrailingSlashes(normalizePathSeparators(dir.getPath()));
+			if (!("/" + getRelativePath(path) + "/").contains("/node_modules/")) roots.add(path);
+		}
+		return Set.copyOf(roots);
 	}
 
 	@NotNull
@@ -2884,6 +2965,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			fileCache.putAll(newFileCache);
 			fileBaseCache.clear();
 			fileBaseCache.putAll(newFileBaseCache);
+			packageRootsSnapshot = null;
 			invalidateTruncatedPathDiskCacheLocked();
 			ignoredFilesCount = newIgnoredCount + absorbedIgnored;
 
@@ -3017,6 +3099,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 			// 只失效受影响的后缀，避免构建/git 期间的高频文件事件把整份 memo 反复清空
 			invalidateTruncatedPathDiskCacheForFilesLocked(filesToDelete);
+			// 必须在 defer 分支之前：reload 窗口内快照若保留已删 manifest 的根，会经磁盘重验误链；
+			// 重算时 isValid() 会排除已删 manifest，与 fileCache 口径一致。
+			invalidatePackageRootsIfManifestChangedLocked(filesToDelete);
 			if (deferPublishedUpdate || isReloadScheduledOrRunning()) {
 				reloadFileCache("vfs change");
 				return;
@@ -3064,6 +3149,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 			// 同删除路径：按受影响后缀精准失效，而不是清空整份 memo
 			invalidateTruncatedPathDiskCacheForFilesLocked(newFiles);
+			// 与删除路径同口径，放在 defer 分支之前
+			invalidatePackageRootsIfManifestChangedLocked(newFiles);
 			if (deferPublishedUpdate || isReloadScheduledOrRunning()) {
 				reloadFileCache("vfs change");
 				return;
@@ -3088,6 +3175,19 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			}
 		} finally {
 			cacheWriteLock.unlock();
+		}
+	}
+
+	/**
+	 * 调用方须持有 cacheWriteLock。只有 package.json 增删会改变包根，构建期高频的其它文件事件不置空快照。
+	 * 目录删除、移动、重命名走全量重建，由 swap 统一置空。
+	 */
+	private void invalidatePackageRootsIfManifestChangedLocked(@NotNull List<VirtualFile> changedFiles) {
+		for (VirtualFile file : changedFiles) {
+			if (file != null && PACKAGE_MANIFEST_NAME.equals(file.getName())) {
+				packageRootsSnapshot = null;
+				return;
+			}
 		}
 	}
 
@@ -4087,88 +4187,29 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 判断是否应该忽略当前匹配项
+	 * 判断是否应该忽略当前匹配项（不受 Ignore matches 开关影响，始终生效）
 	 *
 	 * 该方法用于过滤掉一些不应该被识别为文件链接的匹配项，包括：
-	 * 只包含反斜杠的字符串
-	 * 只包含点号的字符串（如省略号、句末点号等）
-	 * 单词后紧跟点号的情况（如 "word."）
+	 * 只由相对路径符号组成的字符串（如 .、..、./、../、.\、//、"./"），否则会链到项目根或项目外的父目录
+	 * 单词后紧跟句末点号的情况（如 "word."）
 	 *
 	 * @param line 完整的文本行
 	 * @param fileLinkMatch 文件链接匹配对象，包含匹配的字符串和位置信息
 	 * @return 如果应该忽略该匹配项返回 true，否则返回 false
 	 */
 	private boolean shouldIgnoreMatch(@NotNull final String line, @NotNull final FileLinkMatch fileLinkMatch) {
-		// 提取匹配的字符串内容
 		String match = fileLinkMatch.match;
-		// 获取匹配在行中的起始位置
-		int startPos = fileLinkMatch.start;
-		// 获取匹配在行中的结束位置（不包含该位置的字符）
-		int endPos = fileLinkMatch.end;
-
-		// 检查是否只包含反斜杠，直接忽略
-		// 例如："\\" 或 "\\\\" 这样的字符串不应该被识别为文件路径
-		if (ONLY_BACKSLASHES_PATTERN.matcher(match).matches()) {
+		if (RELATIVE_PATH_SYMBOLS_PATTERN.matcher(match).matches()
+				|| RELATIVE_PATH_SYMBOLS_PATTERN.matcher(normalizePathSeparators(fileLinkMatch.path)).matches()) {
 			return true;
 		}
 
-		// 检查是否只包含点号（一个或多个点号）
-		// 例如："." 或 ".." 或 "..." 等
-		boolean isOnlyDots = ONLY_DOTS_PATTERN.matcher(match).matches();
-
-		// 如果不是纯点号字符串，检查是否是单词后紧跟点号的情况（如 "word."）
-		if (!isOnlyDots) {
-			// 检查匹配字符串后面紧跟的字符是否是点号
-			if (endPos < line.length() && line.charAt(endPos) == '.') {
-				// 检查点号后面是否是空白字符或已到行尾（表示句子结束）
-				boolean nextIsWhitespaceOrEnd = (endPos + 1 >= line.length() || Character.isWhitespace(line.charAt(endPos + 1)));
-				// 检查匹配的字符串是否只包含字母（纯单词）
-				boolean isOnlyLetters = ONLY_LETTERS_PATTERN.matcher(match).matches();
-				// 如果是"单词+点号+空白/行尾"的模式，则认为是句子结束，应该忽略
-				// 例如："Building. " 中的 "Building" 不应该被识别为文件名
-				return nextIsWhitespaceOrEnd && isOnlyLetters;
-			}
-			// 如果不是上述情况，则不忽略该匹配
-			return false;
+		// "Building. " 这类"纯单词 + 句末点号"中的单词不是文件名
+		int endPos = fileLinkMatch.end;
+		if (endPos < line.length() && line.charAt(endPos) == '.') {
+			boolean nextIsWhitespaceOrEnd = endPos + 1 >= line.length() || Character.isWhitespace(line.charAt(endPos + 1));
+			return nextIsWhitespaceOrEnd && ONLY_LETTERS_PATTERN.matcher(match).matches();
 		}
-
-		// ===== 以下处理只包含点号的情况 =====
-
-		// 检查是否是省略号（前面有字母），至少需要两个点号
-		// 例如："Building..." 或 "word.." 这样的省略号不应该被识别为文件路径
-		if (match.length() >= 2) {
-			// 检查前面是否有"字母+点号"的模式（如 "Building." + ".."）
-			// 这种情况下，当前的点号是省略号的一部分
-			if (startPos >= 2) {
-				// 获取匹配位置前面的第一个字符
-				char prevChar1 = line.charAt(startPos - 1);
-				// 获取匹配位置前面的第二个字符
-				char prevChar2 = line.charAt(startPos - 2);
-				// 如果前面是"字母+点号"的模式，则当前点号是省略号，应该忽略
-				if (prevChar1 == '.' && Character.isLetter(prevChar2)) {
-					return true;
-				}
-			}
-			// 检查直接前面是字母的情况（如 "Building.."）
-			// 这种情况下，点号紧跟在单词后面，是省略号的一部分
-			if (startPos > 0 && Character.isLetter(line.charAt(startPos - 1))) {
-				return true;
-			}
-		}
-
-		// 检查是否是句子末尾的单个点号
-		// 例如："sentence." 中的点号不应该被识别为文件路径的一部分
-		if (match.equals(".") && startPos > 0) {
-			// 获取点号前面的字符
-			char prevChar = line.charAt(startPos - 1);
-			// 检查点号后面是否是空白字符或已到行尾
-			boolean nextIsWhitespaceOrEnd = (endPos >= line.length() || Character.isWhitespace(line.charAt(endPos)));
-			// 如果前面是字母/数字/右括号，且后面是空白或行尾，则认为是句子结束的点号，应该忽略
-			// 例如："done." 或 "test(1)." 中的点号
-			return (Character.isLetterOrDigit(prevChar) || prevChar == ')') && nextIsWhitespaceOrEnd;
-		}
-
-		// 默认不忽略该匹配
 		return false;
 	}
 
@@ -4269,6 +4310,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		try {
 			fileCache.clear();
 			fileBaseCache.clear();
+			packageRootsSnapshot = null;
 			invalidateTruncatedPathDiskCacheLocked();
 			unabsorbedAdds.clear();
 			unabsorbedDeletes.clear();
@@ -4603,6 +4645,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			unabsorbedDeletes.clear();
 			fileCache.clear();
 			fileBaseCache.clear();
+			packageRootsSnapshot = null;
 			invalidateTruncatedPathDiskCacheLocked();
 			cacheInitialized = false;
 			logger.info(String.format("project[%s]: File cache cleared in dispose()", project.getName()));

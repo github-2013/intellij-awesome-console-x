@@ -22,11 +22,10 @@
 |--------|------|--------|
 | **Match URLs** | 是否匹配控制台输出中的 URL 链接，支持 `http(s)`、`ftp`、`file`、JetBrains IDE URL 等协议。关闭后控制台中的 URL 将不再生成可点击的超链接 | ✅ 开启 |
 | **Match file paths** | 是否匹配控制台输出中的文件路径。支持 Unix/Windows 路径、相对/绝对路径、带行列号的路径等多种格式。关闭后文件路径将不再生成超链接 | ✅ 开启 |
-| **Match Java-like Classes** | 是否匹配 Java 风格的完全限定类名（如 `com.example.MyClass`）。关闭后日志中的完全限定类名（如 `%C:%L` 输出的 `com.example.MyClass:42`）将不再生成可点击的超链接。此选项依赖于"Match file paths"开启 | ✅ 开启 |
-| **Resolve paths relative to package.json modules** | 面向 monorepo：把每个含 `package.json` 的目录（`node_modules` 内除外）当作相对路径的解析根，使 tsc、eslint、vitest 在包内运行时输出的包相对路径与指向兄弟包的 `../` 路径成链。项目根下存在的目标仍优先，多个包命中时弹出选择列表，规则见[路径解析规则](#路径解析规则)。关闭后恢复为只对齐项目根、content root、source root。切换后立即生效，无需重建索引。此选项依赖于"Match file paths"开启 | ✅ 开启 |
-| **Each hyperlink matches at most _N_ results** | 限制每个超链接匹配的最大文件数量。当一个引用命中多个文件时（同一相对路径出现在多个 content root / source root / 包根下、类名在多个 source root 下命中、`.../` 截断路径命中多个文件），限制返回结果数可避免弹出过长的选择列表，同时提升性能。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
-| **Ignore matches** | 使用正则表达式排除特定匹配项。匹配到的内容将不会生成超链接。适用于过滤 `node_modules`、相对路径符号等误匹配。此选项依赖于"Match file paths"开启 | ✅ 开启 |
-| **Ignore matches（正则表达式）** | 忽略模式的正则表达式内容。支持标准 Java 正则语法和 Unicode 字符类 | `^("?)[./\\]+\1$\|^node_modules/` |
+| **Match Java-like Classes** | 是否匹配 Java 风格的完全限定类名（如 `com.example.MyClass`）。关闭后完全限定类名不生成超链接。此选项依赖于"Match file paths"开启 | ✅ 开启 |
+| **Resolve paths relative to package.json modules** | 面向 monorepo：把每个含已索引 `package.json` 的工作区包目录也当作相对路径的解析根，使 tsc、eslint、vitest 在包内运行时输出的包相对路径和指向兄弟包的 `../` 路径成链。`node_modules` 里的依赖包、被 **Ignore matches** 排除的 `package.json` 不算包根；解析顺序与多处命中的处理见[路径解析规则](#路径解析规则)。关闭后只对齐项目根、content root、source root。切换开关、新增或删除 `package.json` 后立即生效，无需重建索引。此选项依赖于"Match file paths"开启 | ✅ 开启 |
+| **Each hyperlink matches at most _N_ results** | 一个引用命中多个文件时，选择列表最多列出 _N_ 项，可避免列表过长并提升性能；哪些情况会命中多个文件见[路径解析规则](#路径解析规则)。_N_ 为 1 时无法列出选择，命中多个文件的引用不成链，不会默认打开其中一个；只命中一个文件的引用不受影响。此选项依赖于"Match file paths"开启 | ✅ 开启，100 个 |
+| **Ignore matches** | 用正则表达式排除匹配项，命中的内容不生成超链接。支持标准 Java 正则语法和 Unicode 字符类。正则同时作用于控制台中的原始路径文本，以及建索引时的文件名和项目相对路径，因此 `^node_modules/` 不会挡住 `./node_modules/...`、绝对路径和嵌套的 `node_modules`，需要匹配任意层级时改为 `(^\|[/\\])node_modules[/\\]`。不带锚定时按子串匹配，`build` 也会挡住 `build.gradle.kts`，目录建议写成 `^(node_modules\|build\|dist)/`。`./`、`../`、`"./"` 这类纯相对路径符号由插件内置规则始终忽略，不受此选项影响。此选项依赖于"Match file paths"开启 | ✅ 开启，`^node_modules/` |
 
 ### Advanced Settings（高级设置）
 
@@ -44,7 +43,7 @@
 | 配置项 | 说明 |
 |--------|------|
 | **Index Status** | 当前项目的索引状态：已索引文件数、文件名/基础名缓存规模；上次重建时间与耗时见状态行 tooltip |
-| **Progress Bar** | 双色进度条：绿色为匹配文件占比，另一色为忽略文件占比。进度条上不再绘制文字 |
+| **Progress Bar** | 双色进度条：绿色为匹配文件占比，另一色为忽略文件占比。进度条上不显示文字 |
 | **Progress Legend** | Rebuild、Clear 同一行右侧的图例，显示匹配/忽略数量与百分比 |
 | **Rebuild** | 手动重建文件索引。大型项目可能需要较长时间。重建结束后若 Filter 仍在 reload，按钮会保持 `Rebuilding...` 并禁用，避免看起来空闲却点不动 |
 | **Clear** | 清除文件索引。索引将在下次需要时自动重建 |
@@ -55,7 +54,7 @@
 1. 开启 **Limit line matching by**，设置合理的行长度（如 512 ~ 1024）
 2. 开启 **Each hyperlink matches at most _N_ results**，限制结果数量（如 10 ~ 50）
 3. 如果不需要 URL 匹配，关闭 **Match URLs** 可进一步提升性能
-4. 开启 **Ignore matches** 排除 `node_modules` 等无关目录
+4. 开启 **Ignore matches** 排除根目录 `node_modules` 等无关目录
 
 #### 🎯 精确匹配优化
 1. 开启 **Ignore matches** 并自定义正则表达式，排除常见误匹配
@@ -64,7 +63,7 @@
 #### 🎨 终端美化兼容
 1. 开启 **Preserve ANSI color** 保留终端颜色格式
 2. 开启 **Underline only** 避免超链接颜色覆盖终端主题配色
-3. 需要固定链接颜色时，把 **Hyperlink color** 切到 **Custom**；与 **Underline only** 同时开启时只给下划线上色
+3. 需要固定链接颜色时，把 **Hyperlink color** 切到 **Custom**
 
 ---
 
