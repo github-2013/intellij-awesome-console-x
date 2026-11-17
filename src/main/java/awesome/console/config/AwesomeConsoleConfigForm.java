@@ -241,13 +241,13 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         searchForClassesCheckBox = initCheckBox(DEFAULT_SEARCH_CLASSES);
         searchForClassesCheckBox.setToolTipText("Uncheck if you do not want classes parsed from the console.");
         resolvePackageRootsCheckBox = initCheckBox(DEFAULT_RESOLVE_PACKAGE_ROOTS);
-        resolvePackageRootsCheckBox.setToolTipText("Resolve relative paths from every directory that contains a package.json. Paths under the project root take priority, and excluded dirs are skipped.");
+        resolvePackageRootsCheckBox.setToolTipText("Resolve relative paths from every directory that contains a package.json. Paths under the project root take priority, and excluded dirs are skipped. Directories inside node_modules are never treated as package roots, and a package.json excluded by Ignore matches does not count.");
 
         limitResultCheckBox = initCheckBox(DEFAULT_USE_RESULT_LIMIT);
 		limitResultCheckBox.setToolTipText("Limit the maximum number of search results to improve performance when multiple files match.");
 		limitResultSpinner = initSpinner(DEFAULT_RESULT_LIMIT);
 		limitResultSpinner.setModel(new SpinnerNumberModel(DEFAULT_RESULT_LIMIT, DEFAULT_MIN_RESULT_LIMIT, Integer.MAX_VALUE, 10));
-		limitResultSpinner.setToolTipText("Maximum number of matching files to return for each hyperlink.");
+		limitResultSpinner.setToolTipText("Maximum number of matching files to return for each hyperlink. With 1, a reference that matches several files is not linked.");
 
 		bindCheckBoxAndComponents(searchForFilesCheckBox, searchForClassesCheckBox, resolvePackageRootsCheckBox,
 				limitResultCheckBox);
@@ -269,7 +269,7 @@ public class AwesomeConsoleConfigForm implements AwesomeConsoleDefaults {
         ignorePatternCheckBox = initCheckBox(DEFAULT_USE_IGNORE_PATTERN);
         ignorePatternCheckBox.setToolTipText("Use regex pattern to ignore specific file paths or URLs from being matched.");
         ignorePatternTextField = initTextField(DEFAULT_IGNORE_PATTERN_TEXT);
-        ignorePatternTextField.setToolTipText("Regular expression pattern. Matches will be excluded from hyperlinks. Example: node_modules|build|dist");
+        ignorePatternTextField.setToolTipText("Regular expression pattern. Matches will be excluded from hyperlinks. Example: ^(node_modules|build|dist)/");
         bindCheckBoxAndComponents(ignorePatternCheckBox, ignorePatternTextField);
     }
 

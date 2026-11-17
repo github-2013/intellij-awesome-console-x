@@ -2044,6 +2044,107 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 	}
 
 	/**
+	 * 本机包根 chooser 遵守 result limit：包相对与 ../ 路径都截到上限；关闭限制时全量列出。
+	 * 上限为 1 时列不出歧义，多命中不成链；只命中一个包的路径仍是单链。
+	 */
+	public void testPackageRootChooserHonorsResultLimit() throws Exception {
+		Path rootPath = Path.of(getProject().getBasePath(), "pkg-limit-monorepo");
+		List<Path> mains = new ArrayList<>();
+		List<Path> shared = new ArrayList<>();
+		List<Path> files = new ArrayList<>();
+		for (String group : List.of("alpha", "beta", "gamma")) {
+			Path pkg = rootPath.resolve(group + "/app");
+			mains.add(pkg.resolve("src/app/Main.tsx"));
+			shared.add(rootPath.resolve(group + "/shared/util.ts"));
+			files.add(pkg.resolve("package.json"));
+		}
+		Path onlyInAlpha = rootPath.resolve("alpha/app/src/app/Only.tsx");
+		files.addAll(mains);
+		files.addAll(shared);
+		files.add(onlyInAlpha);
+		for (Path file : files) {
+			Files.createDirectories(file.getParent());
+			Files.writeString(file, "{}\n");
+		}
+		VirtualFile root = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(rootPath);
+		Assert.assertNotNull(root);
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		boolean originalUseLimit = storage.useResultLimit;
+		int originalLimit = storage.getResultLimit();
+		try {
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.addContentRoot(getModule(), root));
+			for (Path file : files) Assert.assertNotNull(LocalFileSystem.getInstance().refreshAndFindFileByNioFile(file));
+			filter.manualRebuild();
+			waitForReloadsToQuiesce(500, 5000);
+
+			String packageRelative = "src/app/Main.tsx:1:1 - error TS1005";
+			String parentRelative = "@scope/app:dev: ../shared/util.ts:1:1 - error TS1005";
+
+			String singleHit = "src/app/Only.tsx:1:1 - error TS1005";
+
+			storage.useResultLimit = false;
+			Assert.assertEquals(3, assertChooserAndCollectPaths(packageRelative).size());
+			Assert.assertEquals(3, assertChooserAndCollectPaths(parentRelative).size());
+
+			storage.useResultLimit = true;
+			storage.setResultLimit(2);
+			List<String> limited = assertChooserAndCollectPaths(packageRelative);
+			Assert.assertEquals(2, limited.size());
+			Assert.assertTrue(mains.stream().map(path -> path.toString().replace('\\', '/'))
+					.collect(Collectors.toSet()).containsAll(limited));
+			Assert.assertEquals(2, assertChooserAndCollectPaths(parentRelative).size());
+
+			storage.setResultLimit(1);
+			Assert.assertTrue("上限为 1 时多包命中不得截成 1 项悄悄打开第一个",
+					filter.extractFileLinksFromLine(packageRelative, 0).isEmpty());
+			Assert.assertTrue(filter.extractFileLinksFromLine(parentRelative, 0).isEmpty());
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(singleHit, 0),
+					"alpha/app/src/app/Only.tsx");
+		} finally {
+			storage.useResultLimit = originalUseLimit;
+			storage.setResultLimit(originalLimit);
+			WriteAction.runAndWait(() -> com.intellij.testFramework.PsiTestUtil.removeContentEntry(getModule(), root));
+			for (Path file : files) deleteDiskFixtureFile(file);
+		}
+	}
+
+	/**
+	 * 缓存多命中（截断路径按后缀命中两个文件）与精确根同一口径：上限为 1 时不成链，
+	 * 不能因候选预先截到 1 个而误当唯一；上限够用时给 chooser。
+	 */
+	public void testResultLimitOfOneDoesNotLinkFirstOfSeveralCachedFiles() throws Exception {
+		myFixture.addFileToProject("limit-a/LimitDup.ts", "export {};\n");
+		myFixture.addFileToProject("limit-b/LimitDup.ts", "export {};\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+		String line = " .../LimitDup.ts | 2 +-";
+		AwesomeConsoleStorage storage = AwesomeConsoleStorage.getInstance();
+		boolean originalUseLimit = storage.useResultLimit;
+		int originalLimit = storage.getResultLimit();
+		try {
+			storage.useResultLimit = true;
+			storage.setResultLimit(2);
+			List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+			Assert.assertEquals(1, links.size());
+			Assert.assertFalse("多命中必须是 chooser", links.get(0).getHyperlinkInfo() instanceof SingleFileFileHyperlinkInfo);
+
+			storage.setResultLimit(1);
+			Assert.assertTrue("上限为 1 时多命中不得悄悄链第一个", filter.extractFileLinksFromLine(line, 0).isEmpty());
+		} finally {
+			storage.useResultLimit = originalUseLimit;
+			storage.setResultLimit(originalLimit);
+		}
+	}
+
+	/** 断言该行只产生一个 chooser 链接，并返回其中的磁盘路径。 */
+	private List<String> assertChooserAndCollectPaths(String line) {
+		List<Filter.ResultItem> links = filter.extractFileLinksFromLine(line, 0);
+		Assert.assertEquals(1, links.size());
+		Assert.assertTrue("多包命中必须是选择列表", links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
+		return ((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths();
+	}
+
+	/**
 	 * 包内 tsc 打印的 {@code ../} 路径按包根解析：兄弟包落到同一文件时单链，
 	 * 不同层级的包落到不同文件时给选择列表；不存在的目标与仅后缀相符的路径不成链。
 	 */
@@ -2104,6 +2205,92 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(parentRelative, 0), target);
 		} finally {
 			storage.resolvePackageRoots = AwesomeConsoleDefaults.DEFAULT_RESOLVE_PACKAGE_ROOTS;
+		}
+	}
+
+	/**
+	 * 包根快照随增量增删失效：新增 package.json 后立即成为包根，删除后立即失效。
+	 * 经 processPublished* 入口驱动，并断言期间没有发生全量重建，排除被 swap 救绿。
+	 */
+	public void testPackageRootSnapshotFollowsIncrementalManifestChanges() throws Exception {
+		myFixture.addFileToProject("modules/ui/late/src/inputs/late-box.tsx", "export {};\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		String line = "src/inputs/late-box.tsx:3:1 - error TS2304";
+		Assert.assertTrue("尚无 package.json，快照为空且不成链", filter.extractFileLinksFromLine(line, 0).isEmpty());
+		long rebuildTime = filter.getIndexStatistics().getLastRebuildTime();
+
+		VirtualFile manifest = myFixture.addFileToProject("modules/ui/late/package.json", "{}\n").getVirtualFile();
+		filter.addToLiveFileCache(manifest);
+		waitForReloadsToQuiesce(500, 5000);
+		assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(line, 0),
+				"modules/ui/late/src/inputs/late-box.tsx");
+
+		WriteAction.runAndWait(() -> manifest.delete(this));
+		filter.processPublishedDeletions(List.of(manifest));
+		waitForReloadsToQuiesce(500, 5000);
+		Assert.assertTrue("package.json 删除后不得沿用旧快照", filter.extractFileLinksFromLine(line, 0).isEmpty());
+		Assert.assertEquals("必须由增量路径失效快照，不能靠全量重建",
+				rebuildTime, filter.getIndexStatistics().getLastRebuildTime());
+	}
+
+	/**
+	 * reload 窗口内的 package.json 增删：删除立即让旧包根失效，不等 swap；
+	 * 窗口内新增的包在 swap 后生效，要求 swap 置空窗口内重算的快照。
+	 */
+	public void testPackageRootSnapshotDuringReloadWindow() throws Exception {
+		VirtualFile oldManifest = myFixture.addFileToProject("modules/ui/old/package.json", "{}\n").getVirtualFile();
+		myFixture.addFileToProject("modules/ui/old/src/inputs/old-box.tsx", "export {};\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+		String oldLine = "src/inputs/old-box.tsx:3:1 - error TS2304";
+		String freshLine = "src/inputs/fresh-box.tsx:3:1 - error TS2304";
+		assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(oldLine, 0),
+				"modules/ui/old/src/inputs/old-box.tsx");
+
+		CountDownLatch arrivedAtSwap = new CountDownLatch(1);
+		CountDownLatch releaseSwap = new CountDownLatch(1);
+		filter.beforeCacheSwapHook = () -> {
+			arrivedAtSwap.countDown();
+			try {
+				if (!releaseSwap.await(10, TimeUnit.SECONDS)) {
+					throw new IllegalStateException("Timed out waiting to release cache swap");
+				}
+			} catch (InterruptedException e) {
+				Thread.currentThread().interrupt();
+				throw new IllegalStateException(e);
+			}
+		};
+		try {
+			CompletableFuture<Void> reload = filter.scheduleReloadAsync("package roots window", null, true);
+			Assert.assertTrue("Reload should reach swap hook", arrivedAtSwap.await(10, TimeUnit.SECONDS));
+
+			// 删除单独成一步：之后不能有其他失效点把快照顺带置空
+			WriteAction.runAndWait(() -> oldManifest.delete(this));
+			filter.processPublishedDeletions(List.of(oldManifest));
+			Assert.assertTrue("窗口内删除只记入 delta", filter.isUnabsorbedDelete(oldManifest));
+			Assert.assertTrue("reload 窗口内删除 package.json 必须立即失效旧包根",
+					filter.extractFileLinksFromLine(oldLine, 0).isEmpty());
+
+			VirtualFile freshManifest = myFixture.addFileToProject("modules/ui/fresh/package.json", "{}\n").getVirtualFile();
+			VirtualFile freshSource = myFixture.addFileToProject(
+					"modules/ui/fresh/src/inputs/fresh-box.tsx", "export {};\n").getVirtualFile();
+			filter.processPublishedAdditions(List.of(freshManifest, freshSource));
+			Assert.assertTrue("窗口内新增只记入 delta",
+					filter.isUnabsorbedAdd(freshManifest) && filter.isUnabsorbedAdd(freshSource));
+			// 窗口内重算快照：此时 fileCache 还没有新包
+			Assert.assertTrue(filter.extractFileLinksFromLine(oldLine, 0).isEmpty());
+			Assert.assertTrue("swap 前新包尚未进缓存", filter.extractFileLinksFromLine(freshLine, 0).isEmpty());
+
+			releaseSwap.countDown();
+			reload.get(10, TimeUnit.SECONDS);
+			assertSingleHyperlinkEndsWith(filter.extractFileLinksFromLine(freshLine, 0),
+					"modules/ui/fresh/src/inputs/fresh-box.tsx");
+		} finally {
+			releaseSwap.countDown();
+			filter.beforeCacheSwapHook = null;
+			waitForReloadsToQuiesce(500, 5000);
 		}
 	}
 
@@ -2578,9 +2765,9 @@ public class AwesomeLinkFilterTest extends BasePlatformTestCase {
 					((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths()));
 			storage.useResultLimit = true;
 			storage.setResultLimit(1);
-			links = filter.extractFileLinksFromLine("INFO loaded e2e/New.ts", 0);
-			Assert.assertTrue(links.get(0).getHyperlinkInfo() instanceof PathListHyperlinkInfo);
-			Assert.assertEquals(2, ((PathListHyperlinkInfo) links.get(0).getHyperlinkInfo()).getAbsolutePaths().size());
+			Assert.assertTrue("上限为 1 时两根歧义不得悄悄链第一个",
+					filter.extractFileLinksFromLine("INFO loaded e2e/New.ts", 0).isEmpty());
+			// 以下单命中断言保持上限为 1：唯一目标不受上限影响
 			Files.move(firstPath, movedPath);
 			Assert.assertTrue("未刷新 VFS 时仍保留旧根文件身份", indexed.isValid());
 			assertGenericExactLink("INFO loaded e2e/New.ts", "e2e/New.ts", disk);
@@ -4665,7 +4852,8 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * 关闭 Ignore 后，默认会挡的 {@code node_modules/} 和 {@code ./} 应重新被 detectPaths 认出。
+	 * 关闭 Ignore 后，默认会挡的 {@code node_modules/} 应重新被 detectPaths 认出；
+	 * 相对路径符号由内置规则挡住，关闭后也不能链到项目根或父目录。
 	 */
 	public void testIgnorePatternDisabled() {
 		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
@@ -4681,7 +4869,20 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			storage.useIgnorePattern = false;
 			filter = new AwesomeLinkFilter(getProject());
 			assertPathDetection("Error in node_modules/foo.js", "node_modules/foo.js");
-			assertPathDetection("Path: ./", "./");
+			assertPathNoMatches("Path: ", "./");
+			assertPathNoMatches("Path: ", "../");
+			assertPathNoMatches("Path: ", "\"../\"");
+			assertPathNoMatches("Path: ", "..\\..\\");
+			assertPathNoMatches("Path: ", "//");
+			assertTrue(filter.extractFileLinksFromLine("cd ./ && cd ../ && cd ../../", 0).isEmpty());
+			// 只靠 path 命中内置规则：match 带行号或被单引号/括号包围
+			assertPathNoMatches("Path: ", "./:10", "'./'", "('../')");
+
+			// 内置规则不得误伤带文件名的相对路径、Windows 分隔符路径与 git 截断路径
+			assertPathDetection("Error in ../lib/x.js:10", "../lib/x.js:10");
+			assertPathDetection("Error in ..\\lib\\x.js:10", "..\\lib\\x.js:10");
+			assertPathDetection("Error in .\\src\\a.java:10", ".\\src\\a.java:10");
+			assertPathDetection(" .../components/Foo.tsx | 2", ".../components/Foo.tsx");
 		} finally {
 			storage.useIgnorePattern = originalUseIgnorePattern;
 			storage.setIgnorePatternText(originalIgnorePattern);
@@ -4780,7 +4981,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 重新创建过滤器以应用配置
 			filter = new AwesomeLinkFilter(getProject());
 			
-			// 空串回退到默认忽略：相对路径符号和 node_modules 仍被挡
+			// 空串回退到默认忽略：node_modules 仍被挡；相对路径符号由内置规则挡住
 			assertPathNoMatches("Path: ", "./");
 			assertPathNoMatches("Path: ", "node_modules/");
 			
@@ -5006,9 +5207,9 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 
-			// 默认忽略模式: ^(\"?)[./\\\\]+\\1$|^node_modules/
+			// 默认忽略模式: ^node_modules/；相对路径符号由 Filter 内置规则始终忽略
 		
-			// 测试相对路径符号被忽略（匹配 ^(\"?)[./\\\\]+\\1$ 部分）
+			// 测试相对路径符号被内置规则忽略
 			assertPathNoMatches("Path: ", "./");
 			assertPathNoMatches("Path: ", "../");
 			assertPathNoMatches("Path: ", "\"./\"");
@@ -5042,9 +5243,8 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	 * 测试默认忽略模式正则表达式
 	 * 验证 DEFAULT_IGNORE_PATTERN_TEXT 中的正则表达式是否正确工作
 	 *
-	 * 该正则表达式包含两个部分：
-	 * 1. ^(\"?)[./\\\\]+\1$ - 匹配相对路径符号（如 .、..、./、.\、"."、".."等）
-	 * 2. ^node_modules/ - 匹配 node_modules 目录
+	 * 默认正则只含 ^node_modules/，匹配根目录 node_modules；
+	 * 相对路径符号（如 .、..、./、.\、"."、".." 等）由 Filter 内置规则始终忽略，此处一并验证。
 	 * 裸命令词（start/dev/test）不再写入默认忽略，由路径引用口径处理。
 	 */
 	public void testCorrectedDefaultIgnorePattern() {
@@ -5064,7 +5264,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 			
-			// 测试第一部分：相对路径符号应该被忽略
+			// 相对路径符号：由 Filter 内置规则忽略
 			System.out.println("Testing relative path symbols (should be ignored):");
 			assertPathNoMatches("Path: ", ".");
 			assertPathNoMatches("Path: ", "..");
@@ -5095,7 +5295,7 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			assertPathNoMatches("Path: ", "../\\");
 			assertPathNoMatches("Path: ", "..\\//");
 			
-			// 测试第二部分：node_modules 路径应该被忽略
+			// node_modules：由默认正则 ^node_modules/ 忽略
 			System.out.println("Testing node_modules paths (should be ignored):");
 			assertPathNoMatches("Path: ", "node_modules/");
 			assertPathNoMatches("Path: ", "node_modules/package");
@@ -5255,12 +5455,11 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
-	 * 测试去除忽略模式第一部分后的相对路径符号匹配
-	 * 验证当只保留 "^node_modules/|^(?i)(start|dev|test)$" 时，
-	 * 原本被第一部分 "^(\"?)[./\\\\]+\\1$" 忽略的路径是否能被正确匹配
+	 * 相对路径符号由 Filter 内置规则挡住，与 Ignore 正则无关：
+	 * 自定义正则不含原默认第一段 "^(\"?)[./\\\\]+\\1$" 时，. / .. / ./ / ../ 及带引号形式仍不成链。
 	 */
-	public void testIgnorePatternWithoutRelativePathPart() {
-		System.out.println("Test ignore pattern without relative path part:");
+	public void testRelativePathSymbolsIgnoredRegardlessOfPattern() {
+		System.out.println("Test relative path symbols ignored regardless of ignore pattern:");
 		
 		awesome.console.config.AwesomeConsoleStorage storage = awesome.console.config.AwesomeConsoleStorage.getInstance();
 		
@@ -5269,31 +5468,15 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 		String originalIgnorePattern = storage.getIgnorePatternText();
 		
 		try {
-			// 设置忽略模式：去除第一部分，只保留 node_modules 和命令参数部分
+			// 自定义忽略模式：只含 node_modules 和命令参数部分
 			storage.useIgnorePattern = true;
 			storage.setIgnorePatternText("^node_modules/|^(?i)(start|dev|test)$");
 			
 			// 重新创建过滤器以应用新配置
 			filter = new AwesomeLinkFilter(getProject());
 			
-			// 测试独立的 . 和 .. 现在应该能被匹配（如果它们是有效路径）
-			System.out.println("Testing standalone relative path symbols:");
-			assertPathDetection("Path: .", ".");
-			assertPathDetection("Path: ..", "..");
-			
-			// 测试 ./ 和 ../ 现在应该能被匹配
-			System.out.println("Testing relative path with slash:");
-			assertPathDetection("Path: ./", "./");
-			assertPathDetection("Path: ../", "../");
-			assertPathDetection("Path: ../../", "../../");
-			
-			// 测试带引号的相对路径符号
-			System.out.println("Testing quoted relative path symbols:");
-			assertPathDetection("Path: \".\"", "\".\"");
-			assertPathDetection("Path: \"..\"", "\"..\"");
-			assertPathDetection("Path: \"./\"", "\"./\"");
-			assertPathDetection("Path: \"../\"", "\"../\"");
-			assertPathDetection("Path: \"../../\"", "\"../../\"");
+			assertPathNoMatches("Path: ", ".", "..", "./", "../", "../../", ".\\", "..\\..\\", "//");
+			assertPathNoMatches("Path: ", "\".\"", "\"..\"", "\"./\"", "\"../\"", "\"../../\"");
 			
 			// 测试组合路径（这些应该一直都能被匹配）
 			System.out.println("Testing combined paths:");

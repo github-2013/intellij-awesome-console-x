@@ -15,6 +15,12 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+			<b>0.1337.44</b><br/>
+			<ul>
+				<li>Errors and UI freezes caused by the plugin can now be reported to JetBrains Marketplace from the IDE error dialog.</li>
+				<li>In monorepos, paths printed by tools run inside a package, including ../ paths into sibling packages, now link to files under directories with a package.json. Several matches open a chooser. This is on by default; turn off Resolve paths relative to package.json modules to keep the old behavior.</li>
+				<li>Each hyperlink matches at most N results now also limits choosers for paths found under several roots and for truncated paths found on disk. With N set to 1, a reference that matches several files is no longer linked, instead of opening the first one.</li>
+			</ul>
 			<b>0.1337.43</b><br/>
 			<ul>
 				<li>Quoted paths keep spaces and UTF-8 escapes, including on long lines. A broken quote no longer links an inner fragment.</li>
@@ -364,5 +370,6 @@
 			serviceImplementation="awesome.console.config.AwesomeConsoleStorage"
 		/>
 		<notificationGroup displayType="BALLOON" id="Awesome Console X" />
+		<errorHandler implementation="com.intellij.diagnostic.JetBrainsMarketplaceErrorReportSubmitter"/>
 	</extensions>
 </idea-plugin>

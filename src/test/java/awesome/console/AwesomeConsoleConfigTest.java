@@ -319,11 +319,11 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             // 测试默认忽略模式的功能
             Pattern defaultPattern = Pattern.compile(AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
             
-            // 应该匹配相对路径符号
-            assertTrue("Should match ./", defaultPattern.matcher("./").find());
-            assertTrue("Should match ../", defaultPattern.matcher("../").find());
-            assertTrue("Should match .\\", defaultPattern.matcher(".\\").find());
-            assertTrue("Should match ..\\", defaultPattern.matcher("..\\").find());
+            // 相对路径符号已移入 Filter 内置规则，默认正则不再包含
+            assertFalse("Should not match ./", defaultPattern.matcher("./").find());
+            assertFalse("Should not match ../", defaultPattern.matcher("../").find());
+            assertFalse("Should not match .\\", defaultPattern.matcher(".\\").find());
+            assertFalse("Should not match ..\\", defaultPattern.matcher("..\\").find());
             
             // 应该匹配 node_modules
             assertTrue("Should match node_modules/", defaultPattern.matcher("node_modules/xxx").find());
@@ -816,7 +816,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
 
     /**
      * 包根解析开关：默认开启，随 Match file paths 置灰；Apply 写回 storage，
-     * 只发 OTHER_CHANGED（包根直接读缓存，不需要重建索引）。
+     * 只发 OTHER_CHANGED（包根取自已有缓存，不需要重建索引）。
      */
     public void testApplyResolvePackageRoots() throws Exception {
         boolean originalFiles = storage.searchFiles;
@@ -836,7 +836,8 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
 
             assertFalse("Fresh form matches storage", config.isModified());
             assertEquals("Resolve paths relative to package.json modules.", form.resolvePackageRootsCheckBox.getText());
-            assertTrue(form.resolvePackageRootsCheckBox.getToolTipText().startsWith("For monorepos:"));
+            assertTrue("tooltip 应说明按 package.json 识别包根",
+                    form.resolvePackageRootsCheckBox.getToolTipText().contains("package.json"));
             assertTrue(form.resolvePackageRootsCheckBox.isSelected());
             assertTrue(form.resolvePackageRootsCheckBox.isEnabled());
 
@@ -1373,7 +1374,7 @@ public class AwesomeConsoleConfigTest extends BasePlatformTestCase {
             storage.setIgnorePatternText(AwesomeConsoleDefaults.DEFAULT_IGNORE_PATTERN_TEXT);
             filter = new AwesomeLinkFilter(getProject());
             
-            // 默认忽略模式过滤相对路径符号和 node_modules，不再覆盖裸命令词
+            // 默认忽略模式过滤 node_modules；相对路径符号由 Filter 内置规则挡住；不再覆盖裸命令词
             assertPathNoMatches("./");
             assertPathNoMatches("../");
             assertPathNoMatches("node_modules/");
