@@ -15,6 +15,10 @@
 	<change-notes>
 		<![CDATA[
 		<p>
+			<b>0.1337.45</b><br/>
+			<ul>
+				<li>Fixed an InvalidVirtualFileAccessException reported when a folder was deleted and recreated while the IDE refreshed files, for example build output folders or projects on WSL and network drives. Other file changes from the same refresh now still update the link index.</li>
+			</ul>
 			<b>0.1337.44</b><br/>
 			<ul>
 				<li>Errors and UI freezes caused by the plugin can now be reported to JetBrains Marketplace from the IDE error dialog.</li>

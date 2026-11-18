@@ -3430,9 +3430,10 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 	/**
-	 * 文件缓存更新监听器，处理文件系统事件并增量更新缓存
+	 * 文件缓存更新监听器，处理文件系统事件并增量更新缓存。
+	 * 包级可见仅为测试直接重放事件批次；app 级 VFS_CHANGES 无法在测试里安全伪造发布。
 	 */
-	private class FileCacheUpdateListener implements BulkFileListener {
+	class FileCacheUpdateListener implements BulkFileListener {
 		/**
 		 * 事件分类结果。
 		 * needsFullRebuild：rename/move/整目录删除会丢掉忽略文件身份，标量 ignoredFilesCount 无法增量做准。
@@ -3518,27 +3519,25 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	}
 
 		/**
-		 * 解析 VFileCreateEvent 对应的文件
-		 * git pull 等外部写入时，getFile() 可能为 null，且 isInContent 可能尚未更新，
-		 * 此时回退到 parent.findChild，并以父目录是否在项目内容中作为范围判断
+		 * 解析 VFileCreateEvent 对应的文件。
+		 * <p>
+		 * 只用平台的 {@code event.getFile()}：它在父目录有效时才 findChild。
+		 * 同一批事件里父目录可能已被删除（git checkout/stash、构建清理等），
+		 * 此时 getFile() 返回 null；若再对失效父目录 findChild，读锁下
+		 * VirtualDirectoryImpl.handleInvalidDirectory 会抛 InvalidVirtualFileAccessException。
+		 * git pull 等外部写入时 isInContent 可能尚未更新，故以有效父目录是否在项目内容中兜底范围判断。
 		 */
 		@Nullable
 		private VirtualFile resolveCreatedFile(@NotNull VFileCreateEvent event) {
 			VirtualFile created = event.getFile();
-			if (created == null) {
-				VirtualFile parent = event.getParent();
-				if (parent != null) {
-					created = parent.findChild(event.getChildName());
-				}
-			}
-			if (created == null) {
+			if (created == null || !created.isValid()) {
 				return null;
 			}
 			if (isFileInProjectScope(created, false)) {
 				return created;
 			}
 			VirtualFile parent = event.getParent();
-			if (parent != null && projectRootManager.getFileIndex().isInContent(parent)) {
+			if (parent.isValid() && projectRootManager.getFileIndex().isInContent(parent)) {
 				return created;
 			}
 			return null;

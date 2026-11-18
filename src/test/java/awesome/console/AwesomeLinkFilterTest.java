@@ -23,6 +23,7 @@ import com.intellij.openapi.roots.ProjectFileIndex;
 import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent;
 import com.intellij.psi.PsiFile;
 import com.intellij.testFramework.PlatformTestUtil;
 import com.intellij.testFramework.fixtures.BasePlatformTestCase;
@@ -6615,6 +6616,69 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 			} catch (Exception ignored) {
 				// 排除根可能仍被模块占用
 			}
+		}
+	}
+
+	/**
+	 * 同一批 VFS 事件里父目录已被删除时，VFileCreateEvent.getFile() 因父目录失效返回 null。
+	 * 此时不得再对失效父目录调用 findChild：读锁下 VirtualDirectoryImpl.handleInvalidDirectory
+	 * 会抛 InvalidVirtualFileAccessException，被 after() 记成 error 上报到 Marketplace。
+	 */
+	public void testVfsCreateEventUnderDeletedParentDoesNotAccessInvalidDirectory() throws Exception {
+		VirtualFile goneParent = WriteAction.computeAndWait(
+				() -> myFixture.getTempDirFixture().findOrCreateDir("r45-gone-parent"));
+		WriteAction.runAndWait(() -> goneParent.delete(this));
+		Assert.assertFalse("夹具：父目录应已失效", goneParent.isValid());
+
+		VFileCreateEvent createEvent = new VFileCreateEvent(
+				this, goneParent, "R45Child.java", false, null, null, null);
+		Assert.assertNull("夹具：父目录失效时平台 getFile() 返回 null", createEvent.getFile());
+
+		// BulkFileListener.after 在写锁下派发，必须在写锁内重放才能复现 handleInvalidDirectory 抛出。
+		// app 级 VFS_CHANGES 伪造发布会撞上平台 AsyncEventSupport，故直接驱动本插件监听器。
+		AwesomeLinkFilter.FileCacheUpdateListener listener = filter.new FileCacheUpdateListener();
+		WriteAction.runAndWait(() -> listener.after(List.of(createEvent)));
+
+		Assert.assertTrue(
+				"失效父目录下的创建事件不应登记为新增文件",
+				filter.resolveCachedFilesForPath("r45-gone-parent/R45Child.java").isEmpty()
+		);
+	}
+
+	/**
+	 * 对应 Marketplace 上报（File.exists(path)=true）：本机目录在 VFS 中被删除后又在磁盘上被重建
+	 * （构建清理输出目录、git checkout 等），create 事件仍持有旧的失效父目录实例。
+	 * 监听器不得对其 findChild，也不得在 after() 里刷新磁盘去追新目录；新目录交给后续 refresh 事件。
+	 */
+	public void testVfsCreateEventUnderRecreatedLocalParentDoesNotAccessInvalidDirectory() throws Exception {
+		Path root = Files.createTempDirectory("r45-recreated");
+		Path parentPath = root.resolve("out");
+		Path childPath = parentPath.resolve("R45Child.java");
+		try {
+			Files.createDirectories(parentPath);
+			VirtualFile staleParent = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(parentPath);
+			Assert.assertNotNull("夹具：本机父目录应进入 VFS", staleParent);
+			Assert.assertEquals("夹具：必须是 file 协议", "file", staleParent.getFileSystem().getProtocol());
+			WriteAction.runAndWait(() -> staleParent.delete(this));
+			Files.createDirectories(parentPath);
+			Files.writeString(childPath, "class R45Child {}\n");
+			Assert.assertFalse("夹具：旧父目录实例应已失效", staleParent.isValid());
+			Assert.assertTrue("夹具：与上报一致，磁盘上父目录仍存在", Files.isDirectory(parentPath));
+
+			VFileCreateEvent createEvent = new VFileCreateEvent(
+					this, staleParent, "R45Child.java", false, null, null, null);
+			AwesomeLinkFilter.FileCacheUpdateListener listener = filter.new FileCacheUpdateListener();
+			WriteAction.runAndWait(() -> listener.after(List.of(createEvent)));
+
+			Assert.assertTrue(
+					"失效父目录下的创建事件不应登记为新增文件",
+					filter.resolveCachedFilesForPath("out/R45Child.java").isEmpty()
+			);
+		} finally {
+			Files.deleteIfExists(childPath);
+			Files.deleteIfExists(parentPath);
+			Files.deleteIfExists(root);
+			LocalFileSystem.getInstance().refreshNioFiles(List.of(root));
 		}
 	}
 
