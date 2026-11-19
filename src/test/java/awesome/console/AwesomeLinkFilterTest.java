@@ -7630,6 +7630,58 @@ List<URLLinkMatch> matches = filter.detectURLs(line);
 	}
 
 	/**
+	 * 括号 / 方括号 / 单引号包裹的 http(s) URL 不能被当作文件路径。
+	 * <p>
+	 * Marketplace 异常：V8 堆栈帧 {@code at Foo (https://host/app/chunk-XXXX.js:1:2345)} 中，
+	 * link 以 {@code (} 开头导致协议校验被绕过，{@code https://...} 作为相对路径拼到项目根，
+	 * Windows 上 {@code File.toPath()} 抛 InvalidPathException。
+	 */
+	public void testBracketedUrlShouldNotBeDetectedAsFilePath() {
+		String[] lines = {
+				"    at Object.foo (https://contralto-coll-api.sdw-rec3.hm.dm.ad/contralto-coll/chunk-BVZJ3W2M.js:1:2345)",
+				"Loaded [https://cdn.example.com/contralto-coll/chunk-W6SV2HEF.js:1:2]",
+				"Fetching 'http://localhost:4200/contralto-coll/chunk-ABC.js'",
+		};
+		for (String line : lines) {
+			for (FileLinkMatch match : filter.detectPaths(line)) {
+				Assert.assertFalse("URL 不应被识别为文件路径: " + match.path + " in " + line,
+						match.path.contains("://") || match.path.contains("chunk-"));
+			}
+			Assert.assertTrue("URL 仍应被 URL 识别: " + line,
+					filter.detectURLs(line).stream().anyMatch(url -> url.match.contains("chunk-")));
+		}
+	}
+
+	/**
+	 * 括号包裹的 file: URL 仍应识别为文件，且协议前缀被剥掉，不能把 {@code file:} 留在路径里。
+	 */
+	public void testBracketedFileUrlStripsProtocol() {
+		String line = "WARNING: Illegal reflective access by X (file:/src/test/resources/file1.java) to field Y";
+		List<FileLinkMatch> results = filter.detectPaths(line).stream()
+				.filter(match -> match.match.equals("file:/src/test/resources/file1.java"))
+				.collect(Collectors.toList());
+		Assert.assertEquals(1, results.size());
+		Assert.assertEquals("/src/test/resources/file1.java", results.get(0).path);
+	}
+
+	/**
+	 * 端到端：项目里存在同路径后缀的 chunk 文件时，括号 URL 也不能链到它。
+	 * 精确相对路径分支会拿 match.path 拼已知根做磁盘复核，URL 混进来在 Windows 上会抛异常。
+	 */
+	public void testBracketedUrlDoesNotLinkProjectFileWithSameSuffix() throws Exception {
+		myFixture.addFileToProject("contralto-coll/chunk-BVZJ3W2M.js", "export {}\n");
+		filter.manualRebuild();
+		waitForReloadsToQuiesce(500, 5000);
+
+		Assert.assertFalse("完整相对路径应可链（cache canary）",
+				filter.extractFileLinksFromLine("Error in contralto-coll/chunk-BVZJ3W2M.js", 0).isEmpty());
+		Assert.assertTrue("括号内的 https URL 不得链到项目文件",
+				filter.extractFileLinksFromLine(
+						"    at loadChunk (https://contralto-coll-api.sdw-rec3.hm.dm.ad/contralto-coll/chunk-BVZJ3W2M.js:1:2345)",
+						0).isEmpty());
+	}
+
+	/**
 	 * 测试包含 Node.js 伪协议的控制台输出不应导致路径检测异常
 	 * 如 node:fs, node:path 等在 Node.js 控制台中常见
 	 *

@@ -18,6 +18,7 @@
 			<b>0.1337.45</b><br/>
 			<ul>
 				<li>Fixed an InvalidVirtualFileAccessException reported when a folder was deleted and recreated while the IDE refreshed files, for example build output folders or projects on WSL and network drives. Other file changes from the same refresh now still update the link index.</li>
+				<li>Fixed an InvalidPathException on Windows when a URL was wrapped in parentheses, brackets, or quotes, for example in browser stack traces such as at foo (https://host/app/chunk.js:1:2). Such URLs are no longer treated as file paths, and the rest of the line keeps its links. A file: URL in parentheses or quotes now opens the file, the same as without them.</li>
 			</ul>
 			<b>0.1337.44</b><br/>
 			<ul>

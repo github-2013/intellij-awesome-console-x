@@ -1011,7 +1011,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 		// On Windows, short-circuit non-path tokens (URLs, URIs, pseudo-schemes,
 		// host:port, type annotations, git rename syntax) before Paths.get() throws.
-		if (SystemUtils.isWindows() && !VALID_WINDOWS_PATH.matcher(path).matches()) {
+		if (isIllegalWindowsPath(path)) {
 			return null;
 		}
 		// 如果是绝对路径，基础路径为空；否则使用项目根目录作为基础路径
@@ -1028,6 +1028,14 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			// 返回 null 表示解析失败
 			return null;
 		}
+	}
+
+	/**
+	 * Windows 上含非法字符（URL、伪协议、host:port 等）的路径无法转成 {@link java.nio.file.Path}，
+	 * 任何 {@code toPath()} / {@code Paths.get} 之前都要先拦截，否则 WindowsPathParser 抛 InvalidPathException。
+	 */
+	private static boolean isIllegalWindowsPath(@NotNull String path) {
+		return SystemUtils.isWindows() && !VALID_WINDOWS_PATH.matcher(path).matches();
 	}
 
 	/**
@@ -1222,8 +1230,9 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 			if (!isDiskBackedFile(file) && !isExcludedByProjectIndex(
 					new File(normalizePathSeparators(file.getPath())))) virtualFiles.add(file);
 		}
+		// Windows 非法路径不可能是磁盘文件，拼根 toPath() 会抛 InvalidPathException，直接跳过磁盘复核
 		if (!isAbsolutePath(relativePath) && hasDirectoryComponent(relativePath)
-				&& !normalizePathSeparators(match.path).startsWith("../")) {
+				&& !normalizePathSeparators(match.path).startsWith("../") && !isIllegalWindowsPath(relativePath)) {
 			long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(DISK_SEARCH_TIMEOUT_MS);
 			int chooserLimit = calculateChooserLimit();
 			List<String> roots = new ArrayList<>(localExactRoots);
@@ -1247,6 +1256,8 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 */
 	private void processParentRelativeFromPackageRoots(FileLinkMatch match, String relativePath, int startPoint,
 			List<ResultItem> results) {
+		// 同 processExactRelativeFiles：Windows 非法路径拼包根 toPath() 会抛异常
+		if (isIllegalWindowsPath(relativePath)) return;
 		Set<String> packageRoots = collectPackageRoots();
 		if (packageRoots.isEmpty()) return;
 		// 先查同名候选：没有候选时不必对每个包根做路径标准化
@@ -3931,7 +3942,7 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 		}
 
 		// 处理协议
-		path = processProtocol(fileMatcher, match, path);
+		path = processProtocol(fileMatcher, path);
 		if (path == null) {
 			return null; // 非文件协议，忽略
 		}
@@ -4037,15 +4048,16 @@ public class AwesomeLinkFilter implements Filter, DumbAware, Disposable, Awesome
 	 * 处理协议前缀，移除文件协议并过滤非文件协议
 	 *
 	 * @param fileMatcher 文件路径匹配器
-	 * @param match 匹配内容
 	 * @param path 路径
 	 * @return 处理后的路径，如果是非文件协议则返回null
 	 */
-	private String processProtocol(final Matcher fileMatcher, final String match, String path) {
+	private String processProtocol(final Matcher fileMatcher, String path) {
 		String protocol = RegexUtils.tryMatchGroup(fileMatcher, "protocol");
 		if (null != protocol) {
-			// 防御性验证：确保提取的 protocol 确实在匹配内容的开头
-			if (!match.startsWith(protocol)) {
+			// 防御性验证：protocol 必须位于 path 开头。不能拿 match 比较：
+			// match 可能带前导 ( [ '，如 V8 堆栈 "(https://host/chunk.js:1:2)"，
+			// 会让 https: 绕过协议过滤，被当作相对路径拼到项目根上
+			if (!path.startsWith(protocol)) {
 				protocol = null;
 			}
 		}
